@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Brand, Dialog, PersonIcon } from "@/components/ui";
+import { Brand, Dialog } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
 import { createAccount, resendGuide, type MailLanguage } from "@/lib/api";
 import { useStaff } from "@/lib/session";
@@ -176,8 +176,7 @@ export default function CreateAccountPage() {
               고객 이메일
             </label>
             <div className={`input-box${emailError || isInUse ? " is-error" : ""}`}>
-              <PersonIcon />
-              <input
+                <input
                 ref={emailRef}
                 id="email"
                 type="email"

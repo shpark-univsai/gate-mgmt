@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Brand, PersonIcon } from "@/components/ui";
+import { Brand } from "@/components/ui";
 import { login } from "@/lib/api";
 import { saveStaff } from "@/lib/session";
 
@@ -46,7 +46,6 @@ export default function LoginPage() {
             이메일
           </label>
           <div className="input-box">
-            <PersonIcon />
             <input
               id="email"
               type="email"

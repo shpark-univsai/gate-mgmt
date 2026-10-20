@@ -148,7 +148,6 @@ input {
 }
 .input-box:focus-within { border-color: var(--gray-900); }
 .input-box.is-error { border-color: var(--danger-400); }
-.input-box svg { flex: none; }
 .input-box input {
   flex: 1;
   min-width: 0;
