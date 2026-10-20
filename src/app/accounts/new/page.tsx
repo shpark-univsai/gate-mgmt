@@ -201,7 +201,7 @@ export default function CreateAccountPage() {
                 // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 큰 버튼이 「안내 메일 다시 보내기」
                 <p className="help t-body-200-r">이 이메일로 만든 계정이 있습니다. 아직 로그인 전이라 안내 메일을 다시 보낼 수 있습니다.</p>
               ) : (
-                <p className="help t-body-200-r">메일에 담당자로 내 이름과 연락처가 들어갑니다.</p>
+                <p className="help t-body-200-r">메일에 담당자로 내 이름과 이메일이 들어갑니다.</p>
               )}
             </div>
           </div>

@@ -12,10 +12,9 @@
 export type MailLanguage = "en" | "ko";
 
 // 백오피스 계정(영업 · 대표). 플랫폼 팀이 서버에서 직접 만들어 줘요(만드는 화면 없음).
-// 이름 · 전화 · 이메일은 안내 메일의 담당자 칸({sales_name} {sales_phone} {sales_email})에 들어가요.
+// 이름 · 이메일은 안내 메일의 담당자 칸({sales_name} {sales_email})에 들어가요. 전화는 메일 템플릿의 회사 대표번호로 고정.
 export type Staff = {
   name: string;
-  phone: string;
   email: string;
 };
 
@@ -42,7 +41,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function login(email: string, password: string): Promise<LoginResult> {
   await wait(500);
   if (password === "wrong") return { ok: false };
-  return { ok: true, staff: { name: "김영업", phone: "010-0000-0000", email } };
+  return { ok: true, staff: { name: "김영업", email } };
 }
 
 /** 고객 계정 생성 + 임시 비밀번호 + 데모 프로젝트 1개 + 안내 메일 발송을 한 번에 요청 */
