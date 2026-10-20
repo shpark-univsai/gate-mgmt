@@ -102,7 +102,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px 0 0;
+  padding: 0 24px;
   background: var(--gray-0);
   border-bottom: 1px solid var(--gray-200);
 }
@@ -192,15 +192,18 @@ input {
   border-radius: 8px;
   background: var(--gray-900);
   color: var(--gray-0);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 24px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 .btn-primary:disabled { cursor: default; }
 
 .btn-action {
   height: 32px;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
   padding: 4px 12px;
   border-radius: 6px;
   border: 1px solid var(--gray-300);
@@ -301,6 +304,5 @@ input {
     border-radius: 8px;
     font-size: 14px;
     line-height: 20px;
-    font-weight: 700;
   }
 }

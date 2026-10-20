@@ -45,6 +45,8 @@ export default function CreateAccountPage() {
   const [formError, setFormError] = useState("");
   // 이미 계정이 있는 이메일이면 큰 버튼이 「안내 메일 다시 보내기」로 바뀌어요.
   const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
+  // 이미 사용 중인 계정이면 다시 보내지 않고 「비밀번호 재설정」을 안내해요.
+  const [inUseOf, setInUseOf] = useState<string | null>(null);
 
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
@@ -60,6 +62,7 @@ export default function CreateAccountPage() {
 
   const trimmedEmail = email.trim();
   const isResend = duplicateOf !== null && duplicateOf === trimmedEmail.toLowerCase();
+  const isInUse = inUseOf !== null && inUseOf === trimmedEmail.toLowerCase();
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -74,6 +77,11 @@ export default function CreateAccountPage() {
     setFormError("");
     if (cError) return companyRef.current?.focus();
     if (eError) return emailRef.current?.focus();
+    if (isInUse) {
+      // 이메일을 고치기 전까지는 같은 안내를 다시 보여 줘요.
+      setEmailError("이미 사용 중인 계정입니다.");
+      return emailRef.current?.focus();
+    }
     setConfirming(true);
   }
 
@@ -98,6 +106,9 @@ export default function CreateAccountPage() {
     if (res.reason === "duplicate") {
       setDuplicateOf(trimmedEmail.toLowerCase());
       setEmailError("이미 계정이 있는 이메일입니다.");
+    } else if (res.reason === "in_use") {
+      setInUseOf(trimmedEmail.toLowerCase());
+      setEmailError("이미 사용 중인 계정입니다.");
     } else if (res.reason === "daily_limit") {
       setFormError("오늘 보낼 수 있는 수를 넘었습니다.");
     } else {
@@ -112,6 +123,7 @@ export default function CreateAccountPage() {
     setEmail("");
     setLanguage("en");
     setDuplicateOf(null);
+    setInUseOf(null);
     setCompanyError("");
     setEmailError("");
     setFormError("");
@@ -184,6 +196,7 @@ export default function CreateAccountPage() {
                   // 이메일을 고치면 원래 버튼(계정 만들고 메일 보내기)으로 돌아가요.
                   if (emailError) setEmailError("");
                   if (duplicateOf) setDuplicateOf(null);
+                  if (inUseOf) setInUseOf(null);
                 }}
                 aria-invalid={!!emailError}
                 aria-describedby="email-note"
@@ -193,6 +206,8 @@ export default function CreateAccountPage() {
               {emailError && <p className="error t-body-200-r">{emailError}</p>}
               {isResend ? (
                 <p className="help t-body-200-r">다시 보내면 새 임시 비밀번호가 가고, 이전 비밀번호는 쓸 수 없게 됩니다.</p>
+              ) : isInUse ? (
+                <p className="help t-body-200-r">고객에게 로그인 화면의 「비밀번호 재설정」을 안내해 주세요.</p>
               ) : (
                 !emailError && <p className="help t-body-200-r">메일에 담당자로 내 이름과 연락처가 들어갑니다.</p>
               )}
@@ -244,10 +259,10 @@ export default function CreateAccountPage() {
           </div>
           <p className="help t-body-200-r">주소가 한 글자라도 틀리면 다른 사람이 계정을 받게 됩니다.</p>
           <div className="dialog-actions">
-            <button type="button" className="btn-action btn-action--wide t-button-200" onClick={closeConfirm} disabled={sending}>
+            <button type="button" className="btn-action btn-action--wide" onClick={closeConfirm} disabled={sending}>
               취소
             </button>
-            <button type="button" className="btn-action btn-action--dark t-button-200" onClick={send} disabled={sending}>
+            <button type="button" className="btn-action btn-action--dark" onClick={send} disabled={sending}>
               {sending ? "보내는 중…" : "보내기"}
             </button>
           </div>
@@ -270,7 +285,7 @@ export default function CreateAccountPage() {
           </div>
           <p className="help t-body-200-r">메일이 보이지 않으면 스팸함을 확인하도록 안내해 주세요.</p>
           <div className="dialog-actions">
-            <button type="button" className="btn-action btn-action--dark t-button-200" onClick={finish}>
+            <button type="button" className="btn-action btn-action--dark" onClick={finish}>
               확인
             </button>
           </div>

@@ -3,7 +3,8 @@
 // 서버 주소는 NEXT_PUBLIC_API_BASE_URL 환경변수로 받습니다(.env.example).
 //
 // 목업에서 화면 상태를 확인하는 방법(고객 이메일 칸에 입력):
-//   taken@example.com → 이미 계정이 있는 이메일
+//   taken@example.com → 이미 계정이 있는 이메일(첫 로그인 전 → 다시 보내기 가능)
+//   inuse@example.com → 이미 사용 중인 계정(다시 보내기 없음)
 //   limit@example.com → 오늘 보낼 수 있는 수를 넘음
 //   fail@example.com  → 그 밖의 실패
 // 로그인 목업은 비밀번호가 "wrong"이면 실패해요.
@@ -24,7 +25,9 @@ export type CreateAccountInput = {
 
 export type CreateAccountResult =
   | { ok: true; requestedAt: string }
-  | { ok: false; reason: "duplicate" | "daily_limit" | "failed" };
+  // duplicate = 영업이 만들었고 고객이 아직 첫 로그인 전 → 다시 보내기 가능
+  // in_use = 고객이 직접 가입했거나 로그인한 적 있음 → 다시 보내면 쓰던 비밀번호가 막히므로 보내지 않음
+  | { ok: false; reason: "duplicate" | "in_use" | "daily_limit" | "failed" };
 
 export type ResendResult =
   | { ok: true; requestedAt: string }
@@ -45,6 +48,7 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
   await wait(800);
   const email = input.email.toLowerCase();
   if (email === "taken@example.com") return { ok: false, reason: "duplicate" };
+  if (email === "inuse@example.com") return { ok: false, reason: "in_use" };
   if (email === "limit@example.com") return { ok: false, reason: "daily_limit" };
   if (email === "fail@example.com") return { ok: false, reason: "failed" };
   return { ok: true, requestedAt: new Date().toISOString() };
