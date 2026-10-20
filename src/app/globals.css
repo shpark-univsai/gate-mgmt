@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'SUIT';
+  src: url('/fonts/SUIT-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme inline {
+  --color-gray-0: #FFFFFF;
+  --color-gray-50: #F8FAFC;
+  --color-gray-100: #F1F5F9;
+  --color-gray-200: #E2E8F0;
+  --color-gray-300: #CCD5E1;
+  --color-gray-400: #94A3B8;
+  --color-gray-500: #64748B;
+  --color-gray-600: #475469;
+  --color-gray-700: #324055;
+  --color-gray-800: #1D293B;
+  --color-gray-900: #0E162A;
+  --color-primary: #3B82F6;
+  --color-danger: #EF4444;
+  --color-warning: #F59E0B;
+  --color-success: #10B981;
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #ffffff;
+  color: #1D293B;
+  font-family: 'SUIT', -apple-system, BlinkMacSystemFont, 'Noto Sans KR', sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #F1F5F9; }
+::-webkit-scrollbar-thumb { background: #CCD5E1; border-radius: 2px; }
