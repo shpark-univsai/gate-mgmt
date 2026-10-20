@@ -80,7 +80,7 @@ export default function LoginPage() {
           )}
         </div>
 
-        <button type="submit" className="btn-primary" disabled={busy}>
+        <button type="submit" className="btn-primary" disabled={busy} aria-busy={busy || undefined}>
           {busy ? "로그인 중…" : "로그인"}
         </button>
 

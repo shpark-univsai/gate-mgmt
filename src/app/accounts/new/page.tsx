@@ -77,11 +77,6 @@ export default function CreateAccountPage() {
     setFormError("");
     if (cError) return companyRef.current?.focus();
     if (eError) return emailRef.current?.focus();
-    if (isInUse) {
-      // 이메일을 고치기 전까지는 같은 안내를 다시 보여 줘요.
-      setEmailError("이미 사용 중인 계정입니다.");
-      return emailRef.current?.focus();
-    }
     setConfirming(true);
   }
 
@@ -105,10 +100,8 @@ export default function CreateAccountPage() {
     }
     if (res.reason === "duplicate") {
       setDuplicateOf(trimmedEmail.toLowerCase());
-      setEmailError("이미 계정이 있는 이메일입니다.");
     } else if (res.reason === "in_use") {
       setInUseOf(trimmedEmail.toLowerCase());
-      setEmailError("이미 사용 중인 계정입니다.");
     } else if (res.reason === "daily_limit") {
       setFormError("오늘 보낼 수 있는 수를 넘었습니다.");
     } else {
@@ -182,7 +175,7 @@ export default function CreateAccountPage() {
             <label htmlFor="email" className="t-body-200-b">
               고객 이메일
             </label>
-            <div className={`input-box${emailError ? " is-error" : ""}`}>
+            <div className={`input-box${emailError || isInUse ? " is-error" : ""}`}>
               <PersonIcon />
               <input
                 ref={emailRef}
@@ -198,18 +191,21 @@ export default function CreateAccountPage() {
                   if (duplicateOf) setDuplicateOf(null);
                   if (inUseOf) setInUseOf(null);
                 }}
-                aria-invalid={!!emailError}
+                aria-invalid={!!emailError || isInUse}
                 aria-describedby="email-note"
               />
             </div>
             <div id="email-note" className="field" style={{ gap: 8 }}>
-              {emailError && <p className="error t-body-200-r">{emailError}</p>}
-              {isResend ? (
-                <p className="help t-body-200-r">다시 보내면 새 임시 비밀번호가 가고, 이전 비밀번호는 쓸 수 없게 됩니다.</p>
+              {emailError ? (
+                <p className="error t-body-200-r">{emailError}</p>
               ) : isInUse ? (
-                <p className="help t-body-200-r">고객에게 로그인 화면의 「비밀번호 재설정」을 안내해 주세요.</p>
+                // 정말 막힌 경우: 빨간 한 줄 + 큰 버튼 비활성
+                <p className="error t-body-200-r">이미 사용 중인 계정입니다. 「비밀번호 재설정」을 안내해 주세요.</p>
+              ) : isResend ? (
+                // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 큰 버튼이 「안내 메일 다시 보내기」
+                <p className="help t-body-200-r">이 이메일로 만든 계정이 있습니다. 아직 로그인 전이라 안내 메일을 다시 보낼 수 있습니다.</p>
               ) : (
-                !emailError && <p className="help t-body-200-r">메일에 담당자로 내 이름과 연락처가 들어갑니다.</p>
+                <p className="help t-body-200-r">메일에 담당자로 내 이름과 연락처가 들어갑니다.</p>
               )}
             </div>
           </div>
@@ -235,7 +231,7 @@ export default function CreateAccountPage() {
           </div>
 
           <div className="field">
-            <button type="submit" className="btn-primary">
+            <button type="submit" className="btn-primary" disabled={isInUse}>
               {isResend ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
             {formError && (
@@ -248,13 +244,14 @@ export default function CreateAccountPage() {
       </main>
 
       {confirming && (
-        <Dialog title="이 주소로 보낼까요?" onClose={closeConfirm} closable={!sending}>
+        <Dialog title={isResend ? "이 주소로 다시 보낼까요?" : "이 주소로 보낼까요?"} onClose={closeConfirm} closable={!sending}>
           <div className="record">
             <p className="t-body-400-b">
               {company.trim()} · {trimmedEmail}
             </p>
             <p className="t-body-200-r" style={{ color: "var(--gray-500)" }}>
-              {languageName(language)} 메일로 보냅니다. 임시 비밀번호가 이 주소로 갑니다.
+              {languageName(language)} 메일로 보냅니다.{" "}
+              {isResend ? "새 임시 비밀번호가 가고, 이전 비밀번호는 쓸 수 없게 됩니다." : "임시 비밀번호가 이 주소로 갑니다."}
             </p>
           </div>
           <p className="help t-body-200-r">주소가 한 글자라도 틀리면 다른 사람이 계정을 받게 됩니다.</p>

@@ -21,6 +21,9 @@
   --gray-900: #0e162a;
   --danger-400: #e11d1d;
   --warning-600: #9f6401;
+  /* 버튼 비활성 (Figma 버튼 부품 Block Button_login_disable) */
+  --disabled-bg: #e8eef2;
+  --disabled-fg: #a4adb2;
 }
 
 *,
@@ -198,6 +201,7 @@ input {
   cursor: pointer;
 }
 .btn-primary:disabled { cursor: default; }
+.btn-primary[disabled]:not([aria-busy]) { background: var(--disabled-bg); color: var(--disabled-fg); }
 
 .btn-action {
   height: 32px;
