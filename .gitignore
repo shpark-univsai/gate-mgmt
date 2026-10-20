@@ -1,0 +1,22 @@
+# 의존성 · 빌드 결과
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# 환경변수 — 값은 절대 커밋하지 않는다. 변수 이름만 .env.example 에 둔다
+.env
+.env.*
+!.env.example
+
+# 로그 · OS · 편집기
+*.log
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.vercel
