@@ -122,9 +122,7 @@ input {
   font-size: 14px;
   font-weight: 700;
 }
-.identity { display: flex; flex-direction: column; gap: 2px; }
 .identity-name { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--gray-900); }
-.identity-role { font-size: 11px; line-height: 14px; color: var(--gray-400); }
 
 .main-center {
   min-height: calc(100vh - 60px);

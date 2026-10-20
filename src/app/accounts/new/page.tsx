@@ -133,10 +133,7 @@ export default function CreateAccountPage() {
           <div className="avatar" aria-hidden="true">
             {staff.name.slice(0, 1)}
           </div>
-          <div className="identity">
-            <span className="identity-name">{staff.name}</span>
-            <span className="identity-role">{staff.team}</span>
-          </div>
+          <span className="identity identity-name">{staff.name}</span>
         </div>
       </header>
 
