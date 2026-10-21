@@ -300,14 +300,14 @@ p {
 .select-icon { position: absolute; right: 8px; pointer-events: none; color: var(--gray-500); }
 .count { margin-left: auto; color: var(--gray-500); }
 
-.table { border: 1px solid var(--gray-300); border-bottom: 0; } /* 표 · 목록 줄은 Gray/300(백오피스 표 공통) */
+.table { border: 1px solid var(--gray-200); border-bottom: 0; }
 .tr {
   display: grid;
   grid-template-columns: 180px 260px 110px 150px 120px 160px minmax(160px, 1fr);
   align-items: center;
   min-height: 64px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--gray-300);
+  border-bottom: 1px solid var(--gray-200);
 }
 .tr > span { padding-right: 12px; overflow-wrap: anywhere; }
 .th { min-height: 36px; background: var(--gray-50); }
@@ -315,7 +315,7 @@ p {
 .card-row.is-new { background: var(--gray-50); }
 .dash { color: var(--gray-400); }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.empty { padding: 80px 16px; text-align: center; color: var(--gray-500); border-bottom: 1px solid var(--gray-300); }
+.empty { padding: 80px 16px; text-align: center; color: var(--gray-500); border-bottom: 1px solid var(--gray-200); }
 
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-700); white-space: nowrap; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -444,8 +444,8 @@ p {
   .search input { font-size: 16px; }
   .count { margin-left: 0; }
 
-  .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-300); }
-  .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-300); display: flex; flex-direction: column; gap: 4px; }
+  .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
+  .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-200); display: flex; flex-direction: column; gap: 4px; }
   .card-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .card-company { font-size: 14px; line-height: 20px; }
   .card-email { color: var(--gray-700); overflow-wrap: anywhere; }
