@@ -293,9 +293,10 @@ input {
   .main-center { display: block; min-height: 0; padding: 0; }
   .card { border: 0; max-width: none; padding: 24px 20px; }
   .page-center--inverse { display: flex; flex-direction: column; align-items: stretch; min-height: 100vh; }
-  .login-top { display: block; padding: 56px 20px 24px; }
+  /* 휴대폰 로그인 위쪽은 로그인 뒤 위쪽 메뉴와 같은 60px 띠(아바타만 없음) */
+  .login-top { display: flex; align-items: center; height: 60px; padding: 0 16px; }
   .login-brand { display: none; }
-  .card--login { flex: 1; padding-top: 32px; }
+  .card--login { flex: 1; }
   .card .t-heading-200,
   .card .t-heading-300 { font-size: 20px; line-height: 32px; }
   .input-box input { font-size: 14px; line-height: 20px; }
