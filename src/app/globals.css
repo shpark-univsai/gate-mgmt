@@ -60,7 +60,7 @@ input {
 .t-body-200-r { font-size: 13px; line-height: 18px; font-weight: 400; }
 .t-button-200 { font-size: 12px; line-height: 16px; font-weight: 800; }
 
-/* ── 화면 틀 (백오피스 규칙: 카드·패널은 모서리 0, 버튼·입력 칸·창은 4) ── */
+/* ── 화면 틀 (PC 바탕은 Gray/900 반전, 백오피스 규칙: 카드·패널은 모서리 0, 버튼·입력 칸·창은 4) ── */
 .page-center {
   min-height: 100vh;
   display: flex;
@@ -108,6 +108,7 @@ input {
   justify-content: space-between;
   padding: 0 24px;
   background: var(--gray-900);
+  border-bottom: 1px solid var(--gray-800);
 }
 .profile { display: flex; align-items: center; gap: 10px; }
 .avatar {
@@ -128,7 +129,11 @@ input {
 .main-center {
   display: flex;
   justify-content: center;
+  align-items: flex-start;
+  min-height: calc(100vh - 60px);
   padding: 120px 16px 48px;
+  /* 로그인과 같은 반전 바탕 — Gate 콘솔(흰 화면)과 한눈에 구분돼요 */
+  background: var(--gray-900);
 }
 
 /* ── 입력 ── */
@@ -285,7 +290,7 @@ input {
 @media (max-width: 640px) {
   body { background: var(--gray-0); }
   .page-center,
-  .main-center { display: block; min-height: 0; padding: 0; }
+  .main-center { display: block; min-height: 0; padding: 0; background: none; }
   .card { border: 0; max-width: none; padding: 24px 20px; }
   .page-center--inverse { display: flex; flex-direction: column; align-items: stretch; min-height: 100vh; }
   /* 휴대폰 로그인 위쪽은 로그인 뒤 위쪽 메뉴와 같은 60px 띠(아바타만 없음) */
