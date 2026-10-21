@@ -20,3 +20,6 @@ npm-debug.log*
 .vscode/
 *.swp
 .vercel
+
+# Next 빌드가 만드는 타입 선언 — 커밋하지 않는다
+next-env.d.ts
