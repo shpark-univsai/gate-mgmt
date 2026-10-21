@@ -73,6 +73,9 @@ input {
   padding: 24px 16px;
 }
 
+/* 로그인은 바탕을 반전(Gray/900)해서 Gate 콘솔 로그인과 한눈에 구분돼요 */
+.page-center--inverse { background: var(--gray-900); }
+
 .card {
   width: 100%;
   background: var(--gray-0);
@@ -98,6 +101,9 @@ input {
   background: var(--gray-900);
   color: var(--gray-0);
 }
+.brand--inverse .badge { background: var(--gray-0); color: var(--gray-900); }
+
+.login-top { display: none; }
 
 .nav {
   height: 60px;
@@ -105,8 +111,7 @@ input {
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  background: var(--gray-0);
-  border-bottom: 1px solid var(--gray-200);
+  background: var(--gray-900);
 }
 .profile { display: flex; align-items: center; gap: 10px; }
 .avatar {
@@ -121,7 +126,7 @@ input {
   font-size: 14px;
   font-weight: 700;
 }
-.identity-name { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--gray-900); }
+.identity-name { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--gray-0); }
 
 .main-center {
   min-height: calc(100vh - 60px);
@@ -287,7 +292,10 @@ input {
   .page-center,
   .main-center { display: block; min-height: 0; padding: 0; }
   .card { border: 0; max-width: none; padding: 24px 20px; }
-  .card--login { padding-top: 56px; }
+  .page-center--inverse { display: flex; flex-direction: column; align-items: stretch; min-height: 100vh; }
+  .login-top { display: block; padding: 56px 20px 24px; }
+  .login-brand { display: none; }
+  .card--login { flex: 1; padding-top: 32px; }
   .card .t-heading-200,
   .card .t-heading-300 { font-size: 20px; line-height: 32px; }
   .input-box input { font-size: 14px; line-height: 20px; }

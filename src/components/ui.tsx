@@ -2,11 +2,12 @@
 
 import { useEffect, useRef } from "react";
 
-export function Brand() {
+/** inverse = 어두운 바탕(위쪽 메뉴 · 휴대폰 로그인 위쪽)용: 흰색 로고 + 반전 배지 */
+export function Brand({ inverse = false }: { inverse?: boolean }) {
   return (
-    <div className="brand">
+    <div className={`brand${inverse ? " brand--inverse" : ""}`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/logo.svg" alt="UNIVS GATE" width={134} height={20} />
+      <img src={inverse ? "/logo-white.svg" : "/logo.svg"} alt="UNIVS GATE" width={134} height={20} />
       <span className="badge t-button-200">BACKOFFICE</span>
     </div>
   );

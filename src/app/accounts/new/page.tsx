@@ -128,7 +128,7 @@ export default function CreateAccountPage() {
   return (
     <>
       <header className="nav">
-        <Brand />
+        <Brand inverse />
         <div className="profile">
           <div className="avatar" aria-hidden="true">
             {staff.name.slice(0, 1)}
