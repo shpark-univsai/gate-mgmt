@@ -6,6 +6,7 @@ import { Brand, Dialog, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
 import { IcArrowDown, IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
 import {
+  cancelIssue,
   checkEmail,
   createAccount,
   listAccounts,
@@ -70,6 +71,7 @@ export default function AccountsPage() {
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
   const [resendTarget, setResendTarget] = useState<Account | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<Account | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
 
@@ -155,6 +157,18 @@ export default function AccountsPage() {
   }, [freshId]);
 
   const clearToast = useCallback(() => setToast(null), []);
+
+  const afterCancel = useCallback(async () => {
+    setCancelTarget(null);
+    await reload({ keyword, status });
+    setToast({ title: "발급을 취소했습니다", detail: "같은 이메일로 다시 발급할 수 있습니다" });
+  }, [reload, keyword, status]);
+
+  // 취소하지 못한 경우(고객이 이미 로그인)도 목록은 새로 불러와 「사용 중」으로 보여 줘요.
+  const closeCancel = useCallback(async () => {
+    setCancelTarget(null);
+    await reload({ keyword, status });
+  }, [reload, keyword, status]);
 
   if (!staff) return null;
 
@@ -245,9 +259,14 @@ export default function AccountsPage() {
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
                   {a.status === "pending" ? (
-                    <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
-                      안내 메일 다시 보내기
-                    </button>
+                    <span className="row-actions">
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
+                        안내 메일 다시 보내기
+                      </button>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => setCancelTarget(a)}>
+                        발급 취소
+                      </button>
+                    </span>
                   ) : (
                     <span className="dash">—</span>
                   )}
@@ -277,9 +296,16 @@ export default function AccountsPage() {
                   </button>
                 )}
               </div>
-              <p className="card-meta">
-                {languageName(a.language)} 메일 · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
-              </p>
+              <div className="card-line">
+                <span className="card-meta">
+                  {languageName(a.language)} 메일 · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
+                </span>
+                {a.status === "pending" && (
+                  <button type="button" className="link-action link-action--muted" onClick={() => setCancelTarget(a)}>
+                    발급 취소
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -351,6 +377,8 @@ export default function AccountsPage() {
           onResent={() => afterSend({ kind: "resent", account: resendTarget })}
         />
       )}
+
+      {cancelTarget && <CancelDialog account={cancelTarget} onClose={closeCancel} onCancelled={afterCancel} />}
 
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
     </>
@@ -608,6 +636,69 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
         <button type="button" className="btn btn-dark" onClick={send} disabled={sending} aria-busy={sending || undefined}>
           {sending ? "보내는 중…" : "다시 보내기"}
         </button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** 목록 줄의 「발급 취소」 확인 창(H · 휴대폰 M4). 누르는 사이 고객이 로그인했으면 취소하지 않아요(H2). */
+function CancelDialog({ account, onClose, onCancelled }: { account: Account; onClose: () => void; onCancelled: () => void }) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<"" | "in_use" | "failed">("");
+
+  async function cancel() {
+    setSending(true);
+    setError("");
+    const res = await cancelIssue(account.id);
+    setSending(false);
+    if (res.ok) return onCancelled();
+    setError(res.reason);
+  }
+
+  return (
+    <Dialog title="발급 취소" onClose={onClose} closable={!sending}>
+      <div className="summary">
+        <div className="summary-target">
+          <strong>{account.company}</strong>
+          <span>{account.email} · 첫 로그인 전</span>
+        </div>
+        <dl className="summary-rows">
+          <div>
+            <dt>삭제 대상</dt>
+            <dd>계정 · 데모 프로젝트(데모 기록 {account.demoRecords}건)</dd>
+          </div>
+          <div>
+            <dt>보낸 메일</dt>
+            <dd>비밀번호와 체험 링크를 쓸 수 없게 됨</dd>
+          </div>
+          <div>
+            <dt>재발급</dt>
+            <dd>같은 이메일로 가능</dd>
+          </div>
+        </dl>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error === "in_use"
+            ? "고객이 이미 로그인해서 취소할 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
+            : "발급을 취소하지 못했습니다. 다시 시도해 주세요."}
+        </p>
+      )}
+      <div className="dialog-actions">
+        {error === "in_use" ? (
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            닫기
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
+              취소
+            </button>
+            <button type="button" className="btn btn-danger-outline" onClick={cancel} disabled={sending} aria-busy={sending || undefined}>
+              {sending ? "취소하는 중…" : "발급 취소"}
+            </button>
+          </>
+        )}
       </div>
     </Dialog>
   );

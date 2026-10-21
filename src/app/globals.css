@@ -104,6 +104,8 @@ p {
 .btn-sm { height: 32px; padding: 0 12px; }
 .btn-dark { background: var(--gray-900); color: var(--gray-0); }
 .btn-outline { background: var(--gray-0); color: var(--gray-700); border-color: var(--gray-300); }
+/* 빨강은 되돌릴 수 없는 실행 버튼 한 곳에만(목록의 「발급 취소」는 회색) */
+.btn-danger-outline { background: var(--gray-0); color: var(--danger-400); border-color: var(--danger-400); }
 .btn:disabled { cursor: default; }
 .btn-dark:disabled:not([aria-busy]) { background: var(--gray-100); color: var(--gray-500); }
 
@@ -296,6 +298,7 @@ p {
 .tr.is-new,
 .card-row.is-new { background: var(--gray-50); }
 .dash { color: var(--gray-400); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .empty { padding: 80px 16px; text-align: center; color: var(--gray-500); border-bottom: 1px solid var(--gray-200); }
 
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-700); white-space: nowrap; }
@@ -439,6 +442,7 @@ p {
     color: var(--gray-900);
     cursor: pointer;
   }
+  .link-action--muted { font-weight: 400; color: var(--gray-500); }
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
   .pagination-range,

@@ -7,6 +7,7 @@
 //   목록에 「첫 로그인 전」인 이메일 → 이미 만든 계정(다시 보내기 가능, 처음 보낸 언어로 미리 선택)
 //   inuse@example.com 또는 목록에 「사용 중」인 이메일 → 이미 사용 중(다시 보내기 없음)
 //   fail@example.com  → 그 밖의 실패
+// 발급 취소 목업: user7@example.com(Company G)은 누르는 순간 고객이 로그인한 경우(취소 안 됨 → 「사용 중」으로 바뀜).
 // 로그인 목업은 비밀번호가 "wrong"이면 실패해요.
 
 export type MailLanguage = "en" | "ko";
@@ -30,6 +31,8 @@ export type Account = {
   /** 만든 직원의 회사 이메일 */
   createdBy: string;
   createdAt: string;
+  /** 데모 프로젝트에 쌓인 데모 기록 수. 로그인 없이 체험 링크로 써 봤을 수 있어서 발급 취소 확인 창에 보여 줘요. */
+  demoRecords: number;
 };
 
 export type AccountQuery = { keyword?: string; status?: AccountStatus | "all" };
@@ -57,12 +60,16 @@ export type CreateAccountResult =
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "failed" };
 
+/** 발급 취소. in_use = 누르는 사이 고객이 로그인해서 취소하지 않음(서버가 누를 때 다시 판정) */
+export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "failed" };
+
 export type LoginResult = { ok: true; staff: Staff } | { ok: false };
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ── 목업 데이터(지어낸 값) ──
 let seq = 100;
+const id = (email: string) => email.replace(/\D/g, "") || "0";
 const seedRows: [string, string, MailLanguage, AccountStatus, string, string][] = [
   ["Company A", "user1@example.com", "en", "pending", "kim.sales@example.com", "2026-10-20T06:20:00Z"],
   ["Company B", "user2@example.com", "ko", "in_use", "park.ceo@example.com", "2026-10-18T02:02:00Z"],
@@ -81,6 +88,7 @@ const store: Account[] = seedRows.map(([company, email, language, status, create
   status,
   createdBy,
   createdAt,
+  demoRecords: status === "pending" ? (Number(id(email)) % 4) : 0,
 }));
 
 export async function login(email: string, password: string): Promise<LoginResult> {
@@ -123,6 +131,7 @@ export async function createAccount(input: CreateAccountInput, staff: Staff): Pr
     status: "pending",
     createdBy: staff.email,
     createdAt: new Date().toISOString(),
+    demoRecords: 0,
   };
   store.unshift(account);
   return { ok: true, account };
@@ -133,4 +142,21 @@ export async function resendGuide(input: CreateAccountInput): Promise<ResendResu
   await wait(800);
   if (input.email.toLowerCase() === "fail@example.com") return { ok: false, reason: "failed" };
   return { ok: true, requestedAt: new Date().toISOString() };
+}
+
+/**
+ * 첫 로그인 전 계정의 발급 취소: 계정 · 데모 프로젝트(데모 기록 포함)를 지우고, 보낸 메일의 임시 비밀번호와 체험 링크를 막아요.
+ * 취소 안내 메일은 보내지 않아요. 지운 뒤에는 같은 이메일로 다시 발급할 수 있어요.
+ */
+export async function cancelIssue(accountId: string): Promise<CancelResult> {
+  await wait(800);
+  const i = store.findIndex((a) => a.id === accountId);
+  if (i < 0) return { ok: false, reason: "failed" };
+  const a = store[i];
+  if (a.email === "user7@example.com" || a.status === "in_use") {
+    a.status = "in_use";
+    return { ok: false, reason: "in_use" };
+  }
+  store.splice(i, 1);
+  return { ok: true };
 }
