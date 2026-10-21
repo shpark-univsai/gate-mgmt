@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { IcCheck } from "./icons";
 
-/** inverse = 어두운 바탕(위쪽 메뉴 · 휴대폰 로그인 위쪽)용: 흰색 로고 + 반전 배지 */
+/** inverse = 어두운 바탕(로그인)용: 흰색 로고 + 반전 배지 */
 export function Brand({ inverse = false }: { inverse?: boolean }) {
   return (
     <div className={`brand${inverse ? " brand--inverse" : ""}`}>
@@ -13,15 +14,10 @@ export function Brand({ inverse = false }: { inverse?: boolean }) {
   );
 }
 
-function CloseIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 21 22" fill="none" aria-hidden="true">
-      <path d="M0.53 0.53L20.53 20.53M20.53 0.53L0.53 20.53" stroke="var(--gray-500)" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-/** 확인 · 완료 창. Esc와 바깥 클릭으로 닫히고, 열리면 첫 버튼에 초점이 가요. */
+/**
+ * 확인 · 입력 창. 닫기 ✕는 두지 않아요 — 「취소」, Esc, 창 바깥 누르기로 닫혀요.
+ * 열리면 첫 입력 칸(없으면 실행 버튼)에 초점이 가요.
+ */
 export function Dialog({
   title,
   onClose,
@@ -37,7 +33,10 @@ export function Dialog({
 
   useEffect(() => {
     const el = ref.current;
-    el?.querySelector<HTMLElement>(".dialog-actions button:last-child")?.focus();
+    (el?.querySelector<HTMLElement>("input") ?? el?.querySelector<HTMLElement>(".dialog-actions button:last-child"))?.focus();
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && closable) onClose();
     };
@@ -48,13 +47,27 @@ export function Dialog({
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && closable && onClose()}>
       <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-        <h2 className="dialog-head t-heading-300">
-          <span id="dialog-title">{title}</span>
-          <button type="button" className="dialog-close" onClick={onClose} disabled={!closable} aria-label="닫기">
-            <CloseIcon />
-          </button>
+        <h2 id="dialog-title" className="dialog-title">
+          {title}
         </h2>
         {children}
+      </div>
+    </div>
+  );
+}
+
+/** 완료 알림 — 어두운 유리(반투명 + 흐림). 4초 뒤 사라져요. */
+export function Toast({ title, detail, onDone }: { title: string; detail: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 4000);
+    return () => clearTimeout(t);
+  }, [onDone]);
+  return (
+    <div className="toast" role="status" aria-live="polite">
+      <IcCheck size={18} className="toast-icon" />
+      <div>
+        <p className="toast-title">{title}</p>
+        <p className="toast-detail">{detail}</p>
       </div>
     </div>
   );

@@ -1,10 +1,10 @@
 // 서버 연결 지점.
-// 지금은 목업이에요. 플랫폼 팀이 서버 API를 붙일 때 아래 함수들의 몸통만 바꾸면 돼요.
-// 서버 주소는 NEXT_PUBLIC_API_BASE_URL 환경변수로 받습니다(.env.example).
+// 지금은 목업이에요(이 탭 안에서만 유지되는 메모리 저장소). 플랫폼 팀이 서버 API를 붙일 때
+// 아래 함수들의 몸통만 바꾸면 돼요. 서버 주소는 NEXT_PUBLIC_API_BASE_URL 환경변수로 받습니다(.env.example).
 //
-// 목업에서 화면 상태를 확인하는 방법(고객 이메일 칸에 입력):
-//   taken@example.com → 이미 계정이 있는 이메일(첫 로그인 전 → 다시 보내기 가능, 처음 보낸 언어 한국어)
-//   inuse@example.com → 이미 사용 중인 계정(다시 보내기 없음)
+// 목업에서 화면 상태를 확인하는 방법(계정 만들기 창의 고객 이메일 칸):
+//   목록에 「첫 로그인 전」인 이메일 → 이미 만든 계정(다시 보내기 가능, 처음 보낸 언어로 미리 선택)
+//   inuse@example.com 또는 목록에 「사용 중」인 이메일 → 이미 사용 중(다시 보내기 없음)
 //   limit@example.com → 오늘 보낼 수 있는 수를 넘음
 //   fail@example.com  → 그 밖의 실패
 // 로그인 목업은 비밀번호가 "wrong"이면 실패해요.
@@ -18,26 +18,29 @@ export type Staff = {
   email: string;
 };
 
+/** pending = 영업이 만들었고 고객이 아직 첫 로그인 전 / in_use = 고객이 직접 가입했거나 로그인한 적 있음 */
+export type AccountStatus = "pending" | "in_use";
+
+export type Account = {
+  id: string;
+  company: string;
+  email: string;
+  language: MailLanguage;
+  status: AccountStatus;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type AccountQuery = { keyword?: string; status?: AccountStatus | "all" };
+
 export type CreateAccountInput = {
   company: string;
   email: string;
   language: MailLanguage;
 };
 
-export type CreateAccountResult =
-  | { ok: true; requestedAt: string }
-  // duplicate = 영업이 만들었고 고객이 아직 첫 로그인 전 → 다시 보내기 가능
-  // in_use = 고객이 직접 가입했거나 로그인한 적 있음 → 다시 보내면 쓰던 비밀번호가 막히므로 보내지 않음
-  | { ok: false; reason: "duplicate" | "in_use" | "daily_limit" | "failed" };
-
-export type ResendResult =
-  | { ok: true; requestedAt: string }
-  | { ok: false; reason: "daily_limit" | "failed" };
-
 /**
  * 이메일 칸을 벗어날 때 하는 미리 조회. 보내기 전에 상태를 보여 주려고 써요.
- * pending = 영업이 만들었고 고객이 아직 첫 로그인 전 → 다시 보내기 가능(누가 · 언제 · 어떤 언어로 보냈는지 같이)
- * in_use  = 고객이 직접 가입했거나 로그인한 적 있음 → 다시 보내지 않음
  * 서버는 보내기 때도 같은 판정을 다시 해요(조회와 보내기 사이에 바뀔 수 있어서).
  */
 export type EmailCheck =
@@ -45,9 +48,38 @@ export type EmailCheck =
   | { status: "pending"; createdBy: string; createdAt: string; language: MailLanguage }
   | { status: "in_use" };
 
+export type CreateAccountResult =
+  | { ok: true; account: Account }
+  // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
+  | { ok: false; reason: "duplicate" | "in_use" | "daily_limit" | "failed" };
+
+export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "daily_limit" | "failed" };
+
 export type LoginResult = { ok: true; staff: Staff } | { ok: false };
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ── 목업 데이터(지어낸 값) ──
+let seq = 100;
+const seedRows: [string, string, MailLanguage, AccountStatus, string, string][] = [
+  ["Company A", "user1@example.com", "en", "pending", "김영업", "2026-10-20T06:20:00Z"],
+  ["Company B", "user2@example.com", "ko", "in_use", "박대표", "2026-10-18T02:02:00Z"],
+  ["Company C", "user3@example.com", "en", "in_use", "김영업", "2026-10-16T00:40:00Z"],
+  ["Company D", "user4@example.com", "ko", "pending", "이영업", "2026-10-15T08:25:00Z"],
+  ["Company E", "user5@example.com", "en", "in_use", "박대표", "2026-10-12T05:10:00Z"],
+  ["Company F", "user6@example.com", "ko", "in_use", "이영업", "2026-10-08T01:05:00Z"],
+  ["Company G", "user7@example.com", "en", "pending", "김영업", "2026-10-02T07:30:00Z"],
+  ["Company H", "user8@example.com", "ko", "in_use", "김영업", "2026-09-28T04:45:00Z"],
+];
+const store: Account[] = seedRows.map(([company, email, language, status, createdBy, createdAt]) => ({
+  id: String(seq++),
+  company,
+  email,
+  language,
+  status,
+  createdBy,
+  createdAt,
+}));
 
 export async function login(email: string, password: string): Promise<LoginResult> {
   await wait(500);
@@ -55,28 +87,51 @@ export async function login(email: string, password: string): Promise<LoginResul
   return { ok: true, staff: { name: "김영업", email } };
 }
 
+/** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로 보여 줘요. */
+export async function listAccounts(query: AccountQuery = {}): Promise<Account[]> {
+  await wait(200);
+  const k = (query.keyword ?? "").trim().toLowerCase();
+  return store
+    .filter((a) => (query.status && query.status !== "all" ? a.status === query.status : true))
+    .filter((a) => (k ? a.company.toLowerCase().includes(k) || a.email.toLowerCase().includes(k) : true))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 export async function checkEmail(email: string): Promise<EmailCheck> {
   await wait(300);
   const e = email.toLowerCase();
-  if (e === "taken@example.com") return { status: "pending", createdBy: "김영업", createdAt: "2026-10-20T06:20:00Z", language: "ko" };
   if (e === "inuse@example.com") return { status: "in_use" };
-  return { status: "new" };
+  const found = store.find((a) => a.email.toLowerCase() === e);
+  if (!found) return { status: "new" };
+  if (found.status === "in_use") return { status: "in_use" };
+  return { status: "pending", createdBy: found.createdBy, createdAt: found.createdAt, language: found.language };
 }
 
 /** 고객 계정 생성 + 임시 비밀번호 + 데모 프로젝트 1개 + 안내 메일 발송을 한 번에 요청 */
-export async function createAccount(input: CreateAccountInput): Promise<CreateAccountResult> {
+export async function createAccount(input: CreateAccountInput, staff: Staff): Promise<CreateAccountResult> {
   await wait(800);
-  const email = input.email.toLowerCase();
-  if (email === "taken@example.com") return { ok: false, reason: "duplicate" };
-  if (email === "inuse@example.com") return { ok: false, reason: "in_use" };
-  if (email === "limit@example.com") return { ok: false, reason: "daily_limit" };
-  if (email === "fail@example.com") return { ok: false, reason: "failed" };
-  return { ok: true, requestedAt: new Date().toISOString() };
+  const e = input.email.toLowerCase();
+  if (e === "limit@example.com") return { ok: false, reason: "daily_limit" };
+  if (e === "fail@example.com") return { ok: false, reason: "failed" };
+  const check = await checkEmail(e);
+  if (check.status === "pending") return { ok: false, reason: "duplicate" };
+  if (check.status === "in_use") return { ok: false, reason: "in_use" };
+  const account: Account = {
+    id: String(seq++),
+    ...input,
+    status: "pending",
+    createdBy: staff.name,
+    createdAt: new Date().toISOString(),
+  };
+  store.unshift(account);
+  return { ok: true, account };
 }
 
-/** 이미 있는 계정에 새 임시 비밀번호로 안내 메일을 다시 보냄(이전 비밀번호는 무효) */
+/** 첫 로그인 전 계정에 새 임시 비밀번호로 안내 메일을 다시 보냄(이전 비밀번호는 무효) */
 export async function resendGuide(input: CreateAccountInput): Promise<ResendResult> {
   await wait(800);
-  if (input.email.toLowerCase() === "fail@example.com") return { ok: false, reason: "failed" };
+  const e = input.email.toLowerCase();
+  if (e === "limit@example.com") return { ok: false, reason: "daily_limit" };
+  if (e === "fail@example.com") return { ok: false, reason: "failed" };
   return { ok: true, requestedAt: new Date().toISOString() };
 }

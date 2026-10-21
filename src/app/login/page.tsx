@@ -25,7 +25,7 @@ export default function LoginPage() {
     const res = await login(email.trim(), password);
     if (res.ok) {
       saveStaff(res.staff);
-      router.replace("/accounts/new");
+      router.replace("/accounts");
       return;
     }
     // 계정이 있는지 알려 주지 않도록 한 가지 문구만 써요.
@@ -34,16 +34,16 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="page-center page-center--inverse">
-      {/* 휴대폰: 로고만 어두운 위쪽에, 나머지는 흰 면 */}
+    <main className="login">
+      {/* 휴대폰: 위쪽 48px 띠에 흰 로고, 화면 전체가 다크 모드처럼 반전 */}
       <div className="login-top">
         <Brand inverse />
       </div>
-      <form className="card card--login" onSubmit={onSubmit} noValidate>
+      <form className="login-card" onSubmit={onSubmit} noValidate>
         <div className="login-brand">
           <Brand />
         </div>
-        <h1 className="t-heading-200" style={{ margin: 0 }}>
+        <h1 className="t-heading-200">
           로그인
         </h1>
 
@@ -79,17 +79,17 @@ export default function LoginPage() {
             />
           </div>
           {error && (
-            <p id="login-error" className="error t-body-200-r" role="alert">
+            <p id="login-error" className="error" role="alert">
               {error}
             </p>
           )}
         </div>
 
-        <button type="submit" className="btn-primary" disabled={busy} aria-busy={busy || undefined}>
+        <button type="submit" className="btn btn-dark" disabled={busy} aria-busy={busy || undefined}>
           {busy ? "로그인 중…" : "로그인"}
         </button>
 
-        <p className="help t-body-200-r">계정이 없으면 운영 담당자에게 요청해 주세요.</p>
+        <p className="help">계정이 없으면 운영 담당자에게 요청해 주세요.</p>
       </form>
     </main>
   );
