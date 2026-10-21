@@ -17,7 +17,7 @@ import {
   type MailLanguage,
   type Staff,
 } from "@/lib/api";
-import { useStaff } from "@/lib/session";
+import { clearStaff, useStaff } from "@/lib/session";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -187,12 +187,13 @@ export default function AccountsPage() {
             </a>
           </nav>
         </div>
-        <div className="profile">
-          <div className="avatar" aria-hidden="true">
-            {staff.email.slice(0, 1).toUpperCase()}
-          </div>
-          <span className="identity-name">{staff.email}</span>
-        </div>
+        <ProfileMenu
+          email={staff.email}
+          onLogout={() => {
+            clearStaff();
+            router.replace("/login");
+          }}
+        />
       </header>
 
       <div className="breadcrumb">
@@ -392,6 +393,47 @@ export default function AccountsPage() {
 
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
     </>
+  );
+}
+
+/** 오른쪽 위 프로필. 누르면 로그아웃이 있는 작은 메뉴가 열려요(휴대폰은 이메일도 메뉴 안에). */
+function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="profile" ref={ref}>
+      <button type="button" className="profile-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className="avatar" aria-hidden="true">
+          {email.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="identity-name">{email}</span>
+      </button>
+      {open && (
+        <div className="profile-menu" role="menu">
+          <p className="profile-menu-email">{email}</p>
+          <button type="button" role="menuitem" className="profile-menu-item" onClick={onLogout}>
+            로그아웃
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

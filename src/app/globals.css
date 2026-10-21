@@ -206,7 +206,23 @@ p {
   border-bottom: 2px solid transparent;
 }
 .app-menu-item.is-active { color: var(--gray-900); border-bottom-color: var(--gray-900); }
-.profile { display: flex; align-items: center; gap: 10px; }
+.profile { position: relative; }
+.profile-button { display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 0; color: inherit; cursor: pointer; }
+/* 그림자 없이 테두리만 */
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--gray-0);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-control);
+}
+.profile-menu-email { display: none; margin: 0; padding: 8px 12px; color: var(--gray-500); border-bottom: 1px solid var(--gray-200); margin-bottom: 4px; overflow-wrap: anywhere; }
+.profile-menu-item { display: block; width: 100%; height: 36px; padding: 0 12px; border: 0; border-radius: var(--radius-control); background: none; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-900); cursor: pointer; }
+.profile-menu-item:hover { background: var(--gray-100); }
 .avatar {
   width: 36px;
   height: 36px;
@@ -284,14 +300,14 @@ p {
 .select-icon { position: absolute; right: 8px; pointer-events: none; color: var(--gray-500); }
 .count { margin-left: auto; color: var(--gray-500); }
 
-.table { border: 1px solid var(--gray-200); border-bottom: 0; }
+.table { border: 1px solid var(--gray-300); border-bottom: 0; } /* 표 · 목록 줄은 Gray/300(백오피스 표 공통) */
 .tr {
   display: grid;
   grid-template-columns: 180px 260px 110px 150px 120px 160px minmax(160px, 1fr);
   align-items: center;
   min-height: 64px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-300);
 }
 .tr > span { padding-right: 12px; overflow-wrap: anywhere; }
 .th { min-height: 36px; background: var(--gray-50); }
@@ -299,7 +315,7 @@ p {
 .card-row.is-new { background: var(--gray-50); }
 .dash { color: var(--gray-400); }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.empty { padding: 80px 16px; text-align: center; color: var(--gray-500); border-bottom: 1px solid var(--gray-200); }
+.empty { padding: 80px 16px; text-align: center; color: var(--gray-500); border-bottom: 1px solid var(--gray-300); }
 
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-700); white-space: nowrap; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -418,6 +434,9 @@ p {
   .select,
   .toolbar .btn { display: none; }
   .avatar { width: 32px; height: 32px; }
+  .profile-menu { min-width: 220px; }
+  .profile-menu-email { display: block; }
+  .profile-menu-item { height: 40px; }
   .content { padding: 16px; gap: 12px; }
   .page-title h1 { font-size: 18px; line-height: 28px; }
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
@@ -425,8 +444,8 @@ p {
   .search input { font-size: 16px; }
   .count { margin-left: 0; }
 
-  .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
-  .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-200); display: flex; flex-direction: column; gap: 4px; }
+  .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-300); }
+  .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-300); display: flex; flex-direction: column; gap: 4px; }
   .card-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .card-company { font-size: 14px; line-height: 20px; }
   .card-email { color: var(--gray-700); overflow-wrap: anywhere; }

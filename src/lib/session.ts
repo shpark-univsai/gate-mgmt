@@ -10,6 +10,13 @@ export function saveStaff(staff: Staff) {
   } catch {}
 }
 
+/** 로그아웃: 이 탭의 로그인 상태를 지워요. 서버가 붙으면 서버 세션도 함께 끝내요. */
+export function clearStaff() {
+  try {
+    sessionStorage.removeItem(KEY);
+  } catch {}
+}
+
 let cachedRaw: string | null = null;
 let cachedStaff: Staff | null = null;
 
