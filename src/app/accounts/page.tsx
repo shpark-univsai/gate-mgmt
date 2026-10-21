@@ -49,6 +49,8 @@ const fmtShort = (iso: string) => {
   const t = kstParts(iso);
   return `${t.m}.${t.d} ${t.h}:${t.min}`;
 };
+/** 직원은 이름 대신 회사 이메일로 구분해요. 목록 · 안내에는 @ 앞부분만. */
+const handle = (email: string) => email.split("@")[0];
 const fmtMonthDay = (iso: string) => {
   const t = kstParts(iso);
   return `${t.m}.${t.d}`;
@@ -169,9 +171,9 @@ export default function AccountsPage() {
         </div>
         <div className="profile">
           <div className="avatar" aria-hidden="true">
-            {staff.name.slice(0, 1)}
+            {staff.email.slice(0, 1).toUpperCase()}
           </div>
-          <span className="identity-name">{staff.name}</span>
+          <span className="identity-name">{staff.email}</span>
         </div>
       </header>
 
@@ -239,7 +241,7 @@ export default function AccountsPage() {
                 <span role="cell">
                   <Status status={a.status} />
                 </span>
-                <span role="cell">{a.createdBy}</span>
+                <span role="cell">{handle(a.createdBy)}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
                   {a.status === "pending" ? (
@@ -276,7 +278,7 @@ export default function AccountsPage() {
                 )}
               </div>
               <p className="card-meta">
-                {languageName(a.language)} 메일 · {a.createdBy} · {fmtShort(a.createdAt)}
+                {languageName(a.language)} 메일 · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
               </p>
             </li>
           ))}
@@ -520,7 +522,7 @@ function CreateDialog({
             ) : pending ? (
               // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「안내 메일 다시 보내기」
               <p className="help">
-                {pending.createdBy}님이 {fmtMonthDay(pending.createdAt)}에 만든 계정입니다. 로그인 전이라 다시 보낼 수 있습니다.
+                이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
               </p>
             ) : (
               <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>

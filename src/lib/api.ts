@@ -12,9 +12,9 @@
 export type MailLanguage = "en" | "ko";
 
 // 백오피스 계정(영업 · 대표). 플랫폼 팀이 서버에서 직접 만들어 줘요(만드는 화면 없음).
-// 이름 · 이메일은 안내 메일의 담당자 칸({sales_name} {sales_email})에 들어가요. 전화는 메일 템플릿의 회사 대표번호로 고정.
+// 직원 이름은 어디에도 두지 않아요(개인정보). 회사 이메일로만 구분하고, 안내 메일 담당자 칸({sales_email})에도 이메일이 들어가요.
+// 전화는 메일 템플릿의 회사 대표번호로 고정.
 export type Staff = {
-  name: string;
   email: string;
 };
 
@@ -27,6 +27,7 @@ export type Account = {
   email: string;
   language: MailLanguage;
   status: AccountStatus;
+  /** 만든 직원의 회사 이메일 */
   createdBy: string;
   createdAt: string;
 };
@@ -63,14 +64,14 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ── 목업 데이터(지어낸 값) ──
 let seq = 100;
 const seedRows: [string, string, MailLanguage, AccountStatus, string, string][] = [
-  ["Company A", "user1@example.com", "en", "pending", "김영업", "2026-10-20T06:20:00Z"],
-  ["Company B", "user2@example.com", "ko", "in_use", "박대표", "2026-10-18T02:02:00Z"],
-  ["Company C", "user3@example.com", "en", "in_use", "김영업", "2026-10-16T00:40:00Z"],
-  ["Company D", "user4@example.com", "ko", "pending", "이영업", "2026-10-15T08:25:00Z"],
-  ["Company E", "user5@example.com", "en", "in_use", "박대표", "2026-10-12T05:10:00Z"],
-  ["Company F", "user6@example.com", "ko", "in_use", "이영업", "2026-10-08T01:05:00Z"],
-  ["Company G", "user7@example.com", "en", "pending", "김영업", "2026-10-02T07:30:00Z"],
-  ["Company H", "user8@example.com", "ko", "in_use", "김영업", "2026-09-28T04:45:00Z"],
+  ["Company A", "user1@example.com", "en", "pending", "kim.sales@example.com", "2026-10-20T06:20:00Z"],
+  ["Company B", "user2@example.com", "ko", "in_use", "park.ceo@example.com", "2026-10-18T02:02:00Z"],
+  ["Company C", "user3@example.com", "en", "in_use", "kim.sales@example.com", "2026-10-16T00:40:00Z"],
+  ["Company D", "user4@example.com", "ko", "pending", "lee.sales@example.com", "2026-10-15T08:25:00Z"],
+  ["Company E", "user5@example.com", "en", "in_use", "park.ceo@example.com", "2026-10-12T05:10:00Z"],
+  ["Company F", "user6@example.com", "ko", "in_use", "lee.sales@example.com", "2026-10-08T01:05:00Z"],
+  ["Company G", "user7@example.com", "en", "pending", "kim.sales@example.com", "2026-10-02T07:30:00Z"],
+  ["Company H", "user8@example.com", "ko", "in_use", "kim.sales@example.com", "2026-09-28T04:45:00Z"],
 ];
 const store: Account[] = seedRows.map(([company, email, language, status, createdBy, createdAt]) => ({
   id: String(seq++),
@@ -85,7 +86,7 @@ const store: Account[] = seedRows.map(([company, email, language, status, create
 export async function login(email: string, password: string): Promise<LoginResult> {
   await wait(500);
   if (password === "wrong") return { ok: false };
-  return { ok: true, staff: { name: "김영업", email } };
+  return { ok: true, staff: { email } };
 }
 
 /** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로 보여 줘요. */
@@ -120,7 +121,7 @@ export async function createAccount(input: CreateAccountInput, staff: Staff): Pr
     id: String(seq++),
     ...input,
     status: "pending",
-    createdBy: staff.name,
+    createdBy: staff.email,
     createdAt: new Date().toISOString(),
   };
   store.unshift(account);
