@@ -5,7 +5,6 @@
 // 목업에서 화면 상태를 확인하는 방법(계정 만들기 창의 고객 이메일 칸):
 //   목록에 「첫 로그인 전」인 이메일 → 이미 만든 계정(다시 보내기 가능, 처음 보낸 언어로 미리 선택)
 //   inuse@example.com 또는 목록에 「사용 중」인 이메일 → 이미 사용 중(다시 보내기 없음)
-//   limit@example.com → 오늘 보낼 수 있는 수를 넘음
 //   fail@example.com  → 그 밖의 실패
 // 로그인 목업은 비밀번호가 "wrong"이면 실패해요.
 
@@ -51,9 +50,10 @@ export type EmailCheck =
 export type CreateAccountResult =
   | { ok: true; account: Account }
   // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
-  | { ok: false; reason: "duplicate" | "in_use" | "daily_limit" | "failed" };
+  | { ok: false; reason: "duplicate" | "in_use" | "failed" };
 
-export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "daily_limit" | "failed" };
+// 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
+export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "failed" };
 
 export type LoginResult = { ok: true; staff: Staff } | { ok: false };
 
@@ -111,7 +111,6 @@ export async function checkEmail(email: string): Promise<EmailCheck> {
 export async function createAccount(input: CreateAccountInput, staff: Staff): Promise<CreateAccountResult> {
   await wait(800);
   const e = input.email.toLowerCase();
-  if (e === "limit@example.com") return { ok: false, reason: "daily_limit" };
   if (e === "fail@example.com") return { ok: false, reason: "failed" };
   const check = await checkEmail(e);
   if (check.status === "pending") return { ok: false, reason: "duplicate" };
@@ -130,8 +129,6 @@ export async function createAccount(input: CreateAccountInput, staff: Staff): Pr
 /** 첫 로그인 전 계정에 새 임시 비밀번호로 안내 메일을 다시 보냄(이전 비밀번호는 무효) */
 export async function resendGuide(input: CreateAccountInput): Promise<ResendResult> {
   await wait(800);
-  const e = input.email.toLowerCase();
-  if (e === "limit@example.com") return { ok: false, reason: "daily_limit" };
-  if (e === "fail@example.com") return { ok: false, reason: "failed" };
+  if (input.email.toLowerCase() === "fail@example.com") return { ok: false, reason: "failed" };
   return { ok: true, requestedAt: new Date().toISOString() };
 }

@@ -447,7 +447,7 @@ function CreateDialog({
       const res = await resendGuide(input);
       setSending(false);
       if (res.ok) return onResent(trimmed);
-      setFormError(res.reason === "daily_limit" ? "오늘 보낼 수 있는 수를 넘었습니다." : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.");
+      setFormError("안내 메일을 보내지 못했습니다. 다시 시도해 주세요.");
       return;
     }
     const res = await createAccount(input, staff);
@@ -459,8 +459,7 @@ function CreateDialog({
       setCheck({ email: key, result });
       if (result.status === "pending") setLanguage(result.language);
       emailRef.current?.focus();
-    } else if (res.reason === "daily_limit") setFormError("오늘 보낼 수 있는 수를 넘었습니다.");
-    else setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
+    } else setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
   }
 
   return (
@@ -574,7 +573,7 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
     const res = await resendGuide({ company: account.company, email: account.email, language: account.language });
     setSending(false);
     if (res.ok) return onResent();
-    setError(res.reason === "daily_limit" ? "오늘 보낼 수 있는 수를 넘었습니다." : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.");
+    setError("안내 메일을 보내지 못했습니다. 다시 시도해 주세요.");
   }
 
   return (
