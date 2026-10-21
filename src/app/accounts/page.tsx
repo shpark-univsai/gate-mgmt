@@ -27,7 +27,7 @@ const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactEl
   { value: "ko", label: "한국어", Flag: FlagKR },
 ];
 const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어");
-const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중" };
+const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
 
 function kstParts(iso: string) {
   const parts = new Intl.DateTimeFormat("ko-KR", {
@@ -56,6 +56,9 @@ const fmtMonthDay = (iso: string) => {
   const t = kstParts(iso);
   return `${t.m}.${t.d}`;
 };
+
+/** 발급 취소 줄: 누가 · 언제 취소했는지 */
+const cancelNote = (a: Account) => `${handle(a.cancelledBy ?? "")} 취소 · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`;
 
 type ToastState = { title: string; detail: string } | null;
 
@@ -109,6 +112,7 @@ export default function AccountsPage() {
       total: all.length,
       pending: all.filter((a) => a.status === "pending").length,
       inUse: all.filter((a) => a.status === "in_use").length,
+      cancelled: all.filter((a) => a.status === "cancelled").length,
       thisMonth,
     };
   }, [all]);
@@ -209,6 +213,7 @@ export default function AccountsPage() {
           <Metric label="전체" value={metrics.total} sub={`이번 달 ${metrics.thisMonth}개`} />
           <Metric label="첫 로그인 전" value={metrics.pending} sub="안내 메일을 다시 보낼 수 있음" />
           <Metric label="사용 중" value={metrics.inUse} sub="고객이 콘솔에 로그인함" />
+          <Metric label="발급 취소" value={metrics.cancelled} sub="계정 · 데모 프로젝트 삭제됨" />
         </section>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
@@ -223,6 +228,7 @@ export default function AccountsPage() {
               <option value="all">상태 전체</option>
               <option value="pending">첫 로그인 전</option>
               <option value="in_use">사용 중</option>
+              <option value="cancelled">발급 취소</option>
             </select>
             <IcArrowDown size={16} className="select-icon" />
           </label>
@@ -267,6 +273,8 @@ export default function AccountsPage() {
                         발급 취소
                       </button>
                     </span>
+                  ) : a.status === "cancelled" ? (
+                    <span className="cancel-note">{cancelNote(a)}</span>
                   ) : (
                     <span className="dash">—</span>
                   )}
@@ -295,6 +303,8 @@ export default function AccountsPage() {
                     다시 보내기
                   </button>
                 )}
+                {/* 발급 취소 줄: 다시 보내기 자리에 누가 · 언제 */}
+                {a.status === "cancelled" && <span className="cancel-note">{cancelNote(a)}</span>}
               </div>
               <div className="card-line">
                 <span className="card-meta">
@@ -378,7 +388,7 @@ export default function AccountsPage() {
         />
       )}
 
-      {cancelTarget && <CancelDialog account={cancelTarget} onClose={closeCancel} onCancelled={afterCancel} />}
+      {cancelTarget && <CancelDialog account={cancelTarget} staff={staff} onClose={closeCancel} onCancelled={afterCancel} />}
 
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
     </>
@@ -642,14 +652,24 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
 }
 
 /** 목록 줄의 「발급 취소」 확인 창(H · 휴대폰 M4). 누르는 사이 고객이 로그인했으면 취소하지 않아요(H2). */
-function CancelDialog({ account, onClose, onCancelled }: { account: Account; onClose: () => void; onCancelled: () => void }) {
+function CancelDialog({
+  account,
+  staff,
+  onClose,
+  onCancelled,
+}: {
+  account: Account;
+  staff: Staff;
+  onClose: () => void;
+  onCancelled: () => void;
+}) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<"" | "in_use" | "failed">("");
 
   async function cancel() {
     setSending(true);
     setError("");
-    const res = await cancelIssue(account.id);
+    const res = await cancelIssue(account.id, staff);
     setSending(false);
     if (res.ok) return onCancelled();
     setError(res.reason);

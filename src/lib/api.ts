@@ -19,8 +19,11 @@ export type Staff = {
   email: string;
 };
 
-/** pending = 영업이 만들었고 고객이 아직 첫 로그인 전 / in_use = 고객이 직접 가입했거나 로그인한 적 있음 */
-export type AccountStatus = "pending" | "in_use";
+/**
+ * pending = 영업이 만들었고 고객이 아직 첫 로그인 전 / in_use = 고객이 직접 가입했거나 로그인한 적 있음
+ * cancelled = 발급 취소. 계정 · 데모 프로젝트는 지웠고, 발급 기록(이 줄)만 남겨요.
+ */
+export type AccountStatus = "pending" | "in_use" | "cancelled";
 
 export type Account = {
   id: string;
@@ -33,6 +36,9 @@ export type Account = {
   createdAt: string;
   /** 데모 프로젝트에 쌓인 데모 기록 수. 로그인 없이 체험 링크로 써 봤을 수 있어서 발급 취소 확인 창에 보여 줘요. */
   demoRecords: number;
+  /** 발급 취소한 직원의 회사 이메일 · 시각(cancelled일 때만) */
+  cancelledBy?: string;
+  cancelledAt?: string;
 };
 
 export type AccountQuery = { keyword?: string; status?: AccountStatus | "all" };
@@ -71,6 +77,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let seq = 100;
 const id = (email: string) => email.replace(/\D/g, "") || "0";
 const seedRows: [string, string, MailLanguage, AccountStatus, string, string][] = [
+  ["Company I", "user10@example.com", "en", "cancelled", "lee.sales@example.com", "2026-10-19T03:15:00Z"],
   ["Company A", "user1@example.com", "en", "pending", "kim.sales@example.com", "2026-10-20T06:20:00Z"],
   ["Company B", "user2@example.com", "ko", "in_use", "park.ceo@example.com", "2026-10-18T02:02:00Z"],
   ["Company C", "user3@example.com", "en", "in_use", "kim.sales@example.com", "2026-10-16T00:40:00Z"],
@@ -89,6 +96,7 @@ const store: Account[] = seedRows.map(([company, email, language, status, create
   createdBy,
   createdAt,
   demoRecords: status === "pending" ? (Number(id(email)) % 4) : 0,
+  ...(status === "cancelled" ? { cancelledBy: createdBy, cancelledAt: "2026-10-19T05:40:00Z" } : {}),
 }));
 
 export async function login(email: string, password: string): Promise<LoginResult> {
@@ -111,7 +119,8 @@ export async function checkEmail(email: string): Promise<EmailCheck> {
   await wait(300);
   const e = email.toLowerCase();
   if (e === "inuse@example.com") return { status: "in_use" };
-  const found = store.find((a) => a.email.toLowerCase() === e);
+  // 발급 취소한 기록은 없는 것으로 봐요(같은 이메일로 다시 발급 가능).
+  const found = store.find((a) => a.email.toLowerCase() === e && a.status !== "cancelled");
   if (!found) return { status: "new" };
   if (found.status === "in_use") return { status: "in_use" };
   return { status: "pending", createdBy: found.createdBy, createdAt: found.createdAt, language: found.language };
@@ -146,17 +155,20 @@ export async function resendGuide(input: CreateAccountInput): Promise<ResendResu
 
 /**
  * 첫 로그인 전 계정의 발급 취소: 계정 · 데모 프로젝트(데모 기록 포함)를 지우고, 보낸 메일의 임시 비밀번호와 체험 링크를 막아요.
- * 취소 안내 메일은 보내지 않아요. 지운 뒤에는 같은 이메일로 다시 발급할 수 있어요.
+ * 취소 안내 메일은 보내지 않아요. 목록에는 「발급 취소」 줄로 남고(누가 · 언제), 같은 이메일로 다시 발급할 수 있어요.
+ * 만들기 · 다시 보내기 · 발급 취소는 할 때마다 누가 · 언제 했는지 서버가 기록해 둬요(나중에 「관리/보안 이력」에서 보기).
  */
-export async function cancelIssue(accountId: string): Promise<CancelResult> {
+export async function cancelIssue(accountId: string, staff: Staff): Promise<CancelResult> {
   await wait(800);
-  const i = store.findIndex((a) => a.id === accountId);
-  if (i < 0) return { ok: false, reason: "failed" };
-  const a = store[i];
+  const a = store.find((x) => x.id === accountId);
+  if (!a || a.status === "cancelled") return { ok: false, reason: "failed" };
   if (a.email === "user7@example.com" || a.status === "in_use") {
     a.status = "in_use";
     return { ok: false, reason: "in_use" };
   }
-  store.splice(i, 1);
+  a.status = "cancelled";
+  a.cancelledBy = staff.email;
+  a.cancelledAt = new Date().toISOString();
+  a.demoRecords = 0;
   return { ok: true };
 }

@@ -236,7 +236,7 @@ p {
 .content { padding: 24px; display: flex; flex-direction: column; gap: 24px; }
 .page-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 
-.overview { display: grid; grid-template-columns: repeat(3, 1fr); }
+.overview { display: grid; grid-template-columns: repeat(4, 1fr); }
 .metric {
   height: 126px;
   padding: 16px;
@@ -305,6 +305,9 @@ p {
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .status--in_use .status-dot { background: var(--status-ok); }
 .status--pending .status-dot { background: var(--status-wait); }
+.status--cancelled { color: var(--gray-500); }
+.status--cancelled .status-dot { background: var(--gray-400); }
+.cancel-note { color: var(--gray-500); white-space: nowrap; }
 
 .cards { display: none; }
 
