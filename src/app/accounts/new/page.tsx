@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand, Dialog } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { createAccount, resendGuide, type MailLanguage } from "@/lib/api";
+import { checkEmail, createAccount, resendGuide, type EmailCheck, type MailLanguage } from "@/lib/api";
 import { useStaff } from "@/lib/session";
 
 const COMPANY_MAX = 40;
@@ -17,6 +17,12 @@ const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactEl
 const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어");
 
 type Done = { company: string; email: string; language: MailLanguage; at: string; resent: boolean };
+
+function formatMonthDay(iso: string) {
+  const parts = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit" }).formatToParts(new Date(iso));
+  const p = (t: string) => parts.find((x) => x.type === t)?.value ?? "";
+  return `${p("month")}.${p("day")}`;
+}
 
 function formatKst(iso: string) {
   const parts = new Intl.DateTimeFormat("ko-KR", {
@@ -43,10 +49,8 @@ export default function CreateAccountPage() {
   const [companyError, setCompanyError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [formError, setFormError] = useState("");
-  // 이미 계정이 있는 이메일이면 큰 버튼이 「안내 메일 다시 보내기」로 바뀌어요.
-  const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
-  // 이미 사용 중인 계정이면 다시 보내지 않고 「비밀번호 재설정」을 안내해요.
-  const [inUseOf, setInUseOf] = useState<string | null>(null);
+  // 이메일 미리 조회 결과. 보내기 전에 「첫 로그인 전」 · 「이미 사용 중」을 알려 줘요.
+  const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
 
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
@@ -61,10 +65,26 @@ export default function CreateAccountPage() {
   }, [staff, router]);
 
   const trimmedEmail = email.trim();
-  const isResend = duplicateOf !== null && duplicateOf === trimmedEmail.toLowerCase();
-  const isInUse = inUseOf !== null && inUseOf === trimmedEmail.toLowerCase();
+  const key = trimmedEmail.toLowerCase();
+  const current = check && check.email === key ? check.result : null;
+  const pending = current?.status === "pending" ? current : null;
+  const isResend = pending !== null;
+  const isInUse = current?.status === "in_use";
 
-  function onSubmit(e: React.FormEvent) {
+  async function runCheck(): Promise<EmailCheck | null> {
+    if (!EMAIL_RE.test(trimmedEmail)) return null;
+    if (current) return current;
+    const asked = key;
+    const result = await checkEmail(trimmedEmail);
+    // 조회하는 사이 이메일을 고쳤으면 버려요.
+    if (emailRef.current?.value.trim().toLowerCase() !== asked) return null;
+    setCheck({ email: asked, result });
+    // 첫 로그인 전이면 메일 언어를 처음 보낸 언어로 미리 골라 둬요.
+    if (result.status === "pending") setLanguage(result.language);
+    return result;
+  }
+
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     let cError = "";
     let eError = "";
@@ -77,6 +97,12 @@ export default function CreateAccountPage() {
     setFormError("");
     if (cError) return companyRef.current?.focus();
     if (eError) return emailRef.current?.focus();
+    // 아직 조회 전이면 먼저 조회해요. 상태가 새로 드러나면 창을 열지 않고 칸 아래에 먼저 보여 줘요.
+    if (!current) {
+      const result = await runCheck();
+      if (!result || result.status !== "new") return emailRef.current?.focus();
+    }
+    if (isInUse) return emailRef.current?.focus();
     setConfirming(true);
   }
 
@@ -98,10 +124,12 @@ export default function CreateAccountPage() {
       setDone({ ...input, at: res.requestedAt, resent: isResend });
       return;
     }
-    if (res.reason === "duplicate") {
-      setDuplicateOf(trimmedEmail.toLowerCase());
-    } else if (res.reason === "in_use") {
-      setInUseOf(trimmedEmail.toLowerCase());
+    if (res.reason === "duplicate" || res.reason === "in_use") {
+      // 조회와 보내기 사이에 상태가 바뀐 경우: 다시 조회해서 칸 아래에 보여 줘요.
+      const result = await checkEmail(trimmedEmail);
+      setCheck({ email: key, result });
+      if (result.status === "pending") setLanguage(result.language);
+      emailRef.current?.focus();
     } else if (res.reason === "daily_limit") {
       setFormError("오늘 보낼 수 있는 수를 넘었습니다.");
     } else {
@@ -115,8 +143,7 @@ export default function CreateAccountPage() {
     setCompany("");
     setEmail("");
     setLanguage("en");
-    setDuplicateOf(null);
-    setInUseOf(null);
+    setCheck(null);
     setCompanyError("");
     setEmailError("");
     setFormError("");
@@ -184,14 +211,13 @@ export default function CreateAccountPage() {
                   setEmail(e.target.value);
                   // 이메일을 고치면 원래 버튼(계정 만들고 메일 보내기)으로 돌아가요.
                   if (emailError) setEmailError("");
-                  if (duplicateOf) setDuplicateOf(null);
-                  if (inUseOf) setInUseOf(null);
                 }}
+                onBlur={() => void runCheck()}
                 aria-invalid={!!emailError || isInUse}
                 aria-describedby="email-note"
               />
             </div>
-            <div id="email-note" className="field" style={{ gap: 8 }}>
+            <div id="email-note" className="field" style={{ gap: 8 }} role="status" aria-live="polite">
               {emailError ? (
                 <p className="error t-body-200-r">{emailError}</p>
               ) : isInUse ? (
@@ -199,7 +225,9 @@ export default function CreateAccountPage() {
                 <p className="error t-body-200-r">이미 사용 중인 계정입니다. 「비밀번호 재설정」을 안내해 주세요.</p>
               ) : isResend ? (
                 // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 큰 버튼이 「안내 메일 다시 보내기」
-                <p className="help t-body-200-r">이 이메일로 만든 계정이 있습니다. 아직 로그인 전이라 안내 메일을 다시 보낼 수 있습니다.</p>
+                <p className="help t-body-200-r">
+                  {pending.createdBy}님이 {formatMonthDay(pending.createdAt)}에 만든 계정입니다. 로그인 전이라 다시 보낼 수 있습니다.
+                </p>
               ) : (
                 <p className="help t-body-200-r">메일에 담당자로 내 이름과 이메일이 들어갑니다.</p>
               )}
@@ -227,7 +255,7 @@ export default function CreateAccountPage() {
           </div>
 
           <div className="field">
-            <button type="submit" className="btn-primary" disabled={isInUse}>
+            <button type="submit" className="btn-primary" disabled={isInUse} aria-describedby="email-note">
               {isResend ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
             {formError && (
@@ -240,13 +268,12 @@ export default function CreateAccountPage() {
       </main>
 
       {confirming && (
-        <Dialog title={isResend ? "이 주소로 다시 보낼까요?" : "이 주소로 보낼까요?"} onClose={closeConfirm} closable={!sending}>
+        <Dialog title={isResend ? "이 주소로 다시 보내시겠습니까?" : "이 주소로 보내시겠습니까?"} onClose={closeConfirm} closable={!sending}>
           <div className="record">
-            <p className="t-body-400-b">
-              {company.trim()} · {trimmedEmail}
-            </p>
+            {/* 이 창은 주소 확인이 목적이라 이메일만 크게 */}
+            <p className="t-body-400-b">{trimmedEmail}</p>
             <p className="t-body-200-r" style={{ color: "var(--gray-500)" }}>
-              {languageName(language)} 메일로 보냅니다.{" "}
+              {company.trim()} · {languageName(language)} 메일 ·{" "}
               {isResend ? "새 임시 비밀번호가 가고, 이전 비밀번호는 쓸 수 없게 됩니다." : "임시 비밀번호가 이 주소로 갑니다."}
             </p>
           </div>
@@ -263,20 +290,22 @@ export default function CreateAccountPage() {
       )}
 
       {done && (
-        <Dialog title={done.resent ? "안내 메일을 다시 보냈습니다" : "계정을 만들고 메일을 보냈습니다"} onClose={finish}>
+        <Dialog title={done.resent ? "안내 메일을 다시 보냈습니다" : "계정을 만들었습니다"} onClose={finish}>
           <div className="record">
             <p className="t-body-200-b">
               {done.company} · {done.email}
             </p>
             <p className="status t-body-200-r">
               <span className="status-dot" aria-hidden="true" />
-              발송 요청함
+              안내 메일 발송을 요청했습니다
             </p>
             <p className="t-body-200-r" style={{ color: "var(--gray-500)" }}>
               {done.resent ? "새 임시 비밀번호" : "데모 프로젝트 1개"} · {languageName(done.language)} 메일 · {formatKst(done.at)}
             </p>
           </div>
-          <p className="help t-body-200-r">메일이 보이지 않으면 스팸함을 확인하도록 안내해 주세요.</p>
+          <p className="help t-body-200-r">
+            고객에게 메일의 QR로 휴대폰 데모부터 해 보도록 안내해 주세요. 메일이 안 보이면 스팸함을 확인하게 해 주세요.
+          </p>
           <div className="dialog-actions">
             <button type="button" className="btn-action btn-action--dark" onClick={finish}>
               확인

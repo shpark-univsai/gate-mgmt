@@ -6,7 +6,7 @@
   font-display: swap;
 }
 
-/* Figma Gate-Admin 변수 (Gray/0~900, Danger/400, Warning/600) */
+/* Figma Gate-Admin 변수 (Gray/0~900, Danger/400) */
 :root {
   --gray-0: #ffffff;
   --gray-50: #f8fafc;
@@ -20,10 +20,6 @@
   --gray-800: #1d293b;
   --gray-900: #0e162a;
   --danger-400: #e11d1d;
-  --warning-600: #9f6401;
-  /* 버튼 비활성 (Figma 버튼 부품 Block Button_login_disable) */
-  --disabled-bg: #e8eef2;
-  --disabled-fg: #a4adb2;
 }
 
 *,
@@ -40,7 +36,7 @@ body {
 }
 
 body {
-  background: var(--gray-50);
+  background: var(--gray-0);
   color: var(--gray-900);
   font-family: "SUIT", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   letter-spacing: -0.02em;
@@ -128,12 +124,11 @@ input {
 }
 .identity-name { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--gray-0); }
 
+/* 카드는 위쪽 메뉴 아래 120px에 고정 — 안내 줄이 늘어도 카드가 움직이지 않게 */
 .main-center {
-  min-height: calc(100vh - 60px);
   display: flex;
-  align-items: center;
   justify-content: center;
-  padding: 24px 16px;
+  padding: 120px 16px 48px;
 }
 
 /* ── 입력 ── */
@@ -175,7 +170,7 @@ input {
   border-radius: 4px;
   background: var(--gray-0);
   border: 1px solid var(--gray-300);
-  color: var(--gray-500);
+  color: var(--gray-700);
   font-size: 13px;
   line-height: 18px;
   cursor: pointer;
@@ -202,7 +197,7 @@ input {
   cursor: pointer;
 }
 .btn-primary:disabled { cursor: default; }
-.btn-primary[disabled]:not([aria-busy]) { background: var(--disabled-bg); color: var(--disabled-fg); }
+.btn-primary[disabled]:not([aria-busy]) { background: var(--gray-100); color: var(--gray-500); }
 
 .btn-action {
   height: 32px;
@@ -274,7 +269,7 @@ input {
 }
 .record p { margin: 0; }
 .status { display: flex; align-items: center; gap: 6px; color: var(--gray-700); }
-.status-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--warning-600); }
+.status-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--gray-500); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .visually-hidden {
@@ -299,7 +294,8 @@ input {
   .card--login { flex: 1; }
   .card .t-heading-200,
   .card .t-heading-300 { font-size: 20px; line-height: 32px; }
-  .input-box input { font-size: 14px; line-height: 20px; }
+  /* 16px보다 작으면 iPhone이 칸을 누를 때 화면을 확대해요 */
+  .input-box input { font-size: 16px; line-height: 24px; }
   .btn-primary { height: 44px; padding: 0 16px; font-size: 14px; line-height: 20px; }
   .nav { padding: 0 16px; }
   .identity { display: none; }
