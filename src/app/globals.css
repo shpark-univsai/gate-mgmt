@@ -492,6 +492,7 @@ p {
   .status-chip.is-on { background: var(--gray-200); border-color: transparent; color: var(--gray-900); } /* 선택은 바탕만, 테두리 없음 · 검정은 「계정 만들기」에만 */
   .empty { padding: 48px 16px; }
   .search input { font-size: 16px; }
+  .search-clear { width: 38px; height: 38px; margin-right: -13px; } /* 누르는 영역 38, ✕ 자리는 그대로 */
   .count { margin-left: 0; }
 
   .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
@@ -502,8 +503,8 @@ p {
   .card-meta { color: var(--gray-500); }
   .card-status { display: inline-flex; align-items: center; gap: 2px; }
   .card-more { position: relative; display: inline-flex; }
-  .card-more-button { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: -4px -8px -4px 0; padding: 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); }
-  .profile-menu.card-more-menu { top: calc(100% + 4px); right: 0; min-width: 140px; }
+  .card-more-button { display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; margin: -10px -14px -2px -6px; padding: 8px 0 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 40×36, 아이콘 자리는 그대로 · 아래로는 2px만 넘쳐 「재발송」과 안 겹침 */
+  .profile-menu.card-more-menu { top: calc(100% + 2px); right: 0; min-width: 140px; }
   .link-action {
     display: inline-flex;
     align-items: center;
@@ -511,8 +512,8 @@ p {
     flex: none;
     border: 0;
     background: none;
-    padding: 7px 0; /* 누르는 영역 32 이상, 화면 모양은 글자 높이 */
-    margin: -7px 0;
+    padding: 2px 0 12px; /* 누르는 영역 32, 화면 모양은 글자 높이 · 위는 ⋮ 자리라 아래로 넓힘 */
+    margin: -2px 0 -12px;
     font-size: 13px;
     font-weight: 600;
     color: var(--gray-900);
@@ -521,6 +522,12 @@ p {
   .link-action--muted { font-weight: 400; color: var(--gray-500); }
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
+  /* 작은 버튼은 보이는 크기 그대로, 누르는 영역만 40 가까이 */
+  .page-btn,
+  .profile-button { position: relative; }
+  .page-btn::after { content: ""; position: absolute; inset: -6px -4px; } /* 36×40 · 버튼 사이 8px라 옆과 안 겹침 */
+  .profile-button::after { content: ""; position: absolute; inset: -6px; }
+  .eye-toggle { width: 40px; height: 38px; margin-right: 2px; }
   .pagination-range,
   .page-size { display: none; }
 
