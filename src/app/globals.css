@@ -495,7 +495,7 @@ p {
   .segmented button { height: 40px; }
   .dialog-actions .btn { flex: 1; height: 40px; }
   /* 키보드가 올라와 창이 가려져도 버튼은 보이는 영역 맨 아래에 붙어 있게 · 평소 자리와 간격은 그대로 */
-  .dialog-actions { position: sticky; bottom: 0; margin: -12px 0 -16px; padding: 12px 0 16px; background: var(--gray-0); }
+  .dialog-actions { position: sticky; bottom: -16px; margin: -12px 0 -16px; padding: 12px 0 16px; background: var(--gray-0); }
   .mail-failure-sentence { display: block; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
