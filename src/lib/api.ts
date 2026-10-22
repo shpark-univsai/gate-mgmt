@@ -71,10 +71,12 @@ export type CreateAccountInput = {
  * 이메일 칸을 벗어날 때 하는 미리 조회. 보내기 전에 상태를 보여 주려고 써요.
  * 서버는 보내기 때도 같은 판정을 다시 해요(조회와 보내기 사이에 바뀔 수 있어서).
  * pending 이면 그 발급 기록 번호(id)로 다시 보내요.
+ * resendBlocked = 같은 주소로 3번 연속 주소 오류라 서버가 다시 보내기를 막았어요(발급 취소만 가능 · 목록과 같은 규칙).
+ * 예전 서버는 주지 않아요(없으면 false).
  */
 export type EmailCheck =
   | { status: "new" }
-  | { status: "pending"; id: string; createdBy: string; createdAt: string; language: MailLanguage }
+  | { status: "pending"; id: string; createdBy: string; createdAt: string; language: MailLanguage; resendBlocked: boolean }
   | { status: "in_use" };
 
 export type CreateAccountResult =
@@ -188,9 +190,17 @@ export async function checkEmail(email: string): Promise<EmailCheck> {
     createdBy?: string;
     createdAt?: string;
     language?: MailLanguage;
+    resendBlocked?: boolean | null;
   }>("GET", `${MGMT}/accounts/email-check?email=${encodeURIComponent(email)}`);
   if (data.status === "pending" && data.id && data.createdBy && data.createdAt && data.language) {
-    return { status: "pending", id: data.id, createdBy: data.createdBy, createdAt: data.createdAt, language: data.language };
+    return {
+      status: "pending",
+      id: data.id,
+      createdBy: data.createdBy,
+      createdAt: data.createdAt,
+      language: data.language,
+      resendBlocked: data.resendBlocked === true,
+    };
   }
   return data.status === "in_use" ? { status: "in_use" } : { status: "new" };
 }
