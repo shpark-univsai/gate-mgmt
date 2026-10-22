@@ -105,7 +105,8 @@ const resendErrorText = (reason: ResendFailure) =>
 const offersCancel = (reason: MailFailureReason | "blocked") => reason === "address" || reason === "blocked";
 
 /** 첫 로그인 전이고 서버가 막지 않았으면 다시 보낼 수 있어요. */
-const canResend = (a: Account) => a.status === "pending" && !a.resendBlocked;
+// 이메일 주소 오류(받는 도메인이 메일을 못 받음)는 다시 보내도 또 실패해요 — 처음부터 발급 취소만(올바른 주소로 새로 만들기)
+const canResend = (a: Account) => a.status === "pending" && !a.resendBlocked && a.mailFailureReason !== "address";
 
 export default function AccountsPage() {
   const router = useRouter();
