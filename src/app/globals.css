@@ -82,7 +82,7 @@ p {
 /* ── 로고 · 배지 ── */
 .brand { display: flex; align-items: center; gap: 8px; height: 40px; flex: none; }
 .brand img { display: block; width: 134px; height: 20px; }
-.badge { padding: 4px 8px; border-radius: 32px; background: var(--gray-900); color: var(--gray-0); }
+.badge { padding: 4px 8px; border-radius: 0; /* 백오피스 화면처럼 각지게 */ background: var(--gray-900); color: var(--gray-0); }
 .brand--inverse .badge { background: var(--gray-0); color: var(--gray-900); }
 
 /* ── 버튼 ── */
@@ -161,29 +161,32 @@ p {
   font-weight: 700;
 }
 
-/* ── 로그인 (어두운 바탕은 로그인만) ── */
+/* ── 로그인 (어두운 바탕은 로그인만) — 카드 없이 어두운 바탕에 바로(휴대폰과 같은 모양) ── */
 .login {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 16px;
+  padding: 24px 16px 72px;
   background: var(--gray-900);
 }
 .login-top { display: none; }
 .login-card {
   width: 100%;
-  max-width: 420px;
-  background: var(--gray-0);
-  border: 1px solid var(--gray-200);
-  border-radius: var(--radius-container);
-  padding: 32px;
+  max-width: 400px;
   display: flex;
   flex-direction: column;
   gap: 24px;
+  color: var(--gray-0);
 }
-.login-card .input-box { height: 44px; }
-.login-card .btn { height: 48px; font-size: 14px; line-height: 20px; }
+.login-brand { display: flex; justify-content: center; margin-bottom: 16px; }
+.login-card .input-box { height: 44px; background: var(--gray-800); border-color: var(--gray-700); }
+.login-card .input-box:focus-within { border-color: var(--gray-0); }
+.login-card .input-box input { color: var(--gray-0); }
+.login-card .btn { height: 48px; font-size: 14px; line-height: 20px; background: var(--gray-0); color: var(--gray-900); }
+.login-card .help { color: var(--gray-400); }
+.login-copyright { position: absolute; left: 0; right: 0; bottom: 32px; margin: 0; text-align: center; color: var(--gray-500); font-size: 12px; }
 
 /* ── 로그인 뒤: 내부 화면 틀 (사내 직원 관리와 같은 모양) ── */
 .app-nav {
@@ -423,12 +426,12 @@ p {
   .login { display: block; padding: 0; }
   .login-top { display: flex; align-items: center; height: 48px; padding: 0 16px; }
   .login-brand { display: none; }
-  .login-card { max-width: none; background: none; border: 0; padding: 20px 16px; gap: 16px; color: var(--gray-0); }
-  .login-card h1 { font-size: 18px; line-height: 28px; }
+  .login-copyright { display: none; }
+  .login-card { max-width: none; padding: 20px 16px; gap: 16px; }
   .login-card .field { gap: 6px; }
-  .login-card .input-box { height: 40px; background: var(--gray-800); border-color: var(--gray-700); }
+  .login-card .input-box { height: 40px; }
   .login-card .input-box:focus-within { border-color: var(--gray-0); }
-  .login-card .btn { height: 40px; background: var(--gray-0); color: var(--gray-900); }
+  .login-card .btn { height: 40px; }
   .login-card .help { color: var(--gray-400); }
 
   .input-box input { font-size: 16px; line-height: 24px; } /* 16px보다 작으면 iPhone이 칸을 누를 때 화면을 확대해요 */
