@@ -287,7 +287,7 @@ export default function AccountsPage() {
         {/* PC: 표 */}
         <div className="table" role="table" aria-label="발급한 계정">
           <div className="tr th" role="row">
-            {["회사명", "고객 이메일", "메일 언어", "상태", "만든 사람", "만든 일시", "관리"].map((h) => (
+            {["회사명", "고객 이메일", "메일 언어", "상태", "생성자", "생성일시", "관리"].map((h) => (
               <span key={h} role="columnheader">
                 {h}
               </span>
