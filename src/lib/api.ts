@@ -1,14 +1,8 @@
-// 서버 연결 지점.
-// 지금은 목업이에요(이 탭 안에서만 유지되는 메모리 저장소). 플랫폼 팀이 서버 API를 붙일 때
-// 아래 함수들의 몸통만 바꾸면 돼요. 서버 주소는 따로 받지 않고 같은 출처의 상대 경로(예: fetch("/api/v1/..."))로
-// 부릅니다 — 배포 컨테이너의 nginx 가 /api/ 를 환경별 게이트웨이로 넘겨요(.env.example 참고).
-//
-// 목업에서 화면 상태를 확인하는 방법(계정 만들기 창의 고객 이메일 칸):
-//   목록에 「첫 로그인 전」인 이메일 → 이미 만든 계정(다시 보내기 가능, 처음 보낸 언어로 미리 선택)
-//   inuse@example.com 또는 목록에 「사용 중」인 이메일 → 이미 사용 중(다시 보내기 없음)
-//   fail@example.com  → 그 밖의 실패
-// 발급 취소 목업: user7@example.com(Company G)은 누르는 순간 고객이 로그인한 경우(취소 안 됨 → 「사용 중」으로 바뀜).
-// 로그인 목업은 비밀번호가 "wrong"이면 실패해요.
+// 서버 연결 지점 (UG-405). 화면은 이 파일의 함수만 불러요.
+// 로그인은 Gate 인증 서버(/api/v1/auth/...), 계정 발급은 백오피스 서버(/api/v1/mgmt/...)예요. 둘 다 게이트웨이를 거쳐요.
+// 백오피스는 허용된 직원만 쓸 수 있어요(서버의 직원 허용 목록). 목록에 없으면 로그인 때 「권한 없음」으로 막혀요.
+import { ApiError, authed, publicPost, revokeRefreshToken, send } from "./http";
+import { clearSession, getTokens, saveTokens } from "./session";
 
 export type MailLanguage = "en" | "ko";
 
@@ -34,14 +28,25 @@ export type Account = {
   /** 만든 직원의 회사 이메일 */
   createdBy: string;
   createdAt: string;
-  /** 데모 프로젝트에 쌓인 데모 기록 수. 로그인 없이 체험 링크로 써 봤을 수 있어서 발급 취소 확인 창에 보여 줘요. */
-  demoRecords: number;
-  /** 발급 취소한 직원의 회사 이메일 · 시각(cancelled일 때만) */
+  /**
+   * 데모 프로젝트에 쌓인 데모 기록 수. 로그인 없이 체험 링크로 써 봤을 수 있어서 발급 취소 확인 창에 보여 줘요.
+   * 체험 링크 기능이 생기기 전까지 서버가 주지 않아요(없으면 건수를 빼고 보여 줘요).
+   */
+  demoRecords?: number;
+  /** 발급 취소한 직원의 회사 이메일 · 시각(cancelled일 때만). 시스템이 정리한 기록이면 cancelledBy 가 없어요. */
   cancelledBy?: string;
   cancelledAt?: string;
+  /** 마지막 안내 메일 발송이 실패했어요 — 다시 보내기로 복구해요 */
+  mailFailed?: boolean;
 };
 
-export type AccountQuery = { keyword?: string; status?: AccountStatus | "all" };
+export type AccountQuery = { keyword?: string; status?: AccountStatus | "all"; page?: number; size?: number };
+
+/** 목록 한 페이지. total = 조건에 맞는 전체 건수 */
+export type AccountPage = { items: Account[]; total: number };
+
+/** 요약 카드. 검색어 · 상태 필터와 무관한 전체 기준(서버가 셈) */
+export type AccountSummary = { total: number; pending: number; inUse: number; cancelled: number; thisMonth: number };
 
 export type CreateAccountInput = {
   company: string;
@@ -52,123 +57,155 @@ export type CreateAccountInput = {
 /**
  * 이메일 칸을 벗어날 때 하는 미리 조회. 보내기 전에 상태를 보여 주려고 써요.
  * 서버는 보내기 때도 같은 판정을 다시 해요(조회와 보내기 사이에 바뀔 수 있어서).
+ * pending 이면 그 발급 기록 번호(id)로 다시 보내요.
  */
 export type EmailCheck =
   | { status: "new" }
-  | { status: "pending"; createdBy: string; createdAt: string; language: MailLanguage }
+  | { status: "pending"; id: string; createdBy: string; createdAt: string; language: MailLanguage }
   | { status: "in_use" };
 
 export type CreateAccountResult =
-  | { ok: true; account: Account }
+  // mailSent=false 면 계정은 만들었지만 안내 메일은 못 보냈어요 — 목록에서 다시 보내요
+  | { ok: true; account: Account; mailSent: boolean }
   // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
   | { ok: false; reason: "duplicate" | "in_use" | "failed" };
 
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
-export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "failed" };
+// in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨
+export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "in_use" | "not_found" | "failed" };
 
-/** 발급 취소. in_use = 누르는 사이 고객이 로그인해서 취소하지 않음(서버가 누를 때 다시 판정) */
-export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "failed" };
+/**
+ * 발급 취소. in_use = 누르는 사이 고객이 로그인해서 취소하지 않음(서버가 누를 때 다시 판정)
+ * not_found = 다른 직원이 먼저 취소함
+ */
+export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "failed" };
 
-export type LoginResult = { ok: true; staff: Staff } | { ok: false };
+/** invalid = 이메일 · 비밀번호가 맞지 않음 / forbidden = 백오피스를 쓸 수 없는 계정 / failed = 서버 · 네트워크 문제 */
+export type LoginResult = { ok: true; staff: Staff } | { ok: false; reason: "invalid" | "forbidden" | "failed" };
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const MGMT = "/api/v1/mgmt";
 
-// ── 목업 데이터(지어낸 값) ──
-let seq = 100;
-const id = (email: string) => email.replace(/\D/g, "") || "0";
-const seedRows: [string, string, MailLanguage, AccountStatus, string, string][] = [
-  ["Company I", "user10@example.com", "en", "cancelled", "lee.sales@example.com", "2026-10-19T03:15:00Z"],
-  ["Company A", "user1@example.com", "en", "pending", "kim.sales@example.com", "2026-10-20T06:20:00Z"],
-  ["Company B", "user2@example.com", "ko", "in_use", "park.ceo@example.com", "2026-10-18T02:02:00Z"],
-  ["Company C", "user3@example.com", "en", "in_use", "kim.sales@example.com", "2026-10-16T00:40:00Z"],
-  ["Company D", "user4@example.com", "ko", "pending", "lee.sales@example.com", "2026-10-15T08:25:00Z"],
-  ["Company E", "user5@example.com", "en", "in_use", "park.ceo@example.com", "2026-10-12T05:10:00Z"],
-  ["Company F", "user6@example.com", "ko", "in_use", "lee.sales@example.com", "2026-10-08T01:05:00Z"],
-  ["Company G", "user7@example.com", "en", "pending", "kim.sales@example.com", "2026-10-02T07:30:00Z"],
-  ["Company H", "user8@example.com", "ko", "in_use", "kim.sales@example.com", "2026-09-28T04:45:00Z"],
-];
-const store: Account[] = seedRows.map(([company, email, language, status, createdBy, createdAt]) => ({
-  id: String(seq++),
-  company,
-  email,
-  language,
-  status,
-  createdBy,
-  createdAt,
-  demoRecords: status === "pending" ? (Number(id(email)) % 4) : 0,
-  ...(status === "cancelled" ? { cancelledBy: createdBy, cancelledAt: "2026-10-19T05:40:00Z" } : {}),
-}));
+/** 서버 · 네트워크 문제(다시 시도하면 될 수 있는 것)인지 */
+const isTransient = (e: unknown) =>
+  !(e instanceof ApiError) || e.status === 0 || e.status === 429 || e.status >= 500;
 
 export async function login(email: string, password: string): Promise<LoginResult> {
-  await wait(500);
-  if (password === "wrong") return { ok: false };
-  return { ok: true, staff: { email } };
+  let tokens: { accessToken: string; refreshToken: string };
+  try {
+    tokens = await publicPost("/api/v1/auth/login", { email, password });
+  } catch (e) {
+    return { ok: false, reason: isTransient(e) ? "failed" : "invalid" };
+  }
+  try {
+    // 허용된 직원인지 서버에 물어요. 토큰은 확인된 뒤에만 남겨요.
+    const me = await send<{ accountId: string; email: string }>("GET", `${MGMT}/me`, {}, tokens.accessToken);
+    saveTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+    return { ok: true, staff: { email: me.email } };
+  } catch (e) {
+    revokeRefreshToken(tokens.refreshToken);
+    if (e instanceof ApiError && e.status === 403) return { ok: false, reason: "forbidden" };
+    return { ok: false, reason: "failed" };
+  }
 }
 
-/** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로 보여 줘요. */
-export async function listAccounts(query: AccountQuery = {}): Promise<Account[]> {
-  await wait(200);
-  const k = (query.keyword ?? "").trim().toLowerCase();
-  return store
-    .filter((a) => (query.status && query.status !== "all" ? a.status === query.status : true))
-    .filter((a) => (k ? a.company.toLowerCase().includes(k) || a.email.toLowerCase().includes(k) : true))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+/** 로그아웃: 이 탭의 로그인 상태를 지우고, 서버 세션(리프레시 토큰)도 끝내요. 서버 응답은 기다리지 않아요. */
+export function logout() {
+  const refreshToken = getTokens()?.refreshToken;
+  clearSession();
+  if (refreshToken) revokeRefreshToken(refreshToken);
+}
+
+type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt"> & {
+  cancelledBy: string | null;
+  cancelledAt: string | null;
+};
+
+const toAccount = (a: AccountDto): Account => ({
+  id: a.id,
+  company: a.company,
+  email: a.email,
+  language: a.language,
+  status: a.status,
+  createdBy: a.createdBy,
+  createdAt: a.createdAt,
+  mailFailed: a.mailFailed,
+  ...(a.cancelledBy ? { cancelledBy: a.cancelledBy } : {}),
+  ...(a.cancelledAt ? { cancelledAt: a.cancelledAt } : {}),
+});
+
+/** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로, 한 페이지씩(page 는 1부터) 보여 줘요. */
+export async function listAccounts(query: AccountQuery = {}): Promise<AccountPage> {
+  const params = new URLSearchParams();
+  if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
+  params.set("status", query.status ?? "all");
+  params.set("page", String(query.page ?? 1));
+  params.set("size", String(query.size ?? 20));
+  const data = await authed<{ content: AccountDto[]; totalElements: number }>("GET", `${MGMT}/accounts?${params}`);
+  return { items: data.content.map(toAccount), total: data.totalElements };
+}
+
+export function getSummary(): Promise<AccountSummary> {
+  return authed<AccountSummary>("GET", `${MGMT}/accounts/summary`);
 }
 
 export async function checkEmail(email: string): Promise<EmailCheck> {
-  await wait(300);
-  const e = email.toLowerCase();
-  if (e === "inuse@example.com") return { status: "in_use" };
-  // 발급 취소한 기록은 없는 것으로 봐요(같은 이메일로 다시 발급 가능).
-  const found = store.find((a) => a.email.toLowerCase() === e && a.status !== "cancelled");
-  if (!found) return { status: "new" };
-  if (found.status === "in_use") return { status: "in_use" };
-  return { status: "pending", createdBy: found.createdBy, createdAt: found.createdAt, language: found.language };
+  const data = await authed<{
+    status: "new" | "pending" | "in_use";
+    id?: string;
+    createdBy?: string;
+    createdAt?: string;
+    language?: MailLanguage;
+  }>("GET", `${MGMT}/accounts/email-check?email=${encodeURIComponent(email)}`);
+  if (data.status === "pending" && data.id && data.createdBy && data.createdAt && data.language) {
+    return { status: "pending", id: data.id, createdBy: data.createdBy, createdAt: data.createdAt, language: data.language };
+  }
+  return data.status === "in_use" ? { status: "in_use" } : { status: "new" };
 }
 
-/** 고객 계정 생성 + 임시 비밀번호 + 데모 프로젝트 1개 + 안내 메일 발송을 한 번에 요청 */
-export async function createAccount(input: CreateAccountInput, staff: Staff): Promise<CreateAccountResult> {
-  await wait(800);
-  const e = input.email.toLowerCase();
-  if (e === "fail@example.com") return { ok: false, reason: "failed" };
-  const check = await checkEmail(e);
-  if (check.status === "pending") return { ok: false, reason: "duplicate" };
-  if (check.status === "in_use") return { ok: false, reason: "in_use" };
-  const account: Account = {
-    id: String(seq++),
-    ...input,
-    status: "pending",
-    createdBy: staff.email,
-    createdAt: new Date().toISOString(),
-    demoRecords: 0,
-  };
-  store.unshift(account);
-  return { ok: true, account };
+/** 계정 만들기 — 서버가 계정 · 데모 프로젝트를 만들고 안내 메일을 보내요. 만든 직원은 서버가 로그인 정보로 정해요. */
+export async function createAccount(input: CreateAccountInput): Promise<CreateAccountResult> {
+  try {
+    const data = await authed<{
+      ok: boolean;
+      reason?: "duplicate" | "in_use" | "failed";
+      account?: AccountDto;
+      mailSent?: boolean;
+    }>("POST", `${MGMT}/accounts`, input);
+    if (data.ok && data.account) return { ok: true, account: toAccount(data.account), mailSent: !!data.mailSent };
+    return { ok: false, reason: data.reason ?? "failed" };
+  } catch {
+    return { ok: false, reason: "failed" };
+  }
 }
 
-/** 첫 로그인 전 계정에 새 임시 비밀번호로 안내 메일을 다시 보냄(이전 비밀번호는 무효) */
-export async function resendGuide(input: CreateAccountInput): Promise<ResendResult> {
-  await wait(800);
-  if (input.email.toLowerCase() === "fail@example.com") return { ok: false, reason: "failed" };
-  return { ok: true, requestedAt: new Date().toISOString() };
+/** 첫 로그인 전 계정에 안내 메일을 다시 보내요(새 임시 비밀번호). id = 발급 기록 번호 */
+export async function resendGuide(id: string, language: MailLanguage): Promise<ResendResult> {
+  try {
+    const data = await authed<{ ok: boolean; requestedAt?: string }>(
+      "POST",
+      `${MGMT}/accounts/${encodeURIComponent(id)}/resend`,
+      { language },
+    );
+    return data.ok && data.requestedAt ? { ok: true, requestedAt: data.requestedAt } : { ok: false, reason: "failed" };
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-102") return { ok: false, reason: "in_use" };
+    if (e instanceof ApiError && e.code === "MGMT-101") return { ok: false, reason: "not_found" };
+    return { ok: false, reason: "failed" };
+  }
 }
 
 /**
- * 첫 로그인 전 계정의 발급 취소: 계정 · 데모 프로젝트(데모 기록 포함)를 지우고, 보낸 메일의 임시 비밀번호와 체험 링크를 막아요.
+ * 첫 로그인 전 계정의 발급 취소: 계정 · 데모 프로젝트를 지우고, 보낸 메일의 임시 비밀번호와 체험 링크를 막아요.
  * 취소 안내 메일은 보내지 않아요. 목록에는 「발급 취소」 줄로 남고(누가 · 언제), 같은 이메일로 다시 발급할 수 있어요.
  * 만들기 · 다시 보내기 · 발급 취소는 할 때마다 누가 · 언제 했는지 서버가 기록해 둬요(나중에 「관리/보안 이력」에서 보기).
  */
-export async function cancelIssue(accountId: string, staff: Staff): Promise<CancelResult> {
-  await wait(800);
-  const a = store.find((x) => x.id === accountId);
-  if (!a || a.status === "cancelled") return { ok: false, reason: "failed" };
-  if (a.email === "user7@example.com" || a.status === "in_use") {
-    a.status = "in_use";
-    return { ok: false, reason: "in_use" };
+export async function cancelIssue(accountId: string): Promise<CancelResult> {
+  try {
+    await authed("DELETE", `${MGMT}/accounts/${encodeURIComponent(accountId)}`);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-102") return { ok: false, reason: "in_use" };
+    if (e instanceof ApiError && e.code === "MGMT-101") return { ok: false, reason: "not_found" };
+    return { ok: false, reason: "failed" };
   }
-  a.status = "cancelled";
-  a.cancelledBy = staff.email;
-  a.cancelledAt = new Date().toISOString();
-  a.demoRecords = 0;
-  return { ok: true };
 }

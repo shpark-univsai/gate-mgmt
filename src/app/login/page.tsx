@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Brand } from "@/components/ui";
 import { login } from "@/lib/api";
-import { saveStaff } from "@/lib/session";
+import { saveStaff, useLoginReason } from "@/lib/session";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,6 +12,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 세션이 끊겨 이 화면으로 왔으면 이유를 보여 줘요(로그인을 다시 누르면 숨겨요).
+  const reason = useLoginReason();
+  const [noticeHidden, setNoticeHidden] = useState(false);
+  const notice =
+    noticeHidden || !reason
+      ? ""
+      : reason === "forbidden"
+        ? "백오피스를 사용할 수 있는 계정이 아닙니다. 운영 담당자에게 요청해 주세요."
+        : "로그인이 만료되었습니다. 다시 로그인해 주세요.";
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,14 +31,21 @@ export default function LoginPage() {
     }
     setBusy(true);
     setError("");
+    setNoticeHidden(true);
     const res = await login(email.trim(), password);
     if (res.ok) {
       saveStaff(res.staff);
       router.replace("/accounts");
       return;
     }
-    // 계정이 있는지 알려 주지 않도록 한 가지 문구만 써요.
-    setError("이메일 또는 비밀번호가 맞지 않습니다.");
+    // 계정이 있는지 알려 주지 않도록 이메일 · 비밀번호 오류는 한 가지 문구만 써요.
+    setError(
+      res.reason === "forbidden"
+        ? "백오피스를 사용할 수 있는 계정이 아닙니다. 운영 담당자에게 요청해 주세요."
+        : res.reason === "failed"
+          ? "로그인하지 못했습니다. 잠시 후 다시 시도해 주세요."
+          : "이메일 또는 비밀번호가 맞지 않습니다.",
+    );
     setBusy(false);
   }
 
@@ -46,6 +62,11 @@ export default function LoginPage() {
         <h1 className="t-heading-200">
           로그인
         </h1>
+        {notice && (
+          <p className="error" role="status">
+            {notice}
+          </p>
+        )}
 
         <div className="field">
           <label htmlFor="email" className="t-body-200-b">
