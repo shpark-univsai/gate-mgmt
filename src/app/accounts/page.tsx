@@ -342,7 +342,7 @@ export default function AccountsPage() {
                 <span className="card-email">{a.email}</span>
                 {a.status === "pending" && (
                   <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
-                    <IcReload size={16} />
+                    <IcReload size={14} />
                     다시 보내기
                   </button>
                 )}
