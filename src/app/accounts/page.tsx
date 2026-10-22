@@ -343,7 +343,7 @@ export default function AccountsPage() {
                 {a.status === "pending" && (
                   <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
                     <IcReload size={14} />
-                    다시 보내기
+                    재발송
                   </button>
                 )}
                 {/* 발급 취소 줄: 다시 보내기 자리에 누가 · 언제 */}
