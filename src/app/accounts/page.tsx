@@ -64,7 +64,7 @@ const fmtMonthDay = (iso: string) => {
 };
 
 /** 발급 취소 줄: 누가 · 언제 취소했는지 */
-const cancelNote = (a: Account) => `${handle(a.cancelledBy ?? "")} 취소 · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`;
+const cancelNote = (a: Account) => `취소 · ${handle(a.cancelledBy ?? "")} · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`; // 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」
 
 type ToastState = { title: string; detail: string } | null;
 
