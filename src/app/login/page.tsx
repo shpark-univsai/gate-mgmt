@@ -107,7 +107,7 @@ export default function LoginPage() {
               aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
               aria-pressed={showPassword}
             >
-              {showPassword ? <IcVisibilityOn size={20} /> : <IcVisibilityOff size={20} />}
+              {showPassword ? <IcVisibilityOn size={18} /> : <IcVisibilityOff size={18} />}
             </button>
           </div>
           {error && (
