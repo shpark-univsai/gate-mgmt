@@ -465,12 +465,11 @@ export default function AccountsPage() {
                     재발송
                   </button>
                 )}
-                {/* 발급 취소 줄: 다시 보내기 자리에 누가 · 언제 */}
-                {a.status === "cancelled" && <span className="cancel-note">{cancelNote(a)}</span>}
               </div>
               <div className="card-line">
                 <span className="card-meta">
-                  {languageShort(a.language)} · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
+                  {/* 발급 취소 카드: 만든 정보 대신 누가 · 언제 취소했는지 */}
+                  {languageShort(a.language)} · {a.status === "cancelled" ? cancelNote(a) : `${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
                 </span>
               </div>
             </li>
