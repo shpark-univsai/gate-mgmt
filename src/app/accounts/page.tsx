@@ -64,6 +64,9 @@ const cancelNote = (a: Account) => `${handle(a.cancelledBy ?? "")} 취소 · ${a
 
 type ToastState = { title: string; detail: string } | null;
 
+const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+const LOAD_FAILED = "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+
 /** 다시 보내기 실패 안내 — 그사이 고객이 로그인했거나 발급이 취소됐으면 그대로 알려요. */
 const resendErrorText = (reason: "in_use" | "not_found" | "failed") =>
   reason === "in_use"
@@ -79,6 +82,7 @@ export default function AccountsPage() {
   const [rows, setRows] = useState<Account[]>([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<AccountSummary | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   // 검색 칸 값(keyword · status)과 실제로 조회한 조건(applied)을 나눠요 — 검색을 눌러야 목록이 바뀌어요.
   const [keyword, setKeyword] = useState("");
@@ -105,13 +109,23 @@ export default function AccountsPage() {
   useEffect(() => {
     if (!staff) return;
     let alive = true;
-    Promise.all([listAccounts({ ...applied, page, size: pageSize }), getSummary()])
-      .then(([list, sum]) => {
+    // 요약이 실패해도 목록은 보여 줘요(요약은 전 값을 그대로 둬요).
+    getSummary()
+      .then((sum) => alive && setSummary(sum))
+      .catch(() => {});
+    listAccounts({ ...applied, page, size: pageSize })
+      .then((list) => {
         if (!alive) return;
+        // 마지막 페이지의 마지막 줄이 빠졌으면(발급 취소 · 필터) 남은 마지막 페이지로 옮겨 다시 불러요.
+        const last = Math.max(1, Math.ceil(list.total / pageSize));
+        if (list.items.length === 0 && page > last) {
+          setPage(last);
+          return;
+        }
         setRows(list.items);
         setTotal(list.total);
-        setSummary(sum);
         setLoadError(false);
+        setLoaded(true);
       })
       .catch(() => {
         if (alive) setLoadError(true);
@@ -129,10 +143,12 @@ export default function AccountsPage() {
   const from = total ? (current - 1) * pageSize + 1 : 0;
   const to = Math.min(current * pageSize, total);
   const emptyText = loadError
-    ? "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
-    : metrics.total === 0
-      ? "아직 만든 Gate 계정이 없습니다."
-      : "검색 결과가 없습니다.";
+    ? LOAD_FAILED
+    : !loaded
+      ? "불러오는 중…"
+      : metrics.total === 0
+        ? "아직 만든 Gate 계정이 없습니다."
+        : "검색 결과가 없습니다.";
 
   function onSearch(e?: React.FormEvent) {
     e?.preventDefault();
@@ -259,6 +275,11 @@ export default function AccountsPage() {
             초기화
           </button>
           <span className="count">총 {total}개</span>
+          {loadError && rows.length > 0 && (
+            <span className="error" role="alert">
+              {LOAD_FAILED}
+            </span>
+          )}
         </form>
 
         {/* PC: 표 */}
@@ -393,7 +414,10 @@ export default function AccountsPage() {
 
       {creating && (
         <CreateDialog
-          onClose={() => setCreating(false)}
+          onClose={() => {
+            setCreating(false);
+            reload();
+          }}
           onCreated={(account, mailSent) => afterSend({ kind: "created", account, mailSent })}
           onResent={() => afterSend({ kind: "resent" })}
         />
@@ -402,7 +426,10 @@ export default function AccountsPage() {
       {resendTarget && (
         <ResendDialog
           account={resendTarget}
-          onClose={() => setResendTarget(null)}
+          onClose={() => {
+            setResendTarget(null);
+            reload();
+          }}
           onResent={() => afterSend({ kind: "resent" })}
         />
       )}
@@ -507,7 +534,13 @@ function CreateDialog({
     if (!EMAIL_RE.test(trimmed)) return null;
     if (current) return current;
     const asked = key;
-    const result = await checkEmail(trimmed);
+    let result: EmailCheck;
+    try {
+      result = await checkEmail(trimmed);
+    } catch {
+      if (emailRef.current?.value.trim().toLowerCase() === asked) setEmailError(CHECK_FAILED);
+      return null;
+    }
     // 조회하는 사이 이메일을 고쳤으면 버려요.
     if (emailRef.current?.value.trim().toLowerCase() !== asked) return null;
     setCheck({ email: asked, result });
@@ -554,9 +587,13 @@ function CreateDialog({
     if (res.ok) return onCreated(res.account, res.mailSent);
     if (res.reason === "duplicate" || res.reason === "in_use") {
       // 조회와 보내기 사이에 상태가 바뀐 경우: 다시 조회해서 칸 아래에 보여 줘요.
-      const result = await checkEmail(trimmed);
-      setCheck({ email: key, result });
-      if (result.status === "pending") setLanguage(result.language);
+      try {
+        const result = await checkEmail(trimmed);
+        setCheck({ email: key, result });
+        if (result.status === "pending") setLanguage(result.language);
+      } catch {
+        setEmailError(CHECK_FAILED);
+      }
       emailRef.current?.focus();
     } else setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
   }
@@ -721,7 +758,7 @@ function CancelDialog({
   onCancelled: () => void;
 }) {
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<"" | "in_use" | "failed">("");
+  const [error, setError] = useState<"" | "in_use" | "not_found" | "failed">("");
 
   async function cancel() {
     setSending(true);
@@ -760,11 +797,13 @@ function CancelDialog({
         <p className="error" role="alert">
           {error === "in_use"
             ? "고객이 이미 로그인해서 취소할 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
-            : "발급을 취소하지 못했습니다. 다시 시도해 주세요."}
+            : error === "not_found"
+              ? "이미 발급 취소된 계정입니다. 목록에서 「발급 취소」로 바뀝니다."
+              : "발급을 취소하지 못했습니다. 다시 시도해 주세요."}
         </p>
       )}
       <div className="dialog-actions">
-        {error === "in_use" ? (
+        {error === "in_use" || error === "not_found" ? (
           <button type="button" className="btn btn-outline" onClick={onClose}>
             닫기
           </button>

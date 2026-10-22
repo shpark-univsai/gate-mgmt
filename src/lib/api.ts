@@ -1,7 +1,7 @@
 // 서버 연결 지점 (UG-405). 화면은 이 파일의 함수만 불러요.
 // 로그인은 Gate 인증 서버(/api/v1/auth/...), 계정 발급은 백오피스 서버(/api/v1/mgmt/...)예요. 둘 다 게이트웨이를 거쳐요.
 // 백오피스는 허용된 직원만 쓸 수 있어요(서버의 직원 허용 목록). 목록에 없으면 로그인 때 「권한 없음」으로 막혀요.
-import { ApiError, authed, publicPost, send } from "./http";
+import { ApiError, authed, publicPost, revokeRefreshToken, send } from "./http";
 import { clearSession, getTokens, saveTokens } from "./session";
 
 export type MailLanguage = "en" | "ko";
@@ -74,8 +74,11 @@ export type CreateAccountResult =
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨
 export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: "in_use" | "not_found" | "failed" };
 
-/** 발급 취소. in_use = 누르는 사이 고객이 로그인해서 취소하지 않음(서버가 누를 때 다시 판정) */
-export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "failed" };
+/**
+ * 발급 취소. in_use = 누르는 사이 고객이 로그인해서 취소하지 않음(서버가 누를 때 다시 판정)
+ * not_found = 다른 직원이 먼저 취소함
+ */
+export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "failed" };
 
 /** invalid = 이메일 · 비밀번호가 맞지 않음 / forbidden = 백오피스를 쓸 수 없는 계정 / failed = 서버 · 네트워크 문제 */
 export type LoginResult = { ok: true; staff: Staff } | { ok: false; reason: "invalid" | "forbidden" | "failed" };
@@ -99,7 +102,7 @@ export async function login(email: string, password: string): Promise<LoginResul
     saveTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
     return { ok: true, staff: { email: me.email } };
   } catch (e) {
-    revoke(tokens.refreshToken);
+    revokeRefreshToken(tokens.refreshToken);
     if (e instanceof ApiError && e.status === 403) return { ok: false, reason: "forbidden" };
     return { ok: false, reason: "failed" };
   }
@@ -109,12 +112,7 @@ export async function login(email: string, password: string): Promise<LoginResul
 export function logout() {
   const refreshToken = getTokens()?.refreshToken;
   clearSession();
-  if (refreshToken) revoke(refreshToken);
-}
-
-function revoke(refreshToken: string) {
-  // 실패(만료 · 오프라인)해도 토큰은 시간이 지나면 끝나요 — 화면은 이미 로그아웃됐어요.
-  publicPost("/api/v1/auth/logout", { refreshToken }).catch(() => {});
+  if (refreshToken) revokeRefreshToken(refreshToken);
 }
 
 type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt"> & {
@@ -207,6 +205,7 @@ export async function cancelIssue(accountId: string): Promise<CancelResult> {
     return { ok: true };
   } catch (e) {
     if (e instanceof ApiError && e.code === "MGMT-102") return { ok: false, reason: "in_use" };
+    if (e instanceof ApiError && e.code === "MGMT-101") return { ok: false, reason: "not_found" };
     return { ok: false, reason: "failed" };
   }
 }
