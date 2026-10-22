@@ -17,7 +17,9 @@ import {
   type AccountStatus,
   type AccountSummary,
   type EmailCheck,
+  type MailFailureReason,
   type MailLanguage,
+  type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
 
@@ -69,13 +71,41 @@ type ToastState = { title: string; detail: string } | null;
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 const LOAD_FAILED = "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
+/** 목록 줄 상태: 안내 메일을 보내지 못한 첫 로그인 전 계정은 까닭을 빨간 글씨로 보여 줘요(필터 · 요약은 그대로 「첫 로그인 전」). */
+const MAIL_FAILURE_LABEL: Record<MailFailureReason, string> = {
+  temporary: "일시적 발송 오류",
+  address: "이메일 주소 오류",
+  unknown: "메일 발송 실패",
+};
+
+/** 만들기 · 다시 보내기 직후 창에 보여 주는 실패 까닭(I · I2 · J · K, 휴대폰 M6–M9) */
+const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
+  temporary: "일시적인 오류로 안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
+  address: "유효하지 않은 이메일 주소입니다.",
+  unknown: "안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
+  // TODO(UG-405): 문구 기획 확인 필요
+  blocked: "같은 주소로 여러 번 보내지 못해 다시 보내기를 막았습니다. 주소를 확인하고 발급 취소해 주세요.",
+};
+
+/** 메일 서버가 받지 않아 보내지 못한 경우(다시 누르기보다 까닭을 보여 줄 것) */
+const isMailFailure = (r: ResendFailure): r is MailFailureReason | "blocked" =>
+  r === "temporary" || r === "address" || r === "unknown" || r === "blocked";
+
 /** 다시 보내기 실패 안내 — 그사이 고객이 로그인했거나 발급이 취소됐으면 그대로 알려요. */
-const resendErrorText = (reason: "in_use" | "not_found" | "failed") =>
-  reason === "in_use"
-    ? "고객이 이미 로그인해서 다시 보낼 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
-    : reason === "not_found"
-      ? "발급이 취소된 계정입니다. 목록을 새로 고쳐 주세요."
-      : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.";
+const resendErrorText = (reason: ResendFailure) =>
+  isMailFailure(reason)
+    ? MAIL_FAILURE_TEXT[reason]
+    : reason === "in_use"
+      ? "고객이 이미 로그인해서 다시 보낼 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
+      : reason === "not_found"
+        ? "발급이 취소된 계정입니다. 목록을 새로 고쳐 주세요."
+        : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.";
+
+/** 주소 오류(막힌 경우 포함)면 실패 창에서 바로 발급 취소로 이어 줘요. */
+const offersCancel = (reason: MailFailureReason | "blocked") => reason === "address" || reason === "blocked";
+
+/** 첫 로그인 전이고 서버가 막지 않았으면 다시 보낼 수 있어요. */
+const canResend = (a: Account) => a.status === "pending" && !a.resendBlocked;
 
 export default function AccountsPage() {
   const router = useRouter();
@@ -167,29 +197,40 @@ export default function AccountsPage() {
     reload();
   }
 
+  /** 새로 만든 계정이 보이도록 조건을 풀고 첫 페이지를 다시 불러와 그 줄을 잠깐 표시해요. */
+  const showCreated = useCallback(
+    (account: Account) => {
+      setKeyword("");
+      setStatus("all");
+      setPage(1);
+      setApplied({ keyword: "", status: "all" });
+      reload();
+      setFreshId(account.id);
+    },
+    [reload],
+  );
+
   const afterSend = useCallback(
-    (result: { kind: "created"; account: Account; mailSent: boolean } | { kind: "resent" }) => {
+    (result: { kind: "created"; account: Account } | { kind: "resent" }) => {
       setCreating(false);
       setResendTarget(null);
       if (result.kind === "created") {
-        setKeyword("");
-        setStatus("all");
-        setPage(1);
-        setApplied({ keyword: "", status: "all" });
-        reload();
-        setFreshId(result.account.id);
-        setToast(
-          result.mailSent
-            ? { title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" }
-            : { title: "계정을 만들었습니다", detail: "안내 메일은 보내지 못했습니다. 목록에서 다시 보내 주세요" },
-        );
+        showCreated(result.account);
+        setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
       } else {
         reload();
         setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 임시 비밀번호로 발송을 요청했습니다" });
       }
     },
-    [reload],
+    [reload, showCreated],
   );
+
+  /** 실패 창의 「발급 취소」: 지금 창을 닫고 발급 취소 확인 창(H)을 열어요. */
+  const openCancel = useCallback((account: Account) => {
+    setCreating(false);
+    setResendTarget(null);
+    setCancelTarget(account);
+  }, []);
 
   useEffect(() => {
     if (!freshId) return;
@@ -302,16 +343,18 @@ export default function AccountsPage() {
                 <span role="cell">{a.email}</span>
                 <span role="cell">{languageName(a.language)}</span>
                 <span role="cell">
-                  <Status status={a.status} />
+                  <Status account={a} />
                 </span>
                 <span role="cell">{handle(a.createdBy)}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
                   {a.status === "pending" ? (
                     <span className="row-actions">
-                      <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
-                        안내 메일 다시 보내기
-                      </button>
+                      {canResend(a) && (
+                        <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
+                          안내 메일 다시 보내기
+                        </button>
+                      )}
                       <button type="button" className="btn btn-outline btn-sm" onClick={() => setCancelTarget(a)}>
                         발급 취소
                       </button>
@@ -336,11 +379,11 @@ export default function AccountsPage() {
             <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
               <div className="card-line">
                 <strong className="card-company">{a.company}</strong>
-                <Status status={a.status} />
+                <Status account={a} />
               </div>
               <div className="card-line">
                 <span className="card-email">{a.email}</span>
-                {a.status === "pending" && (
+                {canResend(a) && (
                   <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
                     <IcReload size={14} />
                     재발송
@@ -420,8 +463,10 @@ export default function AccountsPage() {
             setCreating(false);
             reload();
           }}
-          onCreated={(account, mailSent) => afterSend({ kind: "created", account, mailSent })}
+          onCreated={(account) => afterSend({ kind: "created", account })}
+          onMailFailed={showCreated}
           onResent={() => afterSend({ kind: "resent" })}
+          onCancelIssue={openCancel}
         />
       )}
 
@@ -433,6 +478,8 @@ export default function AccountsPage() {
             reload();
           }}
           onResent={() => afterSend({ kind: "resent" })}
+          onMailFailed={reload}
+          onCancelIssue={openCancel}
         />
       )}
 
@@ -496,12 +543,71 @@ function Metric({ label, value, sub }: { label: string; value: number; sub: stri
   );
 }
 
-function Status({ status }: { status: AccountStatus }) {
+function Status({ account }: { account: Account }) {
+  const failure = account.status === "pending" ? account.mailFailureReason : undefined;
   return (
-    <span className={`status status--${status}`}>
+    <span className={`status status--${failure ? "mail-failed" : account.status}`}>
       <span className="status-dot" aria-hidden="true" />
-      {STATUS_LABEL[status]}
+      {failure ? MAIL_FAILURE_LABEL[failure] : STATUS_LABEL[account.status]}
     </span>
+  );
+}
+
+/** 실패 안내 한 줄. 문장 사이에서만 줄이 바뀌어요(PC 는 한 줄, 휴대폰은 문장마다). */
+function MailFailureMessage({ reason }: { reason: MailFailureReason | "blocked" }) {
+  const sentences = MAIL_FAILURE_TEXT[reason].split(". ");
+  return (
+    <p className="error mail-failure" role="alert">
+      {sentences.map((s, i) => (
+        <span key={i} className="mail-failure-sentence">
+          {i > 0 && " "}
+          {i < sentences.length - 1 ? `${s}.` : s}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+/**
+ * 안내 메일을 보내지 못했을 때 창 안에 보여 주는 결과(I · I2 · J · K).
+ * 일시 오류 · 그 밖의 실패는 「닫기」만 — 다시 보내기는 목록에서 해요. 주소 오류는 「발급 취소」로 이어 줘요.
+ */
+function MailFailureResult({
+  account,
+  reason,
+  onClose,
+  onCancelIssue,
+}: {
+  account: Account;
+  reason: MailFailureReason | "blocked";
+  onClose: () => void;
+  onCancelIssue: (a: Account) => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  // 입력 칸 · 보내기 버튼이 사라지므로 초점을 「닫기」로 옮겨요.
+  useEffect(() => {
+    closeRef.current?.focus();
+  }, []);
+  return (
+    <>
+      <div className="summary">
+        <div className="summary-target">
+          <strong>{account.company}</strong>
+          <span>{account.email}</span>
+        </div>
+      </div>
+      <MailFailureMessage reason={reason} />
+      <div className="dialog-actions">
+        <button ref={closeRef} type="button" className="btn btn-outline" onClick={onClose}>
+          닫기
+        </button>
+        {offersCancel(reason) && (
+          <button type="button" className="btn btn-danger-outline" onClick={() => onCancelIssue(account)}>
+            발급 취소
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -509,11 +615,16 @@ function Status({ status }: { status: AccountStatus }) {
 function CreateDialog({
   onClose,
   onCreated,
+  onMailFailed,
   onResent,
+  onCancelIssue,
 }: {
   onClose: () => void;
-  onCreated: (a: Account, mailSent: boolean) => void;
+  onCreated: (a: Account) => void;
+  /** 계정은 만들었지만 메일은 못 보냄 — 창은 닫지 않고 결과를 보여 줘요(목록만 새로 고침) */
+  onMailFailed: (a: Account) => void;
   onResent: () => void;
+  onCancelIssue: (a: Account) => void;
 }) {
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
@@ -523,6 +634,7 @@ function CreateDialog({
   const [formError, setFormError] = useState("");
   const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
   const [sending, setSending] = useState(false);
+  const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason } | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
 
@@ -581,12 +693,16 @@ function CreateDialog({
       setSending(false);
       if (res.ok) return onResent();
       setFormError(resendErrorText(res.reason));
-      if (res.reason !== "failed") setCheck(null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
+      if (res.reason === "in_use" || res.reason === "not_found") setCheck(null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
       return;
     }
     const res = await createAccount(input);
     setSending(false);
-    if (res.ok) return onCreated(res.account, res.mailSent);
+    if (res.ok) {
+      if (res.mailSent) return onCreated(res.account);
+      setMailFailure({ account: res.account, reason: res.mailFailureReason });
+      return onMailFailed(res.account);
+    }
     if (res.reason === "duplicate" || res.reason === "in_use") {
       // 조회와 보내기 사이에 상태가 바뀐 경우: 다시 조회해서 칸 아래에 보여 줘요.
       try {
@@ -598,6 +714,14 @@ function CreateDialog({
       }
       emailRef.current?.focus();
     } else setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
+  }
+
+  if (mailFailure) {
+    return (
+      <Dialog title="Gate 계정 만들기" onClose={onClose}>
+        <MailFailureResult account={mailFailure.account} reason={mailFailure.reason} onClose={onClose} onCancelIssue={onCancelIssue} />
+      </Dialog>
+    );
   }
 
   return (
@@ -682,7 +806,7 @@ function CreateDialog({
 
         {pending && <p className="help">다시 보내면 이전 임시 비밀번호는 쓸 수 없게 됩니다.</p>}
         {formError && (
-          <p className="error" role="alert">
+          <p className="error mail-failure" role="alert">
             {formError}
           </p>
         )}
@@ -700,10 +824,26 @@ function CreateDialog({
   );
 }
 
-/** 목록 줄의 「안내 메일 다시 보내기」 확인 창(F) */
-function ResendDialog({ account, onClose, onResent }: { account: Account; onClose: () => void; onResent: () => void }) {
+/**
+ * 목록 줄의 「안내 메일 다시 보내기」 확인 창(F).
+ * 메일 서버가 받지 않았으면 까닭을 보여 주고(J · K) 목록을 새로 고쳐 줄 상태를 바꿔요 — 이 창에서 다시 누르지 않아요.
+ */
+function ResendDialog({
+  account,
+  onClose,
+  onResent,
+  onMailFailed,
+  onCancelIssue,
+}: {
+  account: Account;
+  onClose: () => void;
+  onResent: () => void;
+  onMailFailed: () => void;
+  onCancelIssue: (a: Account) => void;
+}) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [mailFailure, setMailFailure] = useState<MailFailureReason | "blocked" | null>(null);
 
   async function send() {
     setSending(true);
@@ -711,7 +851,19 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
     const res = await resendGuide(account.id, account.language);
     setSending(false);
     if (res.ok) return onResent();
+    if (isMailFailure(res.reason)) {
+      setMailFailure(res.reason);
+      return onMailFailed();
+    }
     setError(resendErrorText(res.reason));
+  }
+
+  if (mailFailure) {
+    return (
+      <Dialog title="안내 메일 다시 보내기" onClose={onClose}>
+        <MailFailureResult account={account} reason={mailFailure} onClose={onClose} onCancelIssue={onCancelIssue} />
+      </Dialog>
+    );
   }
 
   return (

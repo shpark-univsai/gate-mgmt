@@ -331,6 +331,9 @@ p {
 .status--pending .status-dot { background: var(--status-wait); }
 .status--cancelled { color: var(--gray-500); }
 .status--cancelled .status-dot { background: var(--gray-400); }
+/* 안내 메일을 보내지 못한 첫 로그인 전 계정(일시적 발송 오류 · 이메일 주소 오류 · 메일 발송 실패) */
+.status--mail-failed { color: var(--danger-400); }
+.status--mail-failed .status-dot { background: var(--danger-400); }
 .cancel-note { color: var(--gray-500); white-space: nowrap; }
 
 .cards { display: none; }
@@ -396,6 +399,9 @@ p {
 .summary-rows div { display: flex; gap: 12px; }
 .summary-rows dt { width: 76px; flex: none; color: var(--gray-500); }
 .summary-rows dd { margin: 0; font-weight: 600; }
+
+/* 메일 발송 실패 안내: 낱말 중간에서 줄이 바뀌지 않게(PC 는 한 줄, 휴대폰은 문장 끝에서) */
+.mail-failure { word-break: keep-all; }
 
 /* ── 완료 알림: 어두운 유리 ── */
 .toast {
@@ -486,6 +492,7 @@ p {
   .input-box,
   .segmented button { height: 40px; }
   .dialog-actions .btn { flex: 1; height: 40px; }
+  .mail-failure-sentence { display: block; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
 }
