@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand, Dialog, PopupSelect, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
+import { IcArrowLeft, IcArrowRight, IcInputClose, IcReload, IcSearch } from "@/components/icons";
 import {
   cancelIssue,
   checkEmail,
@@ -88,6 +88,7 @@ export default function AccountsPage() {
   const [loadError, setLoadError] = useState(false);
   // 검색 칸 값(keyword · status)과 실제로 조회한 조건(applied)을 나눠요 — 검색을 눌러야 목록이 바뀌어요.
   const [keyword, setKeyword] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<AccountStatus | "all">("all");
   const [applied, setApplied] = useState<{ keyword: string; status: AccountStatus | "all" }>({ keyword: "", status: "all" });
   const [version, setVersion] = useState(0);
@@ -158,6 +159,27 @@ export default function AccountsPage() {
     setApplied({ keyword, status });
     reload();
   }
+
+  // 검색어 지우기(✕): 이미 그 검색어로 조회한 상태면 목록도 바로 되돌려요.
+  function clearKeyword() {
+    setKeyword("");
+    searchRef.current?.focus();
+    if (applied.keyword) {
+      setPage(1);
+      setApplied({ keyword: "", status: applied.status });
+      reload();
+    }
+  }
+
+  // 휴대폰 상태 칩: 누르면 바로 걸러요(휴대폰엔 검색 버튼이 없어서).
+  function pickStatus(v: AccountStatus | "all") {
+    setStatus(v);
+    setPage(1);
+    setApplied({ keyword: keyword.trim(), status: v });
+    reload();
+  }
+
+  const filtered = applied.keyword !== "" || applied.status !== "all";
 
   function onReset() {
     setKeyword("");
@@ -258,7 +280,19 @@ export default function AccountsPage() {
           <label className="search">
             <IcSearch size={16} className="search-icon" />
             <span className="visually-hidden">검색어</span>
-            <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="회사명, 고객 이메일 검색" />
+            <input
+              ref={searchRef}
+              type="search"
+              enterKeyHint="search"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="회사명, 고객 이메일 검색"
+            />
+            {keyword && (
+              <button type="button" className="search-clear" onClick={clearKeyword} aria-label="검색어 지우기">
+                <IcInputClose size={18} />
+              </button>
+            )}
           </label>
           <PopupSelect<AccountStatus | "all">
             className="select"
@@ -278,6 +312,27 @@ export default function AccountsPage() {
           <button type="button" className="btn btn-outline btn-sm" onClick={onReset}>
             초기화
           </button>
+          {/* 휴대폰: 상태 칩(개수 포함) — PC 는 위 선택 상자 */}
+          <div className="status-chips" role="group" aria-label="상태">
+            {(
+              [
+                ["all", "전체", metrics.total],
+                ["pending", "첫 로그인 전", metrics.pending],
+                ["in_use", "사용 중", metrics.inUse],
+                ["cancelled", "발급 취소", metrics.cancelled],
+              ] as const
+            ).map(([v, label, n]) => (
+              <button
+                key={v}
+                type="button"
+                className={`status-chip${applied.status === v ? " is-on" : ""}`}
+                aria-pressed={applied.status === v}
+                onClick={() => pickStatus(v)}
+              >
+                {label} <span className="status-chip-count">{n}</span>
+              </button>
+            ))}
+          </div>
           <span className="count">총 {total}개</span>
           {loadError && rows.length > 0 && (
             <span className="error" role="alert">
@@ -296,7 +351,14 @@ export default function AccountsPage() {
             ))}
           </div>
           {visible.length === 0 ? (
-            <p className="empty">{emptyText}</p>
+            <div className="empty">
+              <p>{emptyText}</p>
+              {loaded && !loadError && filtered && (
+                <button type="button" className="empty-action" onClick={onReset}>
+                  검색 초기화
+                </button>
+              )}
+            </div>
           ) : (
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
@@ -332,7 +394,14 @@ export default function AccountsPage() {
         {/* 휴대폰: 줄마다 카드 */}
         <ul className="cards" aria-label="발급한 계정">
           {visible.length === 0 && (
-            <li className="empty">{emptyText}</li>
+            <li className="empty">
+              <p>{emptyText}</p>
+              {loaded && !loadError && filtered && (
+                <button type="button" className="empty-action" onClick={onReset}>
+                  검색 초기화
+                </button>
+              )}
+            </li>
           )}
           {visible.map((a) => (
             <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
