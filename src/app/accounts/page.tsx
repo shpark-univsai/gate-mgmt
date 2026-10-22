@@ -2,9 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Brand, Dialog, Toast } from "@/components/ui";
+import { Brand, Dialog, PopupSelect, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { IcArrowDown, IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
+import { IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
 import {
   cancelIssue,
   checkEmail,
@@ -260,16 +260,18 @@ export default function AccountsPage() {
             <span className="visually-hidden">검색어</span>
             <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="회사명, 고객 이메일 검색" />
           </label>
-          <label className="select">
-            <span className="visually-hidden">상태</span>
-            <select value={status} onChange={(e) => setStatus(e.target.value as AccountStatus | "all")}>
-              <option value="all">상태 전체</option>
-              <option value="pending">첫 로그인 전</option>
-              <option value="in_use">사용 중</option>
-              <option value="cancelled">발급 취소</option>
-            </select>
-            <IcArrowDown size={16} className="select-icon" />
-          </label>
+          <PopupSelect<AccountStatus | "all">
+            className="select"
+            label="상태"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: "all", label: "상태 전체" },
+              { value: "pending", label: "첫 로그인 전" },
+              { value: "in_use", label: "사용 중" },
+              { value: "cancelled", label: "발급 취소" },
+            ]}
+          />
           <button type="submit" className="btn btn-dark btn-sm">
             검색
           </button>
@@ -393,23 +395,17 @@ export default function AccountsPage() {
                 <IcArrowRight size={16} />
               </button>
             </div>
-            <label className="page-size">
-              <span className="visually-hidden">한 페이지에 보기</span>
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setPage(1);
-                }}
-              >
-                {[10, 20, 50].map((n) => (
-                  <option key={n} value={n}>
-                    {n}개씩 보기
-                  </option>
-                ))}
-              </select>
-              <IcArrowDown size={16} className="select-icon" />
-            </label>
+            <PopupSelect<number>
+              className="page-size"
+              label="한 페이지에 보기"
+              placement="top"
+              value={pageSize}
+              onChange={(n) => {
+                setPageSize(n);
+                setPage(1);
+              }}
+              options={[10, 20, 50].map((n) => ({ value: n, label: `${n}개씩 보기` }))}
+            />
           </nav>
         )}
       </main>
