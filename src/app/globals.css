@@ -488,3 +488,28 @@ p {
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
 }
+
+/* ── 호버: 마우스가 있는 기기에서만(터치에서 눌린 채 남지 않게) ── */
+@media (hover: hover) {
+  .btn-dark:hover:not(:disabled) { background: var(--gray-800); }
+  .btn-outline:hover:not(:disabled) { background: var(--gray-50); border-color: var(--gray-400); }
+  .btn-danger-outline:hover:not(:disabled) { background: var(--gray-50); }
+  .login-card .btn:hover:not(:disabled) { background: var(--gray-100); }
+  .app-menu-item:hover { color: var(--gray-900); }
+  .search:hover:not(:focus-within),
+  .select:hover:not(:focus-within),
+  .input-box:hover:not(:focus-within):not(.is-error) { border-color: var(--gray-400); }
+  .login-card .input-box:hover:not(:focus-within):not(.is-error) { border-color: var(--gray-500); }
+  .segmented button:hover:not([aria-checked="true"]) { background: var(--gray-50); }
+  .tr:not(.th):hover { background: var(--gray-50); }
+  .page-btn:hover:not(:disabled):not(.is-current) { background: var(--gray-50); color: var(--gray-900); }
+  .page-size:hover .popup-select-button { color: var(--gray-700); }
+  .status-chip:hover:not(.is-on) { background: var(--gray-50); }
+  .link-action:hover { color: var(--gray-700); }
+  .link-action--muted:hover { color: var(--gray-700); }
+  .empty-action:hover { background: var(--gray-50); border-color: var(--gray-400); }
+  .search-clear:hover,
+  .eye-toggle:hover { color: var(--gray-500); }
+  .login-card .eye-toggle:hover { color: var(--gray-300); }
+  .profile-button:hover .identity-name { color: var(--gray-600); }
+}
