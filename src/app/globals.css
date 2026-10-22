@@ -464,6 +464,10 @@ p {
   .card-company { font-size: 14px; line-height: 20px; }
   .card-email { color: var(--gray-700); overflow-wrap: anywhere; }
   .card-meta { color: var(--gray-500); }
+  .card-status { display: inline-flex; align-items: center; gap: 2px; }
+  .card-more { position: relative; display: inline-flex; }
+  .card-more-button { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: -4px -8px -4px 0; padding: 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); }
+  .profile-menu.card-more-menu { top: calc(100% + 4px); right: 0; min-width: 140px; }
   .link-action {
     display: inline-flex;
     align-items: center;
