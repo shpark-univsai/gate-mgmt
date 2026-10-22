@@ -227,7 +227,7 @@ p {
 }
 .profile-menu-email { display: none; margin: 0; padding: 8px 12px; color: var(--gray-300); border-bottom: 1px solid var(--gray-700); margin-bottom: 4px; overflow-wrap: anywhere; }
 .profile-menu-item { display: block; width: 100%; height: 36px; padding: 0 12px; border: 0; border-radius: var(--radius-control); background: none; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-0); cursor: pointer; }
-.profile-menu-item:hover { background: var(--gray-700); }
+.profile-menu-item:hover { background: var(--gray-500); }
 .avatar {
   width: 36px;
   height: 36px;
@@ -287,22 +287,40 @@ p {
 .search-icon { color: var(--gray-400); flex: none; }
 .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 0; }
 .search input::placeholder { color: var(--gray-500); }
+.search input::-webkit-search-cancel-button { display: none; } /* 브라우저 기본 ✕ 대신 아래 지우기 버튼 */
+.search-clear { display: flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; margin-right: -8px; padding: 0; border: 0; background: none; color: var(--gray-400); cursor: pointer; border-radius: var(--radius-control); }
+.search-clear:hover { color: var(--gray-500); }
+.status-chips { display: none; }
 .search:focus-within,
 .select:focus-within { border-color: var(--gray-900); }
 .select { width: 160px; }
-.select select,
-.page-size select {
-  appearance: none;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  padding: 0 32px 0 8px;
-  color: var(--gray-600);
-  cursor: pointer;
-}
 .select-icon { position: absolute; right: 8px; pointer-events: none; color: var(--gray-500); }
+
+/* 선택 상자 — 열리면 프로필 메뉴와 같은 어두운 유리(그림자 없음) */
+.popup-select { position: relative; }
+.popup-select-button { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; height: 100%; padding: 0 8px; border: 0; background: none; color: var(--gray-600); font: inherit; cursor: pointer; border-radius: var(--radius-control); }
+.popup-select-icon { flex: none; color: var(--gray-500); }
+.popup-select-button[aria-expanded="true"] .popup-select-icon { transform: rotate(180deg); }
+.popup-select-menu {
+  position: absolute;
+  left: 0;
+  z-index: 30;
+  min-width: 100%;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--overlay-dark-80);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--gray-700);
+  border-radius: var(--radius-control);
+}
+.popup-select-menu--bottom { top: calc(100% + 4px); }
+.popup-select-menu--top { bottom: calc(100% + 4px); }
+.popup-select-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 32px; padding: 0 10px; border-radius: var(--radius-control); color: var(--gray-0); white-space: nowrap; cursor: pointer; }
+.popup-select-option.is-active { background: var(--gray-500); } /* 어두운 유리 위에서 글자가 보이는 밝기 */
+.popup-select-option[aria-selected="true"] { font-weight: 600; }
+.popup-select-check { flex: none; color: var(--gray-0); }
 .count { margin-left: auto; color: var(--gray-500); }
 
 .table { border: 1px solid var(--gray-200); border-bottom: 0; }
@@ -324,6 +342,8 @@ p {
 .dash { color: var(--gray-400); }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .empty { padding: 80px 16px; text-align: center; color: var(--gray-500); border-bottom: 1px solid var(--gray-200); }
+.empty p { margin: 0; }
+.empty-action { margin-top: 12px; height: 32px; padding: 0 12px; border: 1px solid var(--gray-300); border-radius: var(--radius-control); background: var(--gray-0); color: var(--gray-700); font: inherit; font-weight: 600; cursor: pointer; }
 
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-700); white-space: nowrap; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -361,9 +381,9 @@ p {
 }
 .page-btn.is-current { background: var(--gray-100); color: var(--gray-900); font-weight: 700; cursor: default; }
 .page-btn:disabled { color: var(--gray-300); cursor: default; }
-.page-size { position: relative; justify-self: end; display: flex; align-items: center; }
-.page-size select { padding: 0 22px 0 0; color: var(--gray-500); }
-.page-size .select-icon { right: 0; }
+.page-size { justify-self: end; height: 32px; }
+.page-size .popup-select-button { padding: 0; color: var(--gray-500); }
+.page-size .popup-select-menu { left: auto; right: 0; }
 
 /* ── 창 ── */
 .scrim {
@@ -455,6 +475,12 @@ p {
   .page-title h1 { font-size: 18px; line-height: 28px; }
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
   .search { width: 100%; height: 40px; }
+  .status-chips { display: flex; gap: 8px; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .status-chips::-webkit-scrollbar { display: none; }
+  .status-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border: 1px solid var(--gray-200); border-radius: var(--radius-control); background: var(--gray-0); color: var(--gray-700); font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
+  .status-chip-count { font-weight: 400; color: var(--gray-500); }
+  .status-chip.is-on { background: var(--gray-200); border-color: transparent; color: var(--gray-900); } /* 선택은 바탕만, 테두리 없음 · 검정은 「계정 만들기」에만 */
+  .empty { padding: 48px 16px; }
   .search input { font-size: 16px; }
   .count { margin-left: 0; }
 
