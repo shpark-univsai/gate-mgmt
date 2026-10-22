@@ -29,6 +29,8 @@ const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactEl
   { value: "ko", label: "한국어", Flag: FlagKR },
 ];
 const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어");
+/** 휴대폰 카드용 짧은 표기 */
+const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
 const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
 
 function kstParts(iso: string) {
@@ -349,7 +351,7 @@ export default function AccountsPage() {
               </div>
               <div className="card-line">
                 <span className="card-meta">
-                  {languageName(a.language)} 메일 · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
+                  {languageShort(a.language)} · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
                 </span>
                 {a.status === "pending" && (
                   <button type="button" className="link-action link-action--muted" onClick={() => setCancelTarget(a)}>
