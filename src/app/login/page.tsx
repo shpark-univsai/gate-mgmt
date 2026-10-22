@@ -60,10 +60,6 @@ export default function LoginPage() {
 
   return (
     <main className="login">
-      {/* 휴대폰: 위쪽 48px 띠에 흰 로고, 화면 전체가 다크 모드처럼 반전 */}
-      <div className="login-top">
-        <Brand inverse />
-      </div>
       <form className="login-card" onSubmit={onSubmit} noValidate>
         <div className="login-brand">
           <Brand inverse />
