@@ -33,6 +33,22 @@ const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어")
 const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
 const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
 
+/** 검색어와 맞은 글자에 바탕색 — 대소문자 구분 없이, 여러 번 나오면 모두. */
+function Highlight({ text, query }: { text: string; query: string }) {
+  const q = query.trim().toLowerCase();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let from = 0;
+  for (let at = lower.indexOf(q); at !== -1; at = lower.indexOf(q, from)) {
+    if (at > from) parts.push(text.slice(from, at));
+    parts.push(<mark key={at} className="hit">{text.slice(at, at + q.length)}</mark>);
+    from = at + q.length;
+  }
+  if (from < text.length) parts.push(text.slice(from));
+  return parts;
+}
+
 /** 결과 없음 — 무엇으로 찾았는지 그대로 보여 줘요(검색어는 굵게). */
 function noResultText({ keyword, status }: { keyword: string; status: AccountStatus | "all" }) {
   const where = status === "all" ? "" : `「${STATUS_LABEL[status]}」에서 `;
@@ -377,8 +393,8 @@ export default function AccountsPage() {
           ) : (
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
-                <span role="cell">{a.company}</span>
-                <span role="cell">{a.email}</span>
+                <span role="cell"><Highlight text={a.company} query={applied.keyword} /></span>
+                <span role="cell"><Highlight text={a.email} query={applied.keyword} /></span>
                 <span role="cell">{languageName(a.language)}</span>
                 <span role="cell">
                   <Status status={a.status} />
@@ -421,11 +437,11 @@ export default function AccountsPage() {
           {visible.map((a) => (
             <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
               <div className="card-line">
-                <strong className="card-company">{a.company}</strong>
+                <strong className="card-company"><Highlight text={a.company} query={applied.keyword} /></strong>
                 <Status status={a.status} />
               </div>
               <div className="card-line">
-                <span className="card-email">{a.email}</span>
+                <span className="card-email"><Highlight text={a.email} query={applied.keyword} /></span>
                 {a.status === "pending" && (
                   <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
                     <IcReload size={14} />
