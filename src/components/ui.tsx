@@ -30,6 +30,26 @@ export function Dialog({
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const scrimRef = useRef<HTMLDivElement>(null);
+
+  // 휴대폰 키보드가 올라오면 화면에 실제로 보이는 영역만 덮어요. 안 그러면 창 아래쪽 버튼이 키보드 뒤로 숨어요.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const el = scrimRef.current;
+    if (!vv || !el) return;
+    const fit = () => {
+      el.style.top = `${vv.offsetTop}px`;
+      el.style.height = `${vv.height}px`;
+      el.style.bottom = "auto";
+    };
+    fit();
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+    return () => {
+      vv.removeEventListener("resize", fit);
+      vv.removeEventListener("scroll", fit);
+    };
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -45,7 +65,7 @@ export function Dialog({
   }, [onClose, closable]);
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && closable && onClose()}>
+    <div ref={scrimRef} className="scrim" onMouseDown={(e) => e.target === e.currentTarget && closable && onClose()}>
       <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <h2 id="dialog-title" className="dialog-title">
           {title}
