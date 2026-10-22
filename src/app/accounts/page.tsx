@@ -396,8 +396,10 @@ export default function AccountsPage() {
               </div>
               <div className="card-line">
                 <span className="card-meta">
-                  {/* 발급 취소 카드: 만든 정보 대신 누가 · 언제 취소했는지 */}
-                  {languageShort(a.language)} · {a.status === "cancelled" ? cancelNote(a) : `${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
+                  {/* 발급 취소 카드: 메일 언어 · 만든 정보 대신 누가 · 언제 취소했는지만 */}
+                  {a.status === "cancelled"
+                    ? cancelNote(a)
+                    : `${languageShort(a.language)} · ${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
                 </span>
               </div>
             </li>
