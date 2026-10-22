@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand, Dialog, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
 import { IcArrowDown, IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
@@ -9,15 +9,17 @@ import {
   cancelIssue,
   checkEmail,
   createAccount,
+  getSummary,
   listAccounts,
+  logout,
   resendGuide,
   type Account,
   type AccountStatus,
+  type AccountSummary,
   type EmailCheck,
   type MailLanguage,
-  type Staff,
 } from "@/lib/api";
-import { clearStaff, useStaff } from "@/lib/session";
+import { useStaff } from "@/lib/session";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -62,14 +64,27 @@ const cancelNote = (a: Account) => `${handle(a.cancelledBy ?? "")} 취소 · ${a
 
 type ToastState = { title: string; detail: string } | null;
 
+/** 다시 보내기 실패 안내 — 그사이 고객이 로그인했거나 발급이 취소됐으면 그대로 알려요. */
+const resendErrorText = (reason: "in_use" | "not_found" | "failed") =>
+  reason === "in_use"
+    ? "고객이 이미 로그인해서 다시 보낼 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
+    : reason === "not_found"
+      ? "발급이 취소된 계정입니다. 목록을 새로 고쳐 주세요."
+      : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.";
+
 export default function AccountsPage() {
   const router = useRouter();
   const staff = useStaff();
 
-  const [all, setAll] = useState<Account[]>([]);
   const [rows, setRows] = useState<Account[]>([]);
+  const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<AccountSummary | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  // 검색 칸 값(keyword · status)과 실제로 조회한 조건(applied)을 나눠요 — 검색을 눌러야 목록이 바뀌어요.
   const [keyword, setKeyword] = useState("");
   const [status, setStatus] = useState<AccountStatus | "all">("all");
+  const [applied, setApplied] = useState<{ keyword: string; status: AccountStatus | "all" }>({ keyword: "", status: "all" });
+  const [version, setVersion] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
@@ -78,76 +93,80 @@ export default function AccountsPage() {
   const [toast, setToast] = useState<ToastState>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
 
-  // 목업 로그인 확인. 화면 이동용이고, 실제 권한 검사는 서버가 해요.
+  // 로그인 확인. 화면 이동용이고, 실제 권한 검사는 서버가 해요(로그인이 끊기면 서버 호출이 로그인 화면으로 보내요).
   useEffect(() => {
     if (staff === null) router.replace("/login");
   }, [staff, router]);
 
-  const reload = useCallback(async (q: { keyword: string; status: AccountStatus | "all" }) => {
-    const [list, everything] = await Promise.all([listAccounts(q), listAccounts()]);
-    setRows(list);
-    setAll(everything);
-  }, []);
+  /** 지금 조건 그대로 목록 · 요약을 다시 불러와요. */
+  const reload = useCallback(() => setVersion((v) => v + 1), []);
 
+  // 목록은 서버가 한 페이지씩 줘요. 조건 · 페이지 · 페이지 크기가 바뀌거나 reload 하면 다시 불러와요.
   useEffect(() => {
-    // 처음 한 번 목록을 불러와요.
+    if (!staff) return;
     let alive = true;
-    Promise.all([listAccounts(), listAccounts()]).then(([list, everything]) => {
-      if (!alive) return;
-      setRows(list);
-      setAll(everything);
-    });
+    Promise.all([listAccounts({ ...applied, page, size: pageSize }), getSummary()])
+      .then(([list, sum]) => {
+        if (!alive) return;
+        setRows(list.items);
+        setTotal(list.total);
+        setSummary(sum);
+        setLoadError(false);
+      })
+      .catch(() => {
+        if (alive) setLoadError(true);
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [staff, applied, page, pageSize, version]);
 
-  const metrics = useMemo(() => {
-    const now = kstParts(new Date().toISOString());
-    const thisMonth = all.filter((a) => {
-      const t = kstParts(a.createdAt);
-      return t.y === now.y && t.m === now.m;
-    }).length;
-    return {
-      total: all.length,
-      pending: all.filter((a) => a.status === "pending").length,
-      inUse: all.filter((a) => a.status === "in_use").length,
-      cancelled: all.filter((a) => a.status === "cancelled").length,
-      thisMonth,
-    };
-  }, [all]);
+  const metrics = summary ?? { total: 0, pending: 0, inUse: 0, cancelled: 0, thisMonth: 0 };
 
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const current = Math.min(page, pageCount);
-  const visible = rows.slice((current - 1) * pageSize, current * pageSize);
-  const from = rows.length ? (current - 1) * pageSize + 1 : 0;
-  const to = Math.min(current * pageSize, rows.length);
+  const visible = rows;
+  const from = total ? (current - 1) * pageSize + 1 : 0;
+  const to = Math.min(current * pageSize, total);
+  const emptyText = loadError
+    ? "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
+    : metrics.total === 0
+      ? "아직 만든 Gate 계정이 없습니다."
+      : "검색 결과가 없습니다.";
 
-  async function onSearch(e?: React.FormEvent) {
+  function onSearch(e?: React.FormEvent) {
     e?.preventDefault();
     setPage(1);
-    await reload({ keyword, status });
+    setApplied({ keyword, status });
+    reload();
   }
 
-  async function onReset() {
+  function onReset() {
     setKeyword("");
     setStatus("all");
     setPage(1);
-    await reload({ keyword: "", status: "all" });
+    setApplied({ keyword: "", status: "all" });
+    reload();
   }
 
   const afterSend = useCallback(
-    async (result: { kind: "created"; account: Account } | { kind: "resent"; account: Pick<Account, "email"> }) => {
+    (result: { kind: "created"; account: Account; mailSent: boolean } | { kind: "resent" }) => {
       setCreating(false);
       setResendTarget(null);
       if (result.kind === "created") {
         setKeyword("");
         setStatus("all");
         setPage(1);
-        await reload({ keyword: "", status: "all" });
+        setApplied({ keyword: "", status: "all" });
+        reload();
         setFreshId(result.account.id);
-        setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
+        setToast(
+          result.mailSent
+            ? { title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" }
+            : { title: "계정을 만들었습니다", detail: "안내 메일은 보내지 못했습니다. 목록에서 다시 보내 주세요" },
+        );
       } else {
+        reload();
         setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 임시 비밀번호로 발송을 요청했습니다" });
       }
     },
@@ -162,17 +181,17 @@ export default function AccountsPage() {
 
   const clearToast = useCallback(() => setToast(null), []);
 
-  const afterCancel = useCallback(async () => {
+  const afterCancel = useCallback(() => {
     setCancelTarget(null);
-    await reload({ keyword, status });
+    reload();
     setToast({ title: "발급을 취소했습니다", detail: "같은 이메일로 다시 발급할 수 있습니다" });
-  }, [reload, keyword, status]);
+  }, [reload]);
 
   // 취소하지 못한 경우(고객이 이미 로그인)도 목록은 새로 불러와 「사용 중」으로 보여 줘요.
-  const closeCancel = useCallback(async () => {
+  const closeCancel = useCallback(() => {
     setCancelTarget(null);
-    await reload({ keyword, status });
-  }, [reload, keyword, status]);
+    reload();
+  }, [reload]);
 
   if (!staff) return null;
 
@@ -190,7 +209,7 @@ export default function AccountsPage() {
         <ProfileMenu
           email={staff.email}
           onLogout={() => {
-            clearStaff();
+            logout();
             router.replace("/login");
           }}
         />
@@ -239,7 +258,7 @@ export default function AccountsPage() {
           <button type="button" className="btn btn-outline btn-sm" onClick={onReset}>
             초기화
           </button>
-          <span className="count">총 {rows.length}개</span>
+          <span className="count">총 {total}개</span>
         </form>
 
         {/* PC: 표 */}
@@ -252,7 +271,7 @@ export default function AccountsPage() {
             ))}
           </div>
           {visible.length === 0 ? (
-            <p className="empty">{all.length === 0 ? "아직 만든 Gate 계정이 없습니다." : "검색 결과가 없습니다."}</p>
+            <p className="empty">{emptyText}</p>
           ) : (
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
@@ -288,7 +307,7 @@ export default function AccountsPage() {
         {/* 휴대폰: 줄마다 카드 */}
         <ul className="cards" aria-label="발급한 계정">
           {visible.length === 0 && (
-            <li className="empty">{all.length === 0 ? "아직 만든 Gate 계정이 없습니다." : "검색 결과가 없습니다."}</li>
+            <li className="empty">{emptyText}</li>
           )}
           {visible.map((a) => (
             <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
@@ -321,10 +340,10 @@ export default function AccountsPage() {
           ))}
         </ul>
 
-        {rows.length > 0 && (
+        {total > 0 && (
           <nav className="pagination" aria-label="페이지">
             <span className="pagination-range">
-              {from}–{to} / {rows.length}개
+              {from}–{to} / {total}개
             </span>
             <div className="pages">
               <button type="button" className="page-btn" onClick={() => setPage(current - 1)} disabled={current <= 1} aria-label="이전 페이지">
@@ -374,10 +393,9 @@ export default function AccountsPage() {
 
       {creating && (
         <CreateDialog
-          staff={staff}
           onClose={() => setCreating(false)}
-          onCreated={(account) => afterSend({ kind: "created", account })}
-          onResent={(email) => afterSend({ kind: "resent", account: { email } })}
+          onCreated={(account, mailSent) => afterSend({ kind: "created", account, mailSent })}
+          onResent={() => afterSend({ kind: "resent" })}
         />
       )}
 
@@ -385,11 +403,11 @@ export default function AccountsPage() {
         <ResendDialog
           account={resendTarget}
           onClose={() => setResendTarget(null)}
-          onResent={() => afterSend({ kind: "resent", account: resendTarget })}
+          onResent={() => afterSend({ kind: "resent" })}
         />
       )}
 
-      {cancelTarget && <CancelDialog account={cancelTarget} staff={staff} onClose={closeCancel} onCancelled={afterCancel} />}
+      {cancelTarget && <CancelDialog account={cancelTarget} onClose={closeCancel} onCancelled={afterCancel} />}
 
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
     </>
@@ -460,15 +478,13 @@ function Status({ status }: { status: AccountStatus }) {
 
 /** 「계정 만들기」 창(B · C · D). 보내기 전 확인은 이 창 하나로 해요. */
 function CreateDialog({
-  staff,
   onClose,
   onCreated,
   onResent,
 }: {
-  staff: Staff;
   onClose: () => void;
-  onCreated: (a: Account) => void;
-  onResent: (email: string) => void;
+  onCreated: (a: Account, mailSent: boolean) => void;
+  onResent: () => void;
 }) {
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
@@ -526,15 +542,16 @@ function CreateDialog({
     setSending(true);
     const input = { company: company.trim(), email: trimmed, language };
     if (state.status === "pending") {
-      const res = await resendGuide(input);
+      const res = await resendGuide(state.id, language);
       setSending(false);
-      if (res.ok) return onResent(trimmed);
-      setFormError("안내 메일을 보내지 못했습니다. 다시 시도해 주세요.");
+      if (res.ok) return onResent();
+      setFormError(resendErrorText(res.reason));
+      if (res.reason !== "failed") setCheck(null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
       return;
     }
-    const res = await createAccount(input, staff);
+    const res = await createAccount(input);
     setSending(false);
-    if (res.ok) return onCreated(res.account);
+    if (res.ok) return onCreated(res.account, res.mailSent);
     if (res.reason === "duplicate" || res.reason === "in_use") {
       // 조회와 보내기 사이에 상태가 바뀐 경우: 다시 조회해서 칸 아래에 보여 줘요.
       const result = await checkEmail(trimmed);
@@ -652,10 +669,10 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
   async function send() {
     setSending(true);
     setError("");
-    const res = await resendGuide({ company: account.company, email: account.email, language: account.language });
+    const res = await resendGuide(account.id, account.language);
     setSending(false);
     if (res.ok) return onResent();
-    setError("안내 메일을 보내지 못했습니다. 다시 시도해 주세요.");
+    setError(resendErrorText(res.reason));
   }
 
   return (
@@ -696,12 +713,10 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
 /** 목록 줄의 「발급 취소」 확인 창(H · 휴대폰 M4). 누르는 사이 고객이 로그인했으면 취소하지 않아요(H2). */
 function CancelDialog({
   account,
-  staff,
   onClose,
   onCancelled,
 }: {
   account: Account;
-  staff: Staff;
   onClose: () => void;
   onCancelled: () => void;
 }) {
@@ -711,7 +726,7 @@ function CancelDialog({
   async function cancel() {
     setSending(true);
     setError("");
-    const res = await cancelIssue(account.id, staff);
+    const res = await cancelIssue(account.id);
     setSending(false);
     if (res.ok) return onCancelled();
     setError(res.reason);
@@ -727,7 +742,9 @@ function CancelDialog({
         <dl className="summary-rows">
           <div>
             <dt>삭제 대상</dt>
-            <dd>계정 · 데모 프로젝트(데모 기록 {account.demoRecords}건)</dd>
+            <dd>
+              계정 · 데모 프로젝트{account.demoRecords !== undefined && `(데모 기록 ${account.demoRecords}건)`}
+            </dd>
           </div>
           <div>
             <dt>보낸 메일</dt>

@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +15,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
-      <body>{children}</body>
+      <body>
+        {/* 런타임 설정(서버 주소). 배포 컨테이너가 환경별 값으로 다시 써요 — 화면보다 먼저 읽어야 해요. */}
+        <Script src="/config.js" strategy="beforeInteractive" />
+        {children}
+      </body>
     </html>
   );
 }

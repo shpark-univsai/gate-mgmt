@@ -28,8 +28,14 @@ export default function LoginPage() {
       router.replace("/accounts");
       return;
     }
-    // 계정이 있는지 알려 주지 않도록 한 가지 문구만 써요.
-    setError("이메일 또는 비밀번호가 맞지 않습니다.");
+    // 계정이 있는지 알려 주지 않도록 이메일 · 비밀번호 오류는 한 가지 문구만 써요.
+    setError(
+      res.reason === "forbidden"
+        ? "백오피스를 사용할 수 있는 계정이 아닙니다. 운영 담당자에게 요청해 주세요."
+        : res.reason === "failed"
+          ? "로그인하지 못했습니다. 잠시 후 다시 시도해 주세요."
+          : "이메일 또는 비밀번호가 맞지 않습니다.",
+    );
     setBusy(false);
   }
 

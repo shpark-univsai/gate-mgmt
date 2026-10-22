@@ -1,8 +1,12 @@
-// 목업 로그인 상태. 화면 이동용일 뿐 보안이 아니에요 — 권한 검사는 서버가 합니다.
+// 로그인 상태. 이 탭(sessionStorage)에만 둬요 — 탭을 닫으면 로그아웃돼요(백오피스라 오래 남기지 않아요).
+// 화면 이동용 직원 정보와 서버 호출용 토큰을 함께 둬요. 권한 검사는 서버가 합니다.
 import { useSyncExternalStore } from "react";
 import type { Staff } from "./api";
 
 const KEY = "gate-mgmt.staff";
+const TOKEN_KEY = "gate-mgmt.tokens";
+
+export type Tokens = { accessToken: string; refreshToken: string };
 
 export function saveStaff(staff: Staff) {
   try {
@@ -10,10 +14,26 @@ export function saveStaff(staff: Staff) {
   } catch {}
 }
 
-/** 로그아웃: 이 탭의 로그인 상태를 지워요. 서버가 붙으면 서버 세션도 함께 끝내요. */
-export function clearStaff() {
+export function saveTokens(tokens: Tokens) {
+  try {
+    sessionStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+  } catch {}
+}
+
+export function getTokens(): Tokens | null {
+  try {
+    const raw = sessionStorage.getItem(TOKEN_KEY);
+    return raw ? (JSON.parse(raw) as Tokens) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 이 탭의 로그인 상태(직원 정보 · 토큰)를 지워요. 서버 세션 종료는 api.ts 의 logout 이 함께 해요. */
+export function clearSession() {
   try {
     sessionStorage.removeItem(KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
   } catch {}
 }
 
