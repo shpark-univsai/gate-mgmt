@@ -448,7 +448,7 @@ export default function AccountsPage() {
             </li>
           )}
           {visible.map((a) => (
-            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
+            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${a.status === "cancelled" ? " is-cancelled" : ""}`}>
               <div className="card-line">
                 <strong className="card-company">{a.company}</strong>
                 <span className="card-status">
