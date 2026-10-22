@@ -241,8 +241,8 @@ p {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: var(--gray-500);
-  color: var(--gray-0);
+  background: var(--gray-100); /* 진한 동그라미가 버튼처럼 튀지 않게 */
+  color: var(--gray-700);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -447,7 +447,11 @@ p {
   .table,
   .select,
   .toolbar .btn { display: none; }
-  .avatar { width: 32px; height: 32px; }
+  .avatar { width: 28px; height: 28px; font-size: 12px; }
+  /* 휴대폰 위쪽 띠: 로고 · 배지를 한 단계 작게 */
+  .app-nav .brand { gap: 6px; }
+  .app-nav .brand img { width: 107px; height: 16px; }
+  .app-nav .badge { padding: 2px 6px; font-size: 10px; line-height: 14px; }
   .profile-menu { min-width: 220px; }
   .profile-menu-email { display: block; }
   .profile-menu-item { height: 40px; }
