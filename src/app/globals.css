@@ -465,6 +465,8 @@ p {
   .card-company { font-size: 16px; line-height: 24px; }
   .card-email { font-size: 14px; line-height: 20px; color: var(--gray-700); overflow-wrap: anywhere; }
   .card-meta { color: var(--gray-500); }
+  .card-row.is-cancelled .card-company,
+  .card-row.is-cancelled .card-email { color: var(--gray-500); } /* 발급 취소 카드는 흐리게 — 취소선은 「주소 오류」로 읽혀 쓰지 않음 */
   .card-status { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; line-height: 20px; }
   .card-more { position: relative; display: inline-flex; }
   .card-more-button { display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; margin: -13px -14px -3px -6px; padding: 10px 0 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 40×36, 아이콘 자리는 그대로 · 아래로는 3px만 넘쳐 「재발송」과 안 겹침 */
