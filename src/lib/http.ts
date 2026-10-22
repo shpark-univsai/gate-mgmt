@@ -42,7 +42,8 @@ export async function send<T>(method: string, path: string, init: RequestInit, t
   if (token) headers.set("Authorization", `Bearer ${token}`);
   let res: Response;
   try {
-    res = await fetch(`${apiOrigin()}${path}`, { ...init, method, headers });
+    // 응답이 끝내 오지 않으면 30초에 끊어요 — 재발급 잠금이 다른 탭을 오래 붙잡지 않게.
+    res = await fetch(`${apiOrigin()}${path}`, { ...init, method, headers, signal: init.signal ?? AbortSignal.timeout(30_000) });
   } catch {
     throw new ApiError(0);
   }
@@ -103,10 +104,14 @@ function inTabOnce(run: () => Promise<string>): Promise<string> {
   return refreshing;
 }
 
-/** 로그인이 끊겼어요(재발급 실패 · 백오피스 권한 없음) — 로그인 상태를 지우고 이유와 함께 로그인 화면으로 보내요. */
+/**
+ * 로그인이 끊겼어요(재발급 실패 · 백오피스 권한 없음) — 로그인 상태를 지우고 이유와 함께 로그인 화면으로 보내요.
+ * 토큰이 이미 없으면(이 탭 · 다른 탭에서 직접 로그아웃) 안내 없이 보내요.
+ */
 function sessionEnded(reason: LoginReason): never {
+  const loggedOut = getTokens() === null;
   clearSession();
-  setLoginReason(reason);
+  if (!loggedOut) setLoginReason(reason);
   window.location.replace("/login");
   throw new ApiError(401);
 }
