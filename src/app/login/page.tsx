@@ -7,6 +7,9 @@ import { IcVisibilityOff, IcVisibilityOn } from "@/components/icons";
 import { login } from "@/lib/api";
 import { saveStaff, useLoginReason } from "@/lib/session";
 
+/** 임시 비밀번호(변경 강제) 계정 — 비밀번호 바꾸는 화면은 Gate 콘솔에만 있어요. */
+const PASSWORD_REQUIRED = "비밀번호를 바꿔야 백오피스를 쓸 수 있습니다. Gate 콘솔에 로그인해 비밀번호를 바꾼 뒤 다시 로그인해 주세요.";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -22,7 +25,9 @@ export default function LoginPage() {
       ? ""
       : reason === "forbidden"
         ? "백오피스를 사용할 수 있는 계정이 아닙니다. 운영 담당자에게 요청해 주세요."
-        : "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+        : reason === "password"
+          ? PASSWORD_REQUIRED
+          : "로그인이 만료되었습니다. 다시 로그인해 주세요.";
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,7 +49,9 @@ export default function LoginPage() {
     setError(
       res.reason === "forbidden"
         ? "백오피스를 사용할 수 있는 계정이 아닙니다. 운영 담당자에게 요청해 주세요."
-        : res.reason === "failed"
+        : res.reason === "password"
+          ? PASSWORD_REQUIRED
+          : res.reason === "failed"
           ? "로그인하지 못했습니다. 잠시 후 다시 시도해 주세요."
           : "이메일 또는 비밀번호가 맞지 않습니다.",
     );

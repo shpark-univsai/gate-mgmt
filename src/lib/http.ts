@@ -127,6 +127,8 @@ export async function authed<T>(method: string, path: string, body?: unknown): P
     if (!(e instanceof ApiError)) throw e;
     // 허용 목록에서 빠진 직원(MGMT-106)은 다시 로그인해도 같아요 — 로그인 화면이 이유를 보여 줘요.
     if (e.status === 403 && e.code === "MGMT-106") sessionEnded("forbidden");
+    // 임시 비밀번호 계정(변경 강제)은 게이트웨이가 모든 API 를 막아요(auth UMS-53). 바꾸는 화면은 Gate 콘솔에 있어요.
+    if (e.status === 403 && e.code === "AUTH-171") sessionEnded("password");
     if (e.status !== 401) throw e;
   }
   let fresh: string;
@@ -140,6 +142,7 @@ export async function authed<T>(method: string, path: string, body?: unknown): P
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) sessionEnded("expired");
     if (e instanceof ApiError && e.status === 403 && e.code === "MGMT-106") sessionEnded("forbidden");
+    if (e instanceof ApiError && e.status === 403 && e.code === "AUTH-171") sessionEnded("password");
     throw e;
   }
 }

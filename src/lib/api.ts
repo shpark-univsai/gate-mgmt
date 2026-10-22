@@ -80,8 +80,13 @@ export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reas
  */
 export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "failed" };
 
-/** invalid = 이메일 · 비밀번호가 맞지 않음 / forbidden = 백오피스를 쓸 수 없는 계정 / failed = 서버 · 네트워크 문제 */
-export type LoginResult = { ok: true; staff: Staff } | { ok: false; reason: "invalid" | "forbidden" | "failed" };
+/**
+ * invalid = 이메일 · 비밀번호가 맞지 않음 / forbidden = 백오피스를 쓸 수 없는 계정 / failed = 서버 · 네트워크 문제
+ * password = 임시 비밀번호라 먼저 바꿔야 함(바꾸는 화면은 Gate 콘솔에 있어요)
+ */
+export type LoginResult =
+  | { ok: true; staff: Staff }
+  | { ok: false; reason: "invalid" | "forbidden" | "failed" | "password" };
 
 const MGMT = "/api/v1/mgmt";
 
@@ -90,11 +95,16 @@ const isTransient = (e: unknown) =>
   !(e instanceof ApiError) || e.status === 0 || e.status === 429 || e.status >= 500;
 
 export async function login(email: string, password: string): Promise<LoginResult> {
-  let tokens: { accessToken: string; refreshToken: string };
+  let tokens: { accessToken: string; refreshToken: string; mustSetPassword?: boolean };
   try {
     tokens = await publicPost("/api/v1/auth/login", { email, password });
   } catch (e) {
     return { ok: false, reason: isTransient(e) ? "failed" : "invalid" };
+  }
+  if (tokens.mustSetPassword) {
+    // 관리자가 준 임시 비밀번호처럼 변경이 강제된 계정 — 서버가 다른 API 를 막으므로 들어가지 않아요(auth UMS-52 · 53).
+    revokeRefreshToken(tokens.refreshToken);
+    return { ok: false, reason: "password" };
   }
   try {
     // 허용된 직원인지 서버에 물어요. 토큰은 확인된 뒤에만 남겨요.
@@ -103,6 +113,7 @@ export async function login(email: string, password: string): Promise<LoginResul
     return { ok: true, staff: { email: me.email } };
   } catch (e) {
     revokeRefreshToken(tokens.refreshToken);
+    if (e instanceof ApiError && e.status === 403 && e.code === "AUTH-171") return { ok: false, reason: "password" };
     if (e instanceof ApiError && e.status === 403) return { ok: false, reason: "forbidden" };
     return { ok: false, reason: "failed" };
   }

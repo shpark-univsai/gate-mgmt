@@ -14,8 +14,11 @@ export type Tokens = { accessToken: string; refreshToken: string };
 // 로그인 화면이 한 번 읽은 「세션이 끊긴 이유」(읽으면서 지우므로 다시 그려도 같은 값을 보여 주려고 둬요).
 let takenReason: LoginReason | null | undefined;
 
-/** 로그인 화면이 한 번 보여 줄 안내. expired = 로그인이 만료됨, forbidden = 백오피스 권한이 없어짐 */
-export type LoginReason = "expired" | "forbidden";
+/**
+ * 로그인 화면이 한 번 보여 줄 안내. expired = 로그인이 만료됨, forbidden = 백오피스 권한이 없어짐,
+ * password = 비밀번호를 바꿔야 함(임시 비밀번호 — 서버가 403 AUTH-171 로 막음)
+ */
+export type LoginReason = "expired" | "forbidden" | "password";
 
 export function saveStaff(staff: Staff) {
   takenReason = undefined; // 다음에 로그인 화면에 올 때 지난 안내가 남지 않게
@@ -60,7 +63,7 @@ function reasonSnapshot(): LoginReason | null {
     try {
       const reason = sessionStorage.getItem(REASON_KEY);
       sessionStorage.removeItem(REASON_KEY);
-      takenReason = reason === "expired" || reason === "forbidden" ? reason : null;
+      takenReason = reason === "expired" || reason === "forbidden" || reason === "password" ? reason : null;
     } catch {
       takenReason = null;
     }
