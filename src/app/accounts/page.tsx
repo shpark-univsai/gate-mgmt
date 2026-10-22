@@ -29,6 +29,8 @@ const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactEl
   { value: "ko", label: "한국어", Flag: FlagKR },
 ];
 const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어");
+/** 휴대폰 카드용 짧은 표기 */
+const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
 const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
 
 function kstParts(iso: string) {
@@ -285,7 +287,7 @@ export default function AccountsPage() {
         {/* PC: 표 */}
         <div className="table" role="table" aria-label="발급한 계정">
           <div className="tr th" role="row">
-            {["회사명", "고객 이메일", "메일 언어", "상태", "만든 사람", "만든 일시", "관리"].map((h) => (
+            {["회사명", "고객 이메일", "메일 언어", "상태", "생성자", "생성일시", "관리"].map((h) => (
               <span key={h} role="columnheader">
                 {h}
               </span>
@@ -340,8 +342,8 @@ export default function AccountsPage() {
                 <span className="card-email">{a.email}</span>
                 {a.status === "pending" && (
                   <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
-                    <IcReload size={16} />
-                    다시 보내기
+                    <IcReload size={14} />
+                    재발송
                   </button>
                 )}
                 {/* 발급 취소 줄: 다시 보내기 자리에 누가 · 언제 */}
@@ -349,7 +351,7 @@ export default function AccountsPage() {
               </div>
               <div className="card-line">
                 <span className="card-meta">
-                  {languageName(a.language)} 메일 · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
+                  {languageShort(a.language)} · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
                 </span>
                 {a.status === "pending" && (
                   <button type="button" className="link-action link-action--muted" onClick={() => setCancelTarget(a)}>
