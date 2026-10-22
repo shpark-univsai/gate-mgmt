@@ -6,6 +6,7 @@ import { Brand, Dialog, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
 import { IcArrowDown, IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
 import {
+  cancelIssue,
   checkEmail,
   createAccount,
   listAccounts,
@@ -16,7 +17,7 @@ import {
   type MailLanguage,
   type Staff,
 } from "@/lib/api";
-import { useStaff } from "@/lib/session";
+import { clearStaff, useStaff } from "@/lib/session";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -26,7 +27,7 @@ const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactEl
   { value: "ko", label: "한국어", Flag: FlagKR },
 ];
 const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어");
-const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중" };
+const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
 
 function kstParts(iso: string) {
   const parts = new Intl.DateTimeFormat("ko-KR", {
@@ -49,10 +50,15 @@ const fmtShort = (iso: string) => {
   const t = kstParts(iso);
   return `${t.m}.${t.d} ${t.h}:${t.min}`;
 };
+/** 직원은 이름 대신 회사 이메일로 구분해요. 목록 · 안내에는 @ 앞부분만. */
+const handle = (email: string) => email.split("@")[0];
 const fmtMonthDay = (iso: string) => {
   const t = kstParts(iso);
   return `${t.m}.${t.d}`;
 };
+
+/** 발급 취소 줄: 누가 · 언제 취소했는지 */
+const cancelNote = (a: Account) => `${handle(a.cancelledBy ?? "")} 취소 · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`;
 
 type ToastState = { title: string; detail: string } | null;
 
@@ -68,6 +74,7 @@ export default function AccountsPage() {
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
   const [resendTarget, setResendTarget] = useState<Account | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<Account | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
 
@@ -105,6 +112,7 @@ export default function AccountsPage() {
       total: all.length,
       pending: all.filter((a) => a.status === "pending").length,
       inUse: all.filter((a) => a.status === "in_use").length,
+      cancelled: all.filter((a) => a.status === "cancelled").length,
       thisMonth,
     };
   }, [all]);
@@ -154,6 +162,18 @@ export default function AccountsPage() {
 
   const clearToast = useCallback(() => setToast(null), []);
 
+  const afterCancel = useCallback(async () => {
+    setCancelTarget(null);
+    await reload({ keyword, status });
+    setToast({ title: "발급을 취소했습니다", detail: "같은 이메일로 다시 발급할 수 있습니다" });
+  }, [reload, keyword, status]);
+
+  // 취소하지 못한 경우(고객이 이미 로그인)도 목록은 새로 불러와 「사용 중」으로 보여 줘요.
+  const closeCancel = useCallback(async () => {
+    setCancelTarget(null);
+    await reload({ keyword, status });
+  }, [reload, keyword, status]);
+
   if (!staff) return null;
 
   return (
@@ -167,12 +187,13 @@ export default function AccountsPage() {
             </a>
           </nav>
         </div>
-        <div className="profile">
-          <div className="avatar" aria-hidden="true">
-            {staff.name.slice(0, 1)}
-          </div>
-          <span className="identity-name">{staff.name}</span>
-        </div>
+        <ProfileMenu
+          email={staff.email}
+          onLogout={() => {
+            clearStaff();
+            router.replace("/login");
+          }}
+        />
       </header>
 
       <div className="breadcrumb">
@@ -193,6 +214,7 @@ export default function AccountsPage() {
           <Metric label="전체" value={metrics.total} sub={`이번 달 ${metrics.thisMonth}개`} />
           <Metric label="첫 로그인 전" value={metrics.pending} sub="안내 메일을 다시 보낼 수 있음" />
           <Metric label="사용 중" value={metrics.inUse} sub="고객이 콘솔에 로그인함" />
+          <Metric label="발급 취소" value={metrics.cancelled} sub="계정 · 데모 프로젝트 삭제됨" />
         </section>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
@@ -207,6 +229,7 @@ export default function AccountsPage() {
               <option value="all">상태 전체</option>
               <option value="pending">첫 로그인 전</option>
               <option value="in_use">사용 중</option>
+              <option value="cancelled">발급 취소</option>
             </select>
             <IcArrowDown size={16} className="select-icon" />
           </label>
@@ -239,13 +262,20 @@ export default function AccountsPage() {
                 <span role="cell">
                   <Status status={a.status} />
                 </span>
-                <span role="cell">{a.createdBy}</span>
+                <span role="cell">{handle(a.createdBy)}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
                   {a.status === "pending" ? (
-                    <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
-                      안내 메일 다시 보내기
-                    </button>
+                    <span className="row-actions">
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
+                        안내 메일 다시 보내기
+                      </button>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => setCancelTarget(a)}>
+                        발급 취소
+                      </button>
+                    </span>
+                  ) : a.status === "cancelled" ? (
+                    <span className="cancel-note">{cancelNote(a)}</span>
                   ) : (
                     <span className="dash">—</span>
                   )}
@@ -274,10 +304,19 @@ export default function AccountsPage() {
                     다시 보내기
                   </button>
                 )}
+                {/* 발급 취소 줄: 다시 보내기 자리에 누가 · 언제 */}
+                {a.status === "cancelled" && <span className="cancel-note">{cancelNote(a)}</span>}
               </div>
-              <p className="card-meta">
-                {languageName(a.language)} 메일 · {a.createdBy} · {fmtShort(a.createdAt)}
-              </p>
+              <div className="card-line">
+                <span className="card-meta">
+                  {languageName(a.language)} 메일 · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
+                </span>
+                {a.status === "pending" && (
+                  <button type="button" className="link-action link-action--muted" onClick={() => setCancelTarget(a)}>
+                    발급 취소
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -350,8 +389,51 @@ export default function AccountsPage() {
         />
       )}
 
+      {cancelTarget && <CancelDialog account={cancelTarget} staff={staff} onClose={closeCancel} onCancelled={afterCancel} />}
+
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
     </>
+  );
+}
+
+/** 오른쪽 위 프로필. 누르면 로그아웃이 있는 작은 메뉴가 열려요(휴대폰은 이메일도 메뉴 안에). */
+function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="profile" ref={ref}>
+      <button type="button" className="profile-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className="avatar" aria-hidden="true">
+          {email.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="identity-name">{email}</span>
+      </button>
+      {open && (
+        <div className="profile-menu" role="menu">
+          <p className="profile-menu-email">{email}</p>
+          <button type="button" role="menuitem" className="profile-menu-item" onClick={onLogout}>
+            로그아웃
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -520,7 +602,7 @@ function CreateDialog({
             ) : pending ? (
               // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「안내 메일 다시 보내기」
               <p className="help">
-                {pending.createdBy}님이 {fmtMonthDay(pending.createdAt)}에 만든 계정입니다. 로그인 전이라 다시 보낼 수 있습니다.
+                이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
               </p>
             ) : (
               <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
@@ -606,6 +688,79 @@ function ResendDialog({ account, onClose, onResent }: { account: Account; onClos
         <button type="button" className="btn btn-dark" onClick={send} disabled={sending} aria-busy={sending || undefined}>
           {sending ? "보내는 중…" : "다시 보내기"}
         </button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** 목록 줄의 「발급 취소」 확인 창(H · 휴대폰 M4). 누르는 사이 고객이 로그인했으면 취소하지 않아요(H2). */
+function CancelDialog({
+  account,
+  staff,
+  onClose,
+  onCancelled,
+}: {
+  account: Account;
+  staff: Staff;
+  onClose: () => void;
+  onCancelled: () => void;
+}) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<"" | "in_use" | "failed">("");
+
+  async function cancel() {
+    setSending(true);
+    setError("");
+    const res = await cancelIssue(account.id, staff);
+    setSending(false);
+    if (res.ok) return onCancelled();
+    setError(res.reason);
+  }
+
+  return (
+    <Dialog title="발급 취소" onClose={onClose} closable={!sending}>
+      <div className="summary">
+        <div className="summary-target">
+          <strong>{account.company}</strong>
+          <span>{account.email} · 첫 로그인 전</span>
+        </div>
+        <dl className="summary-rows">
+          <div>
+            <dt>삭제 대상</dt>
+            <dd>계정 · 데모 프로젝트(데모 기록 {account.demoRecords}건)</dd>
+          </div>
+          <div>
+            <dt>보낸 메일</dt>
+            <dd>비밀번호와 체험 링크를 쓸 수 없게 됨</dd>
+          </div>
+          <div>
+            <dt>재발급</dt>
+            <dd>같은 이메일로 가능</dd>
+          </div>
+        </dl>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error === "in_use"
+            ? "고객이 이미 로그인해서 취소할 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
+            : "발급을 취소하지 못했습니다. 다시 시도해 주세요."}
+        </p>
+      )}
+      <div className="dialog-actions">
+        {error === "in_use" ? (
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            닫기
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
+              취소
+            </button>
+            <button type="button" className="btn btn-danger-outline" onClick={cancel} disabled={sending} aria-busy={sending || undefined}>
+              {sending ? "취소하는 중…" : "발급 취소"}
+            </button>
+          </>
+        )}
       </div>
     </Dialog>
   );
