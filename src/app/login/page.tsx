@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Brand } from "@/components/ui";
+import { IcVisibilityOff, IcVisibilityOn } from "@/components/icons";
 import { login } from "@/lib/api";
 import { saveStaff, useLoginReason } from "@/lib/session";
 
@@ -10,6 +11,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 세션이 끊겨 이 화면으로 왔으면 이유를 보여 줘요(로그인을 다시 누르면 숨겨요).
@@ -91,13 +93,22 @@ export default function LoginPage() {
           <div className={`input-box${error ? " is-error" : ""}`}>
             <input
               id="password"
-              type="password"
+              type={showPassword ? "text" : "password"}
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               aria-invalid={!!error}
               aria-describedby={error ? "login-error" : undefined}
             />
+            <button
+              type="button"
+              className="eye-toggle"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
+              aria-pressed={showPassword}
+            >
+              {showPassword ? <IcVisibilityOn size={20} /> : <IcVisibilityOff size={20} />}
+            </button>
           </div>
           {error && (
             <p id="login-error" className="error" role="alert">
