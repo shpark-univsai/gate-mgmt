@@ -33,6 +33,20 @@ const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어")
 const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
 const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
 
+/** 결과 없음 — 무엇으로 찾았는지 그대로 보여 줘요(검색어는 굵게). */
+function noResultText({ keyword, status }: { keyword: string; status: AccountStatus | "all" }) {
+  const where = status === "all" ? "" : `「${STATUS_LABEL[status]}」에서 `;
+  const k = keyword.trim();
+  if (k)
+    return (
+      <>
+        {where}
+        <strong className="empty-keyword">‘{k}’</strong>에 대한 검색 결과가 없습니다.
+      </>
+    );
+  return status === "all" ? "검색 결과가 없습니다." : `「${STATUS_LABEL[status]}」 계정이 없습니다.`;
+}
+
 function kstParts(iso: string) {
   const parts = new Intl.DateTimeFormat("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -151,7 +165,7 @@ export default function AccountsPage() {
       ? "불러오는 중…"
       : metrics.total === 0
         ? "아직 만든 Gate 계정이 없습니다."
-        : "검색 결과가 없습니다.";
+        : noResultText(applied);
 
   function onSearch(e?: React.FormEvent) {
     e?.preventDefault();
