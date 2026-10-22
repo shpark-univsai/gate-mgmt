@@ -306,7 +306,8 @@ export default function AccountsPage() {
               { value: "cancelled", label: "발급 취소" },
             ]}
           />
-          <button type="submit" className="btn btn-dark btn-sm">
+          {/* 검정은 위쪽 「계정 만들기」 하나만 — 검색은 초기화와 같은 테두리 버튼(Enter 로도 검색) */}
+          <button type="submit" className="btn btn-outline btn-sm">
             검색
           </button>
           <button type="button" className="btn btn-outline btn-sm" onClick={onReset}>
