@@ -133,6 +133,9 @@ p {
   line-height: 18px;
 }
 .input-box input::placeholder { color: var(--gray-400); }
+/* 비밀번호 보기/숨기기 — 가려져 있으면 눈 감김(Off), 보이면 눈(On) */
+.eye-toggle { display: flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; margin-right: -6px; padding: 0; border: 0; background: none; color: var(--gray-400); cursor: pointer; border-radius: var(--radius-control); }
+.eye-toggle:hover { color: var(--gray-500); }
 .help { color: var(--gray-500); }
 .error { color: var(--danger-400); }
 
