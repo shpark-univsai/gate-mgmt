@@ -132,9 +132,10 @@ const MAIL_FAILURE_LABEL: Record<MailFailureReason, string> = {
 /** 만들기 · 다시 보내기 직후 창에 보여 주는 실패 까닭(I · I2 · J · K, 휴대폰 M6–M9) */
 const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
   temporary: "일시적인 오류로 안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  address: "유효하지 않은 이메일 주소입니다.",
+  address: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
   unknown: "안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  blocked: "같은 주소로 여러 번 보내지 못해 다시 보내기를 막았습니다. 주소를 확인하고 발급 취소해 주세요.",
+  // 3번 막힘도 영업에겐 같은 주소 오류 — 같은 문구 · 같은 버튼(닫기 · 발급 취소)
+  blocked: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
 };
 
 /** 메일 서버가 받지 않아 보내지 못한 경우(다시 누르기보다 까닭을 보여 줄 것) */
@@ -756,11 +757,11 @@ function Status({ account }: { account: Account }) {
   );
 }
 
-/** 실패 안내. 문장 사이에서만 줄이 바뀌어요(PC 는 한 줄, 휴대폰은 문장마다). 막힘 문구는 길어서 PC 도 문장마다. */
+/** 실패 안내. 문장 사이에서만 줄이 바뀌어요(PC 는 한 줄, 휴대폰은 문장마다). 주소 오류 · 막힘은 「무엇이 문제 / 무엇을 할지」 두 문장이라 PC 도 문장마다. */
 function MailFailureMessage({ reason }: { reason: MailFailureReason | "blocked" }) {
   const sentences = MAIL_FAILURE_TEXT[reason].split(". ");
   return (
-    <p className={`error mail-failure${reason === "blocked" ? " mail-failure--lines" : ""}`} role="alert">
+    <p className={`error mail-failure${offersCancel(reason) ? " mail-failure--lines" : ""}`} role="alert">
       {sentences.map((s, i) => (
         <span key={i} className="mail-failure-sentence">
           {i > 0 && " "}
