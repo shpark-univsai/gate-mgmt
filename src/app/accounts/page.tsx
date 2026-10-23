@@ -138,6 +138,9 @@ const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
   blocked: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
 };
 
+/** 계정 만들기 창에서 주소 오류가 났을 때 이메일 칸 아래 안내(I2 · C2 · 휴대폰 M8) — 같은 창에서 주소를 고쳐 재발송해요. */
+const FIX_ADDRESS_TEXT = "유효하지 않은 이메일 주소입니다. 주소를 고친 뒤 재발송해 주세요.";
+
 /** 메일 서버가 받지 않아 보내지 못한 경우(다시 누르기보다 까닭을 보여 줄 것) */
 const isMailFailure = (r: ResendFailure): r is MailFailureReason | "blocked" =>
   r === "temporary" || r === "address" || r === "unknown" || r === "blocked";
@@ -759,9 +762,14 @@ function Status({ account }: { account: Account }) {
 
 /** 실패 안내. 문장 사이에서만 줄이 바뀌어요(PC 는 한 줄, 휴대폰은 문장마다). 주소 오류 · 막힘은 「무엇이 문제 / 무엇을 할지」 두 문장이라 PC 도 문장마다. */
 function MailFailureMessage({ reason }: { reason: MailFailureReason | "blocked" }) {
-  const sentences = MAIL_FAILURE_TEXT[reason].split(". ");
+  return <Sentences text={MAIL_FAILURE_TEXT[reason]} lines={offersCancel(reason)} />;
+}
+
+/** 빨간 안내를 문장 사이에서만 줄바꿈해요. lines 면 PC 도 문장마다, 아니면 휴대폰에서만. */
+function Sentences({ text, lines = false, id }: { text: string; lines?: boolean; id?: string }) {
+  const sentences = text.split(". ");
   return (
-    <p className={`error mail-failure${offersCancel(reason) ? " mail-failure--lines" : ""}`} role="alert">
+    <p id={id} className={`error mail-failure${lines ? " mail-failure--lines" : ""}`} role="alert">
       {sentences.map((s, i) => (
         <span key={i} className="mail-failure-sentence">
           {i > 0 && " "}
@@ -850,6 +858,8 @@ function useCancelNow(onCancelled: () => void) {
 /**
  * 「계정 만들기」 창(B · C · D). 보내기 전 확인은 이 창 하나로 해요.
  * 첫 로그인 전 이메일이면 이 창에서 다시 보내요 — 실패하면 목록의 다시 보내기 창(F)과 같은 결과(J · K)를 보여 줘요.
+ * 주소 오류(I2 · C2 · M8)는 결과 화면으로 넘기지 않고 이 창에 남아요: 이메일이 그대로면 [닫기] [발급 취소],
+ * 고치면 [닫기] [재발송](I3 · C3 · M8b) — 고친 주소로 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요.
  */
 function CreateDialog({
   onClose,
@@ -878,12 +888,16 @@ function CreateDialog({
   const { cancelling, cancelError, cancelNow } = useCancelNow(onCancelled);
   const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
   const [sending, setSending] = useState(false);
-  // 이메일 미리 조회 중 — 이때 보내기를 막아요(조회가 끝나기 전에 두 번 누르면 계정이 두 번 만들어졌어요).
+  // 이메일 미리 조회 중. 버튼은 잠그지 않아요 — 칸을 벗어나며 시작된 조회 때문에 첫 클릭이 사라졌어요.
+  // 대신 보내기는 진행 중인 조회를 기다려 같은 결과를 써요(조회를 두 번 하지 않고, busy 로 두 번 만들지도 않아요).
   const [checking, setChecking] = useState(false);
+  const inflight = useRef<{ key: string; result: Promise<EmailCheck | null> } | null>(null);
   const busy = useRef(false);
   // 첫 로그인 전 이메일이라 메일 언어를 자동으로 바꿨으면, 그 전 언어(다른 이메일로 고치면 되돌려요)
   const langBeforePending = useRef<MailLanguage | null>(null);
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
+  // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
+  const [fix, setFix] = useState<Account | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
 
@@ -894,6 +908,10 @@ function CreateDialog({
   const inUse = current?.status === "in_use";
   // 주소 오류가 3번 이어져 서버가 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙)
   const blocked = pending?.resendBlocked === true;
+  // 고치는 중인 계정의 주소 그대로인지 — 그대로면 다시 보내도 또 실패하니 발급 취소만
+  const fixSame = !!fix && key === fix.email.toLowerCase();
+  // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
+  const fixTaken = !!fix && !fixSame && !!pending;
 
   useEffect(() => {
     if (!pending && langBeforePending.current) {
@@ -921,11 +939,22 @@ function CreateDialog({
     createdBy: p.createdBy,
     createdAt: p.createdAt,
     resendBlocked: p.resendBlocked,
+    ...(p.mailFailureReason ? { mailFailureReason: p.mailFailureReason } : {}),
   });
 
-  async function runCheck(): Promise<EmailCheck | null> {
-    if (!EMAIL_RE.test(trimmed)) return null;
-    if (current) return current;
+  function runCheck(): Promise<EmailCheck | null> {
+    if (!EMAIL_RE.test(trimmed)) return Promise.resolve(null);
+    if (current) return Promise.resolve(current);
+    if (inflight.current?.key === key) return inflight.current.result;
+    const result = lookup();
+    inflight.current = { key, result };
+    void result.finally(() => {
+      if (inflight.current?.result === result) inflight.current = null;
+    });
+    return result;
+  }
+
+  async function lookup(): Promise<EmailCheck | null> {
     const asked = key;
     let result: EmailCheck;
     setChecking(true);
@@ -940,7 +969,11 @@ function CreateDialog({
     // 조회하는 사이 이메일을 고쳤으면 버려요.
     if (emailRef.current?.value.trim().toLowerCase() !== asked) return null;
     setCheck({ email: asked, result });
-    if (result.status === "pending") pickPendingLanguage(result.language);
+    if (result.status === "pending") {
+      pickPendingLanguage(result.language);
+      // 주소 오류로 보내지 못한 계정(3번 막힘 포함)이면 고쳐 재발송하는 창으로(C2). 이미 고치는 중이면 그대로.
+      if (!fix && (result.resendBlocked || result.mailFailureReason === "address")) setFix(pendingTarget(result));
+    }
     return result;
   }
 
@@ -955,7 +988,49 @@ function CreateDialog({
     }
   }
 
+  /** 고친 주소로 재발송(I3 · C3 · M8b): 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요. */
+  async function submitFix(wrong: Account) {
+    if (fixSame) return; // 주소 그대로 — 버튼은 「발급 취소」라 Enter 로도 보내지 않아요
+    let eError = "";
+    if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
+    else if (!EMAIL_RE.test(trimmed)) eError = "이메일 형식을 확인해 주세요.";
+    const fixCompany = wrong.company || company.trim();
+    const cError = fixCompany ? "" : "회사명을 입력해 주세요.";
+    setEmailError(eError);
+    setCompanyError(cError);
+    setFormError("");
+    if (cError) return companyRef.current?.focus();
+    if (eError) return emailRef.current?.focus();
+    const state = current ?? (await runCheck());
+    if (!state || state.status !== "new") return emailRef.current?.focus(); // 사용 중 · 다른 발급 기록 · 조회 실패 — 칸 아래 안내
+
+    setSending(true);
+    const res = await createAccount({ company: fixCompany, email: trimmed, language: wrong.language });
+    if (!res.ok) {
+      setSending(false);
+      if (res.reason === "duplicate" || res.reason === "in_use") {
+        setCheck(null); // 그사이 상태가 바뀌었어요 — 다시 조회해서 칸 아래에 보여 줘요
+        await runCheck();
+        return emailRef.current?.focus();
+      }
+      return setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
+    }
+    // 잘못된 주소의 계정은 메일이 아무에게도 가지 않았어요 — 확인 없이 정리해요. 실패해도 목록에 「이메일 주소 오류」로 남아 직접 취소할 수 있어요.
+    await cancelIssue(wrong.id).catch(() => undefined);
+    setSending(false);
+    if (res.mailSent) return onCreated(res.account);
+    if (res.mailFailureReason === "address") {
+      // 고친 주소도 받지 않음 — 새 계정을 고치는 대상으로 바꿔 같은 창에 남아요
+      setFix(res.account);
+      return onMailFailed(res.account);
+    }
+    setFix(null);
+    setMailFailure({ account: res.account, reason: res.mailFailureReason });
+    return onMailFailed(res.account);
+  }
+
   async function submit() {
+    if (fix) return submitFix(fix);
     let eError = "";
     if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
     else if (!EMAIL_RE.test(trimmed)) eError = "이메일 형식을 확인해 주세요.";
@@ -995,8 +1070,9 @@ function CreateDialog({
       setSending(false);
       if (res.ok) return onResent();
       if (isMailFailure(res.reason)) {
-        // 목록의 다시 보내기 창과 같이: 까닭을 보여 주고(주소 오류 · 막힘은 발급 취소로 이어 줘요) 목록을 새로 고쳐요.
-        setMailFailure({ account: pendingTarget(state), reason: res.reason });
+        // 주소 오류 · 막힘은 이 창에서 주소를 고쳐 재발송(C2), 그 밖의 실패는 목록의 다시 보내기 창과 같은 결과를 보여 줘요.
+        if (offersCancel(res.reason)) setFix(pendingTarget(state));
+        else setMailFailure({ account: pendingTarget(state), reason: res.reason });
         return onResendMailFailed();
       }
       setFormError(resendErrorText(res.reason));
@@ -1007,7 +1083,9 @@ function CreateDialog({
     setSending(false);
     if (res.ok) {
       if (res.mailSent) return onCreated(res.account);
-      setMailFailure({ account: res.account, reason: res.mailFailureReason });
+      // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2)
+      if (res.mailFailureReason === "address") setFix(res.account);
+      else setMailFailure({ account: res.account, reason: res.mailFailureReason });
       return onMailFailed(res.account);
     }
     if (res.reason === "duplicate" || res.reason === "in_use") {
@@ -1022,6 +1100,9 @@ function CreateDialog({
       emailRef.current?.focus();
     } else setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
   }
+
+  // 고치는 중이면 그 계정의 회사명(서버가 회사명을 주지 않았으면 입력), 아니면 첫 로그인 전 기록의 회사명 — 고칠 수 없어요
+  const companyLocked = fix ? !!fix.company : !!pending;
 
   if (mailFailure) {
     return (
@@ -1038,15 +1119,15 @@ function CreateDialog({
           <label htmlFor="company" className="t-body-200-b">
             회사명
           </label>
-          <div className={`input-box${companyError ? " is-error" : ""}${pending ? " is-readonly" : ""}`}>
+          <div className={`input-box${companyError ? " is-error" : ""}${companyLocked ? " is-readonly" : ""}`}>
             <input
               ref={companyRef}
               id="company"
               autoComplete="organization"
               // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
-              readOnly={!!pending}
-              placeholder={pending && !pending.company ? "이미 만든 계정의 회사명 그대로" : undefined}
-              value={pending ? (pending.company ?? "") : company}
+              readOnly={companyLocked}
+              placeholder={!fix && pending && !pending.company ? "이미 만든 계정의 회사명 그대로" : undefined}
+              value={fix?.company ? fix.company : !fix && pending ? (pending.company ?? "") : company}
               onChange={(e) => {
                 setCompany(e.target.value);
                 if (companyError) setCompanyError("");
@@ -1066,7 +1147,7 @@ function CreateDialog({
           <label htmlFor="email" className="t-body-200-b">
             고객 이메일
           </label>
-          <div className={`input-box${emailError || inUse ? " is-error" : ""}`}>
+          <div className={`input-box${emailError || inUse || fixSame || fixTaken ? " is-error" : ""}`}>
             <input
               ref={emailRef}
               id="email"
@@ -1077,16 +1158,24 @@ function CreateDialog({
               onChange={(e) => {
                 setEmail(e.target.value);
                 if (emailError) setEmailError("");
+                if (formError) setFormError("");
               }}
               onBlur={() => void runCheck()}
-              aria-invalid={!!emailError || inUse}
+              aria-invalid={!!emailError || inUse || fixSame || fixTaken}
               aria-describedby="email-note"
             />
           </div>
           <div id="email-note" role="status" aria-live="polite">
             {emailError ? (
               <p className="error">{emailError}</p>
-            ) : inUse ? (
+            ) : fix && cancelError ? (
+              <p className="error">{cancelErrorText(cancelError)}</p>
+            ) : fixSame ? (
+              // 주소 오류(I2 · C2): PC 는 한 줄, 휴대폰은 문장마다
+              <Sentences text={FIX_ADDRESS_TEXT} />
+            ) : fixTaken ? (
+              <p className="error">이미 만든 계정의 이메일입니다. 다른 주소를 입력해 주세요.</p>
+            ) : fix && !inUse ? null : inUse ? (
               // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성
               <p className="error">이미 사용 중인 계정입니다. 「비밀번호 재설정」을 안내해 주세요.</p>
             ) : blocked && pending ? (
@@ -1105,6 +1194,8 @@ function CreateDialog({
           </div>
         </div>
 
+        {/* 고치는 중이면 메일 언어는 처음 만든 그대로 — 줄을 숨겨요 */}
+        {!fix && (
         <div className="field">
           <span id="language-label" className="t-body-200-b">
             메일 언어
@@ -1127,9 +1218,10 @@ function CreateDialog({
             ))}
           </div>
         </div>
+        )}
 
-        {pending && !blocked && <p className="help">다시 보내면 이전 임시 비밀번호는 쓸 수 없게 됩니다.</p>}
-        {blocked &&
+        {!fix && pending && !blocked && <p className="help">다시 보내면 이전 임시 비밀번호는 쓸 수 없게 됩니다.</p>}
+        {!fix && blocked &&
           (cancelError ? (
             <p className="error" role="alert">
               {cancelErrorText(cancelError)}
@@ -1143,7 +1235,25 @@ function CreateDialog({
           </p>
         )}
 
-        {blocked && pending ? (
+        {fix ? (
+          // 주소 그대로면 [닫기] [발급 취소](I2 · C2), 고치면 [닫기] [재발송](I3 · C3)
+          <div className="dialog-actions">
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={cancelling || sending}>
+              닫기
+            </button>
+            {fixSame ? (
+              cancelError !== "in_use" && cancelError !== "not_found" && (
+                <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling} aria-busy={cancelling || undefined}>
+                  {cancelling ? "취소하는 중…" : "발급 취소"}
+                </button>
+              )
+            ) : (
+              <button type="submit" className="btn btn-dark" disabled={inUse || fixTaken || sending} aria-busy={sending || checking || undefined}>
+                {sending ? "보내는 중…" : "재발송"}
+              </button>
+            )}
+          </div>
+        ) : blocked && pending ? (
           // 목록 실패 창(K)과 같은 버튼: 「닫기」 · 「발급 취소」
           <div className="dialog-actions">
             <button type="button" className="btn btn-outline" onClick={onClose} disabled={cancelling}>
@@ -1160,7 +1270,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || sending || checking} aria-busy={sending || checking || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || sending} aria-busy={sending || checking || undefined}>
               {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
           </div>
