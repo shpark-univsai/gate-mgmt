@@ -122,6 +122,8 @@ p {
 }
 .input-box:focus-within { border-color: var(--gray-900); }
 .input-box.is-error { border-color: var(--danger-400); }
+.input-box.is-readonly { background: var(--gray-50); } /* 이미 만든 계정의 회사명 — 고칠 수 없어요 */
+.input-box.is-readonly input { color: var(--gray-500); }
 /* 글자를 받는 영역이 칸 전체를 채워요(눌리는 곳 · 자동 완성 색이 칸과 같게) */
 .input-box input {
   flex: 1;
@@ -189,6 +191,7 @@ p {
 .login-brand { display: flex; justify-content: center; margin-bottom: 16px; }
 .login-card .input-box { height: 44px; background: var(--gray-800); border-color: var(--gray-700); }
 .login-card .input-box:focus-within { border-color: var(--gray-0); }
+.login-card .input-box.is-error { border-color: var(--danger-400); } /* 어두운 칸 테두리가 오류 빨강을 덮지 않게 */
 .login-card .input-box input { color: var(--gray-0); }
 .login-card .btn { height: 48px; font-size: 14px; line-height: 20px; background: var(--gray-0); color: var(--gray-900); }
 .login-card .help { color: var(--gray-400); }
@@ -332,7 +335,7 @@ p {
 .popup-select-check { flex: none; color: var(--gray-0); }
 .count { margin-left: auto; color: var(--gray-500); }
 
-.table { border: 1px solid var(--gray-200); border-bottom: 0; }
+.table { border: 1px solid var(--gray-200); border-bottom: 0; overflow-x: auto; } /* 창이 좁으면(태블릿 · 창 나누기) 표 안에서 옆으로 밀어 봐요 */
 .tr {
   display: grid;
   /* 칸 폭은 표 전체에 비율로 나눠요(Figma 1392 기준 200 · 280 · 130 · 150 · 160 · 180 · 260). 관리 칸 최소 폭은 버튼 두 개가 한 줄에 들어가는 폭. */
@@ -341,6 +344,7 @@ p {
     minmax(90px, 160fr) minmax(120px, 180fr) minmax(230px, 260fr);
   align-items: center;
   min-height: 64px;
+  min-width: min-content;
   padding: 0 16px;
   border-bottom: 1px solid var(--gray-200);
 }
@@ -365,7 +369,7 @@ p {
 /* 안내 메일을 보내지 못한 첫 로그인 전 계정(일시적 발송 오류 · 이메일 주소 오류 · 메일 발송 실패) */
 .status--mail-failed { color: var(--danger-400); }
 .status--mail-failed .status-dot { background: var(--danger-400); }
-.cancel-note { color: var(--gray-500); white-space: nowrap; }
+.cancel-note { color: var(--gray-500); overflow-wrap: anywhere; } /* 취소한 직원 이메일이 길면 줄을 바꿔요(표 밖으로 넘치지 않게) */
 
 .cards { display: none; }
 
@@ -378,6 +382,7 @@ p {
   color: var(--gray-500);
 }
 .pages { display: flex; gap: 8px; }
+.pagination.is-single .pages { visibility: hidden; } /* 한 페이지뿐이면 번호는 감추고 칸 · 개수 고르기는 그대로 */
 .page-btn {
   min-width: 28px;
   height: 28px;
@@ -390,6 +395,7 @@ p {
   color: var(--gray-500);
   cursor: pointer;
 }
+.page-gap { min-width: 20px; text-align: center; color: var(--gray-400); }
 .page-btn.is-current { background: var(--gray-100); color: var(--gray-900); font-weight: 700; cursor: default; }
 .page-btn:disabled { color: var(--gray-300); cursor: default; }
 .page-size { justify-self: end; height: 32px; }
@@ -435,6 +441,7 @@ p {
 
 /* 메일 발송 실패 안내: 낱말 중간에서 줄이 바뀌지 않게(PC 는 한 줄, 휴대폰은 문장 끝에서) */
 .mail-failure { word-break: keep-all; }
+.mail-failure--lines .mail-failure-sentence { display: block; } /* 두 문장짜리 막힘 안내는 PC 도 문장마다 */
 
 /* ── 완료 알림: 어두운 유리 ── */
 .toast {
@@ -490,6 +497,7 @@ p {
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
   .search { width: 100%; height: 40px; }
   .status-chips { display: flex; gap: 8px; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .status-chips.has-more { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); } /* 오른쪽에 칩이 더 있으면 끝을 흐리게 — 옆으로 밀 수 있다는 표시 */
   .status-chips::-webkit-scrollbar { display: none; }
   .status-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border: 1px solid var(--gray-200); border-radius: var(--radius-control); background: var(--gray-0); color: var(--gray-700); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
   .status-chip-count { font-weight: 400; color: var(--gray-500); }
@@ -502,13 +510,14 @@ p {
   .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
   .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-200); display: flex; flex-direction: column; gap: 4px; }
   .card-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card-line > :first-child { min-width: 0; } /* 띄어쓰기 없는 긴 회사명 · 이메일도 줄을 바꿔 상태 · ⋮ 를 밀어내지 않게 */
   /* 휴대폰은 PC 표보다 한 단계 크게: 회사명 16 · 이메일·상태·재발송 14 · 언어/생성자/날짜 13 (검색창 16보다 작아 보이지 않게) */
-  .card-company { font-size: 16px; line-height: 24px; }
+  .card-company { font-size: 16px; line-height: 24px; overflow-wrap: anywhere; }
   .card-email { font-size: 14px; line-height: 20px; color: var(--gray-700); overflow-wrap: anywhere; }
   .card-meta { color: var(--gray-500); }
   .card-row.is-cancelled .card-company,
   .card-row.is-cancelled .card-email { color: var(--gray-500); } /* 발급 취소 카드는 흐리게 — 취소선은 「주소 오류」로 읽혀 쓰지 않음 */
-  .card-status { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; line-height: 20px; }
+  .card-status { flex: none; display: inline-flex; align-items: center; gap: 2px; font-size: 14px; line-height: 20px; }
   .card-more { position: relative; display: inline-flex; }
   .card-more-button { display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; margin: -13px -14px -3px -6px; padding: 10px 0 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 40×36, 아이콘 자리는 그대로 · 아래로는 3px만 넘쳐 「재발송」과 안 겹침 */
   .profile-menu.card-more-menu { top: calc(100% + 4px); right: 0; min-width: 140px; }
@@ -530,6 +539,7 @@ p {
   .link-action--muted { font-weight: 400; color: var(--gray-500); }
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
+  .pagination.is-single { display: none; } /* 한 페이지뿐이면 휴대폰은 번호 줄을 감춰요 */
   /* 작은 버튼은 보이는 크기 그대로, 누르는 영역만 40 가까이 */
   .page-btn,
   .profile-button { position: relative; }

@@ -14,9 +14,12 @@ export function Brand({ inverse = false }: { inverse?: boolean }) {
   );
 }
 
+let dialogOpener: HTMLElement | null = null;
+
 /**
  * 확인 · 입력 창. 닫기 ✕는 두지 않아요 — 「취소」, Esc, 창 바깥 누르기로 닫혀요.
- * 열리면 첫 입력 칸(없으면 실행 버튼)에 초점이 가요.
+ * 열리면 data-autofocus 가 붙은 버튼 → 첫 입력 칸 → 실행 버튼 순으로 초점이 가요.
+ * 창 안에서만 Tab 이 돌고, 닫히면 창을 연 버튼으로 초점이 돌아가요.
  */
 export function Dialog({
   title,
@@ -52,9 +55,40 @@ export function Dialog({
   }, []);
 
   useEffect(() => {
+    // 창이 다른 창으로 바뀌는 경우(만들기 → 실패 결과)에도 처음 연 버튼을 기억해요.
+    const active = document.activeElement as HTMLElement | null;
+    if (active && active !== document.body && !active.closest(".dialog")) dialogOpener = active;
     const el = ref.current;
-    (el?.querySelector<HTMLElement>("input") ?? el?.querySelector<HTMLElement>(".dialog-actions button:last-child"))?.focus();
+    (
+      el?.querySelector<HTMLElement>("[data-autofocus]") ??
+      el?.querySelector<HTMLElement>("input:not([readonly])") ??
+      el?.querySelector<HTMLElement>(".dialog-actions button:last-child")
+    )?.focus();
+    return () => {
+      // 마지막 창이 닫히면 연 버튼으로(메뉴 안 버튼처럼 사라졌으면 그대로)
+      if (document.querySelector(".dialog")) return;
+      if (dialogOpener?.isConnected) dialogOpener.focus();
+      dialogOpener = null;
+    };
   }, []);
+
+  /** Tab 이 창 밖(뒤 화면)으로 나가지 않게 처음 ↔ 끝을 이어요. */
+  function trapTab(e: React.KeyboardEvent) {
+    if (e.key !== "Tab") return;
+    const items = [...(ref.current?.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]:not([tabindex='-1'])") ?? [])].filter(
+      (n) => !n.hasAttribute("disabled") && n.offsetParent !== null,
+    );
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -66,7 +100,7 @@ export function Dialog({
 
   return (
     <div ref={scrimRef} className="scrim" onMouseDown={(e) => e.target === e.currentTarget && closable && onClose()}>
-      <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={trapTab}>
         <h2 id="dialog-title" className="dialog-title">
           {title}
         </h2>

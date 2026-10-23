@@ -1,17 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Brand } from "@/components/ui";
 import { IcVisibilityOff, IcVisibilityOn } from "@/components/icons";
 import { login } from "@/lib/api";
-import { saveStaff, useLoginReason } from "@/lib/session";
+import { saveStaff, useLoginReason, useStaff } from "@/lib/session";
 
 /** 임시 비밀번호(변경 강제) 계정 — 비밀번호 바꾸는 화면은 Gate 콘솔에만 있어요. */
 const PASSWORD_REQUIRED = "비밀번호를 바꿔야 백오피스를 쓸 수 있습니다. Gate 콘솔에 로그인해 비밀번호를 바꾼 뒤 다시 로그인해 주세요.";
 
 export default function LoginPage() {
   const router = useRouter();
+  const staff = useStaff();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -28,6 +29,11 @@ export default function LoginPage() {
         : reason === "password"
           ? PASSWORD_REQUIRED
           : "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+
+  // 이미 로그인했으면 이 화면을 건너뛰어요.
+  useEffect(() => {
+    if (staff) router.replace("/accounts");
+  }, [staff, router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

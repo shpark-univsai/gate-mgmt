@@ -94,7 +94,28 @@ const fmtMonthDay = (iso: string) => {
 };
 
 /** 발급 취소 줄: 누가 · 언제 취소했는지 */
-const cancelNote = (a: Account) => `취소 · ${handle(a.cancelledBy ?? "")} · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`; // 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」
+// 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」. 취소한 직원이 없으면(시스템 정리) 그 칸은 빼요.
+const cancelNote = (a: Account) =>
+  ["취소", a.cancelledBy ? handle(a.cancelledBy) : "", a.cancelledAt ? fmtShort(a.cancelledAt) : ""].filter(Boolean).join(" · ");
+
+/** 페이지 번호: 7개가 넘으면 처음 · 끝 · 지금 앞뒤만 보이고 사이는 「…」 */
+function pageItems(current: number, count: number): (number | "gap")[] {
+  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+  const keep = new Set([1, count, current - 1, current, current + 1]);
+  if (current <= 4) [2, 3, 4, 5].forEach((n) => keep.add(n));
+  if (current >= count - 3) [count - 4, count - 3, count - 2, count - 1].forEach((n) => keep.add(n));
+  const nums = [...keep].filter((n) => n >= 1 && n <= count).sort((a, b) => a - b);
+  const out: (number | "gap")[] = [];
+  nums.forEach((n, i) => {
+    if (i > 0 && n - nums[i - 1] > 1) out.push("gap");
+    out.push(n);
+  });
+  return out;
+}
+
+/** 상태 글자(메일 실패 까닭 포함) — 목록 줄과 확인 창이 같은 말을 써요. */
+const statusText = (a: Account) =>
+  a.status === "pending" && a.mailFailureReason ? MAIL_FAILURE_LABEL[a.mailFailureReason] : STATUS_LABEL[a.status];
 
 type ToastState = { title: string; detail: string } | null;
 
@@ -113,7 +134,6 @@ const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
   temporary: "일시적인 오류로 안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
   address: "유효하지 않은 이메일 주소입니다.",
   unknown: "안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  // TODO(UG-405): 문구 기획 확인 필요
   blocked: "같은 주소로 여러 번 보내지 못해 다시 보내기를 막았습니다. 주소를 확인하고 발급 취소해 주세요.",
 };
 
@@ -150,6 +170,13 @@ export default function AccountsPage() {
   // 검색 칸 값(keyword · status)과 실제로 조회한 조건(applied)을 나눠요 — 검색을 눌러야 목록이 바뀌어요.
   const [keyword, setKeyword] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  // 휴대폰 상태 칩: 오른쪽에 더 있으면 끝을 흐리게(옆으로 밀 수 있다는 표시)
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const [chipsMore, setChipsMore] = useState(false);
+  const updateChipsMore = useCallback(() => {
+    const el = chipsRef.current;
+    if (el) setChipsMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
   const [status, setStatus] = useState<AccountStatus | "all">("all");
   const [applied, setApplied] = useState<{ keyword: string; status: AccountStatus | "all" }>({ keyword: "", status: "all" });
   const [version, setVersion] = useState(0);
@@ -199,8 +226,10 @@ export default function AccountsPage() {
     };
   }, [staff, applied, page, pageSize, version]);
 
-  const metrics = summary ?? { total: 0, pending: 0, inUse: 0, cancelled: 0, thisMonth: 0 };
+  // 요약을 아직 못 받았으면(실패 포함) 숫자 대신 「—」 — 0으로 보이면 「계정이 없다」로 읽혀요.
+  const metrics = summary;
 
+  const filtered = applied.keyword !== "" || applied.status !== "all";
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const current = Math.min(page, pageCount);
   const visible = rows;
@@ -210,9 +239,15 @@ export default function AccountsPage() {
     ? LOAD_FAILED
     : !loaded
       ? "불러오는 중…"
-      : metrics.total === 0
+      : !filtered && total === 0
         ? "아직 만든 Gate 계정이 없습니다."
         : noResultText(applied);
+
+  /** 페이지를 바꾸면 목록 맨 위부터 보여 줘요. */
+  function goPage(n: number) {
+    setPage(n);
+    window.scrollTo({ top: 0 });
+  }
 
   function onSearch(e?: React.FormEvent) {
     e?.preventDefault();
@@ -239,8 +274,6 @@ export default function AccountsPage() {
     setApplied({ keyword: keyword.trim(), status: v });
     reload();
   }
-
-  const filtered = applied.keyword !== "" || applied.status !== "all";
 
   function onReset() {
     setKeyword("");
@@ -283,6 +316,12 @@ export default function AccountsPage() {
     const t = setTimeout(() => setFreshId(null), 4000);
     return () => clearTimeout(t);
   }, [freshId]);
+
+  useEffect(() => {
+    updateChipsMore();
+    window.addEventListener("resize", updateChipsMore);
+    return () => window.removeEventListener("resize", updateChipsMore);
+  }, [updateChipsMore, summary]);
 
   const clearToast = useCallback(() => setToast(null), []);
 
@@ -342,10 +381,10 @@ export default function AccountsPage() {
         </div>
 
         <section className="overview" aria-label="요약">
-          <Metric label="전체" value={metrics.total} sub={`이번 달 ${metrics.thisMonth}개`} />
-          <Metric label="첫 로그인 전" value={metrics.pending} sub="안내 메일을 다시 보낼 수 있음" />
-          <Metric label="사용 중" value={metrics.inUse} sub="고객이 콘솔에 로그인함" />
-          <Metric label="발급 취소" value={metrics.cancelled} sub="계정 · 데모 프로젝트 삭제됨" />
+          <Metric label="전체" value={metrics?.total} sub={metrics ? `이번 달 ${metrics.thisMonth}개` : "이번 달 —"} />
+          <Metric label="첫 로그인 전" value={metrics?.pending} sub="고객이 아직 로그인하지 않음" />
+          <Metric label="사용 중" value={metrics?.inUse} sub="고객이 콘솔에 로그인함" />
+          <Metric label="발급 취소" value={metrics?.cancelled} sub="계정 · 데모 프로젝트 삭제됨" />
         </section>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
@@ -358,6 +397,13 @@ export default function AccountsPage() {
               enterKeyHint="search"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                // Esc 도 ✕ 와 같이: 글자만 지우지 않고 걸러진 목록도 되돌려요.
+                if (e.key === "Escape" && keyword) {
+                  e.preventDefault();
+                  clearKeyword();
+                }
+              }}
               placeholder="회사명, 고객 이메일 검색"
             />
             {keyword && (
@@ -386,13 +432,19 @@ export default function AccountsPage() {
             초기화
           </button>
           {/* 휴대폰: 상태 칩(개수 포함) — PC 는 위 선택 상자 */}
-          <div className="status-chips" role="group" aria-label="상태">
+          <div
+            ref={chipsRef}
+            className={`status-chips${chipsMore ? " has-more" : ""}`}
+            role="group"
+            aria-label="상태"
+            onScroll={updateChipsMore}
+          >
             {(
               [
-                ["all", "전체", metrics.total],
-                ["pending", "첫 로그인 전", metrics.pending],
-                ["in_use", "사용 중", metrics.inUse],
-                ["cancelled", "발급 취소", metrics.cancelled],
+                ["all", "전체", metrics?.total],
+                ["pending", "첫 로그인 전", metrics?.pending],
+                ["in_use", "사용 중", metrics?.inUse],
+                ["cancelled", "발급 취소", metrics?.cancelled],
               ] as const
             ).map(([v, label, n]) => (
               <button
@@ -402,7 +454,7 @@ export default function AccountsPage() {
                 aria-pressed={applied.status === v}
                 onClick={() => pickStatus(v)}
               >
-                {label} <span className="status-chip-count">{n}</span>
+                {label} {n !== undefined && <span className="status-chip-count">{n}</span>}
               </button>
             ))}
           </div>
@@ -510,29 +562,35 @@ export default function AccountsPage() {
         </ul>
 
         {total > 0 && (
-          <nav className="pagination" aria-label="페이지">
+          <nav className={`pagination${pageCount <= 1 ? " is-single" : ""}`} aria-label="페이지">
             <span className="pagination-range">
               {from}–{to} / {total}개
             </span>
             <div className="pages">
-              <button type="button" className="page-btn" onClick={() => setPage(current - 1)} disabled={current <= 1} aria-label="이전 페이지">
+              <button type="button" className="page-btn" onClick={() => goPage(current - 1)} disabled={current <= 1} aria-label="이전 페이지">
                 <IcArrowLeft size={16} />
               </button>
-              {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  className={`page-btn${n === current ? " is-current" : ""}`}
-                  aria-current={n === current ? "page" : undefined}
-                  onClick={() => setPage(n)}
-                >
-                  {n}
-                </button>
-              ))}
+              {pageItems(current, pageCount).map((n, i) =>
+                n === "gap" ? (
+                  <span key={`gap-${i}`} className="page-gap" aria-hidden="true">
+                    …
+                  </span>
+                ) : (
+                  <button
+                    key={n}
+                    type="button"
+                    className={`page-btn${n === current ? " is-current" : ""}`}
+                    aria-current={n === current ? "page" : undefined}
+                    onClick={() => goPage(n)}
+                  >
+                    {n}
+                  </button>
+                ),
+              )}
               <button
                 type="button"
                 className="page-btn"
-                onClick={() => setPage(current + 1)}
+                onClick={() => goPage(current + 1)}
                 disabled={current >= pageCount}
                 aria-label="다음 페이지"
               >
@@ -593,6 +651,7 @@ export default function AccountsPage() {
 function CardMore({ onCancel }: { onCancel: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -612,7 +671,7 @@ function CardMore({ onCancel }: { onCancel: () => void }) {
 
   return (
     <div className="card-more" ref={ref}>
-      <button type="button" className="card-more-button" aria-label="더보기" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+      <button ref={buttonRef} type="button" className="card-more-button" aria-label="더보기" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <IcMoreVert size={18} />
       </button>
       {open && (
@@ -623,6 +682,7 @@ function CardMore({ onCancel }: { onCancel: () => void }) {
             className="profile-menu-item"
             onClick={() => {
               setOpen(false);
+              buttonRef.current?.focus(); // 확인 창을 닫으면 ⋮ 로 초점이 돌아오게
               onCancel();
             }}
           >
@@ -674,12 +734,12 @@ function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void 
   );
 }
 
-function Metric({ label, value, sub }: { label: string; value: number; sub: string }) {
+function Metric({ label, value, sub }: { label: string; value: number | undefined; sub: string }) {
   return (
     <div className="metric">
       <span className="metric-label">{label}</span>
       <div>
-        <strong className="metric-value">{value}</strong>
+        <strong className="metric-value">{value ?? "—"}</strong>
         <span className="metric-sub">{sub}</span>
       </div>
     </div>
@@ -696,11 +756,11 @@ function Status({ account }: { account: Account }) {
   );
 }
 
-/** 실패 안내 한 줄. 문장 사이에서만 줄이 바뀌어요(PC 는 한 줄, 휴대폰은 문장마다). */
+/** 실패 안내. 문장 사이에서만 줄이 바뀌어요(PC 는 한 줄, 휴대폰은 문장마다). 막힘 문구는 길어서 PC 도 문장마다. */
 function MailFailureMessage({ reason }: { reason: MailFailureReason | "blocked" }) {
   const sentences = MAIL_FAILURE_TEXT[reason].split(". ");
   return (
-    <p className="error mail-failure" role="alert">
+    <p className={`error mail-failure${reason === "blocked" ? " mail-failure--lines" : ""}`} role="alert">
       {sentences.map((s, i) => (
         <span key={i} className="mail-failure-sentence">
           {i > 0 && " "}
@@ -736,7 +796,7 @@ function MailFailureResult({
     <>
       <div className="summary">
         <div className="summary-target">
-          <strong>{account.company}</strong>
+          {account.company && <strong>{account.company}</strong>}
           <span>{account.email}</span>
         </div>
       </div>
@@ -817,6 +877,11 @@ function CreateDialog({
   const { cancelling, cancelError, cancelNow } = useCancelNow(onCancelled);
   const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
   const [sending, setSending] = useState(false);
+  // 이메일 미리 조회 중 — 이때 보내기를 막아요(조회가 끝나기 전에 두 번 누르면 계정이 두 번 만들어졌어요).
+  const [checking, setChecking] = useState(false);
+  const busy = useRef(false);
+  // 첫 로그인 전 이메일이라 메일 언어를 자동으로 바꿨으면, 그 전 언어(다른 이메일로 고치면 되돌려요)
+  const langBeforePending = useRef<MailLanguage | null>(null);
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
@@ -829,13 +894,26 @@ function CreateDialog({
   // 주소 오류가 3번 이어져 서버가 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙)
   const blocked = pending?.resendBlocked === true;
 
+  useEffect(() => {
+    if (!pending && langBeforePending.current) {
+      setLanguage(langBeforePending.current);
+      langBeforePending.current = null;
+    }
+  }, [pending]);
+
+  /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
+  function pickPendingLanguage(l: MailLanguage) {
+    if (langBeforePending.current === null) langBeforePending.current = language;
+    setLanguage(l);
+  }
+
   /**
-   * 실패 결과 · 발급 취소 창에 넘길 대상(첫 로그인 전 발급 기록).
-   * 미리 조회는 회사명을 주지 않아 입력한 회사명을 보여 줘요(아직 비었으면 —). 발급 취소는 기록 번호(id)로 해요.
+   * 실패 결과 · 발급 취소 창에 넘길 대상(첫 로그인 전 발급 기록). 회사명은 기록의 것 —
+   * 입력 칸 값을 쓰면 다른 이름이 그 계정 이름처럼 보여요. 서버가 아직 회사명을 주지 않으면 이메일만 보여요.
    */
   const pendingTarget = (p: Extract<EmailCheck, { status: "pending" }>): Account => ({
     id: p.id,
-    company: company.trim() || "—",
+    company: p.company ?? "",
     email: trimmed,
     language: p.language,
     status: "pending",
@@ -849,41 +927,62 @@ function CreateDialog({
     if (current) return current;
     const asked = key;
     let result: EmailCheck;
+    setChecking(true);
     try {
       result = await checkEmail(trimmed);
     } catch {
       if (emailRef.current?.value.trim().toLowerCase() === asked) setEmailError(CHECK_FAILED);
       return null;
+    } finally {
+      setChecking(false);
     }
     // 조회하는 사이 이메일을 고쳤으면 버려요.
     if (emailRef.current?.value.trim().toLowerCase() !== asked) return null;
     setCheck({ email: asked, result });
-    // 첫 로그인 전이면 메일 언어를 처음 보낸 언어로 미리 골라 둬요.
-    if (result.status === "pending") setLanguage(result.language);
+    if (result.status === "pending") pickPendingLanguage(result.language);
     return result;
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (sending) return;
-    let cError = "";
+    if (busy.current) return;
+    busy.current = true;
+    try {
+      await submit();
+    } finally {
+      busy.current = false;
+    }
+  }
+
+  async function submit() {
     let eError = "";
-    if (!company.trim()) cError = "회사명을 입력해 주세요.";
-    else if (company.trim().length > COMPANY_MAX) cError = `회사명은 ${COMPANY_MAX}자까지 쓸 수 있습니다.`;
     if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
     else if (!EMAIL_RE.test(trimmed)) eError = "이메일 형식을 확인해 주세요.";
+
+    // 아직 조회 전이면 먼저 조회해요. 상태가 새로 드러나면 보내지 않고 칸 아래에 먼저 보여 줘요.
+    // (회사명보다 먼저 — 이미 만든 이메일이면 회사명은 쓰지 않으니 「회사명을 입력해 주세요」로 막지 않아요.)
+    let state = current;
+    if (!eError && !state) {
+      state = await runCheck();
+      if (state && state.status !== "new") {
+        setCompanyError("");
+        setFormError("");
+        return emailRef.current?.focus();
+      }
+    }
+
+    let cError = "";
+    if (state?.status !== "pending") {
+      if (!company.trim()) cError = "회사명을 입력해 주세요.";
+      else if (company.trim().length > COMPANY_MAX) cError = `회사명은 ${COMPANY_MAX}자까지 쓸 수 있습니다.`;
+    }
     setCompanyError(cError);
     setEmailError(eError);
     setFormError("");
     if (cError) return companyRef.current?.focus();
     if (eError) return emailRef.current?.focus();
+    if (!state) return emailRef.current?.focus(); // 조회 실패 — 칸 아래 안내
 
-    // 아직 조회 전이면 먼저 조회해요. 상태가 새로 드러나면 보내지 않고 칸 아래에 먼저 보여 줘요.
-    let state = current;
-    if (!state) {
-      state = await runCheck();
-      if (!state || state.status !== "new") return emailRef.current?.focus();
-    }
     if (state.status === "in_use") return;
     // 막힌 계정은 다시 보내지 않아요 — 창에 「닫기」 · 「발급 취소」만 있어요(Enter 로 제출해도 그대로).
     if (state.status === "pending" && state.resendBlocked) return;
@@ -915,7 +1014,7 @@ function CreateDialog({
       try {
         const result = await checkEmail(trimmed);
         setCheck({ email: key, result });
-        if (result.status === "pending") setLanguage(result.language);
+        if (result.status === "pending") pickPendingLanguage(result.language);
       } catch {
         setEmailError(CHECK_FAILED);
       }
@@ -938,12 +1037,15 @@ function CreateDialog({
           <label htmlFor="company" className="t-body-200-b">
             회사명
           </label>
-          <div className={`input-box${companyError ? " is-error" : ""}`}>
+          <div className={`input-box${companyError ? " is-error" : ""}${pending ? " is-readonly" : ""}`}>
             <input
               ref={companyRef}
               id="company"
               autoComplete="organization"
-              value={company}
+              // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
+              readOnly={!!pending}
+              placeholder={pending && !pending.company ? "이미 만든 계정의 회사명 그대로" : undefined}
+              value={pending ? (pending.company ?? "") : company}
               onChange={(e) => {
                 setCompany(e.target.value);
                 if (companyError) setCompanyError("");
@@ -1008,7 +1110,16 @@ function CreateDialog({
           </span>
           <div className="segmented" role="radiogroup" aria-labelledby="language-label">
             {LANGUAGES.map(({ value, label, Flag }) => (
-              <button key={value} type="button" role="radio" aria-checked={language === value} onClick={() => setLanguage(value)}>
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={language === value}
+                onClick={() => {
+                  langBeforePending.current = null; // 직접 고르면 되돌리지 않아요
+                  setLanguage(value);
+                }}
+              >
                 <Flag />
                 {label}
               </button>
@@ -1048,7 +1159,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || sending} aria-busy={sending || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || sending || checking} aria-busy={sending || checking || undefined}>
               {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
           </div>
@@ -1077,7 +1188,14 @@ function ResendDialog({
 }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  // 그사이 고객이 로그인했거나 취소된 계정 — 더 보낼 수 없으니 「닫기」만 남겨요(발급 취소 창과 같게).
+  const [final, setFinal] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const [mailFailure, setMailFailure] = useState<MailFailureReason | "blocked" | null>(null);
+
+  useEffect(() => {
+    if (final) closeRef.current?.focus();
+  }, [final]);
 
   async function send() {
     setSending(true);
@@ -1090,6 +1208,7 @@ function ResendDialog({
       return onMailFailed();
     }
     setError(resendErrorText(res.reason));
+    if (res.reason === "in_use" || res.reason === "not_found") setFinal(true);
   }
 
   if (mailFailure) {
@@ -1124,12 +1243,20 @@ function ResendDialog({
         </p>
       )}
       <div className="dialog-actions">
-        <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
-          취소
-        </button>
-        <button type="button" className="btn btn-dark" onClick={send} disabled={sending} aria-busy={sending || undefined}>
-          {sending ? "보내는 중…" : "다시 보내기"}
-        </button>
+        {final ? (
+          <button ref={closeRef} type="button" className="btn btn-outline" onClick={onClose}>
+            닫기
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
+              취소
+            </button>
+            <button type="button" className="btn btn-dark" onClick={send} disabled={sending} aria-busy={sending || undefined}>
+              {sending ? "보내는 중…" : "다시 보내기"}
+            </button>
+          </>
+        )}
       </div>
     </Dialog>
   );
@@ -1162,7 +1289,9 @@ function CancelDialog({
       <div className="summary">
         <div className="summary-target">
           <strong>{account.company}</strong>
-          <span>{account.email} · 첫 로그인 전</span>
+          <span>
+            {account.email} · {statusText(account)}
+          </span>
         </div>
         <dl className="summary-rows">
           <div>
@@ -1188,12 +1317,13 @@ function CancelDialog({
       )}
       <div className="dialog-actions">
         {error === "in_use" || error === "not_found" ? (
-          <button type="button" className="btn btn-outline" onClick={onClose}>
+          <button type="button" className="btn btn-outline" onClick={onClose} autoFocus>
             닫기
           </button>
         ) : (
           <>
-            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
+            {/* 처음 초점은 「취소」 — Enter 한 번에 지워지지 않게 */}
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending} data-autofocus>
               취소
             </button>
             <button type="button" className="btn btn-danger-outline" onClick={cancel} disabled={sending} aria-busy={sending || undefined}>
