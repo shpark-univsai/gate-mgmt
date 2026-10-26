@@ -24,7 +24,7 @@
   --overlay-dark-80: rgb(14 22 42 / 0.8);
   /* 목록 상태 점 (Figma 표의 「사용 중」 · 「첫 로그인 전」 점 색) */
   --status-ok: #0fb981;
-  --status-wait: #9f6401;
+  --status-wait: #f59e0b; /* Warning/300 — 대기 점이 빨간 오류 점(danger-400)과 갈리게(Warning/600 은 붉은 주황이라 비슷해 보임) */
   --radius-control: 4px; /* 버튼 · 입력 칸 · 창 · 알림 */
   --radius-container: 0; /* 카드 · 표 · 패널 */
 }
