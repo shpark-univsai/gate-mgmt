@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand, Dialog, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { IcArrowDown, IcArrowLeft, IcArrowRight, IcReload, IcSearch } from "@/components/icons";
+import { IcArrowDown, IcArrowLeft, IcArrowRight, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
 import {
   cancelIssue,
   checkEmail,
@@ -64,7 +64,7 @@ const fmtMonthDay = (iso: string) => {
 };
 
 /** 발급 취소 줄: 누가 · 언제 취소했는지 */
-const cancelNote = (a: Account) => `${handle(a.cancelledBy ?? "")} 취소 · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`;
+const cancelNote = (a: Account) => `취소 · ${handle(a.cancelledBy ?? "")} · ${a.cancelledAt ? fmtShort(a.cancelledAt) : ""}`; // 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」
 
 type ToastState = { title: string; detail: string } | null;
 
@@ -376,10 +376,14 @@ export default function AccountsPage() {
             <li className="empty">{emptyText}</li>
           )}
           {visible.map((a) => (
-            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
+            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${a.status === "cancelled" ? " is-cancelled" : ""}`}>
               <div className="card-line">
                 <strong className="card-company">{a.company}</strong>
-                <Status account={a} />
+                <span className="card-status">
+                  <Status account={a} />
+                  {/* 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
+                  {a.status === "pending" && <CardMore onCancel={() => setCancelTarget(a)} />}
+                </span>
               </div>
               <div className="card-line">
                 <span className="card-email">{a.email}</span>
@@ -389,18 +393,14 @@ export default function AccountsPage() {
                     재발송
                   </button>
                 )}
-                {/* 발급 취소 줄: 다시 보내기 자리에 누가 · 언제 */}
-                {a.status === "cancelled" && <span className="cancel-note">{cancelNote(a)}</span>}
               </div>
               <div className="card-line">
                 <span className="card-meta">
-                  {languageShort(a.language)} · {handle(a.createdBy)} · {fmtShort(a.createdAt)}
+                  {/* 발급 취소 카드: 메일 언어 · 만든 정보 대신 누가 · 언제 취소했는지만 */}
+                  {a.status === "cancelled"
+                    ? cancelNote(a)
+                    : `${languageShort(a.language)} · ${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
                 </span>
-                {a.status === "pending" && (
-                  <button type="button" className="link-action link-action--muted" onClick={() => setCancelTarget(a)}>
-                    발급 취소
-                  </button>
-                )}
               </div>
             </li>
           ))}
@@ -492,6 +492,51 @@ export default function AccountsPage() {
 }
 
 /** 오른쪽 위 프로필. 누르면 로그아웃이 있는 작은 메뉴가 열려요(휴대폰은 이메일도 메뉴 안에). */
+/** 휴대폰 카드 더보기(⋮) — 「발급 취소」. 프로필 메뉴와 같은 어두운 유리. */
+function CardMore({ onCancel }: { onCancel: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="card-more" ref={ref}>
+      <button type="button" className="card-more-button" aria-label="더보기" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <IcMoreVert size={18} />
+      </button>
+      {open && (
+        <div className="profile-menu card-more-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="profile-menu-item"
+            onClick={() => {
+              setOpen(false);
+              onCancel();
+            }}
+          >
+            발급 취소
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

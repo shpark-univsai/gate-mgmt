@@ -452,7 +452,7 @@ p {
   .profile-menu-email { display: block; }
   .profile-menu-item { height: 40px; }
   .content { padding: 16px; gap: 12px; }
-  .page-title h1 { font-size: 18px; line-height: 28px; }
+  .page-title h1 { font-size: 20px; line-height: 28px; }
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
   .search { width: 100%; height: 40px; }
   .search input { font-size: 16px; }
@@ -461,9 +461,16 @@ p {
   .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
   .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-200); display: flex; flex-direction: column; gap: 4px; }
   .card-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .card-company { font-size: 14px; line-height: 20px; }
-  .card-email { color: var(--gray-700); overflow-wrap: anywhere; }
+  /* 휴대폰은 PC 표보다 한 단계 크게: 회사명 16 · 이메일·상태·재발송 14 · 언어/생성자/날짜 13 (검색창 16보다 작아 보이지 않게) */
+  .card-company { font-size: 16px; line-height: 24px; }
+  .card-email { font-size: 14px; line-height: 20px; color: var(--gray-700); overflow-wrap: anywhere; }
   .card-meta { color: var(--gray-500); }
+  .card-row.is-cancelled .card-company,
+  .card-row.is-cancelled .card-email { color: var(--gray-500); } /* 발급 취소 카드는 흐리게 — 취소선은 「주소 오류」로 읽혀 쓰지 않음 */
+  .card-status { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; line-height: 20px; }
+  .card-more { position: relative; display: inline-flex; }
+  .card-more-button { display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; margin: -13px -14px -3px -6px; padding: 10px 0 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 40×36, 아이콘 자리는 그대로 · 아래로는 3px만 넘쳐 「재발송」과 안 겹침 */
+  .profile-menu.card-more-menu { top: calc(100% + 4px); right: 0; min-width: 140px; }
   .link-action {
     display: inline-flex;
     align-items: center;
@@ -471,9 +478,10 @@ p {
     flex: none;
     border: 0;
     background: none;
-    padding: 7px 0; /* 누르는 영역 32 이상, 화면 모양은 글자 높이 */
-    margin: -7px 0;
-    font-size: 13px;
+    padding: 0 0 14px; /* 누르는 영역 34, 화면 모양은 글자 높이 · 위는 ⋮ 자리라 아래로 넓힘 */
+    margin: 0 0 -14px;
+    font-size: 14px;
+    line-height: 20px;
     font-weight: 600;
     color: var(--gray-900);
     cursor: pointer;
@@ -481,6 +489,12 @@ p {
   .link-action--muted { font-weight: 400; color: var(--gray-500); }
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
+  /* 작은 버튼은 보이는 크기 그대로, 누르는 영역만 40 가까이 */
+  .page-btn,
+  .profile-button { position: relative; }
+  .page-btn::after { content: ""; position: absolute; inset: -6px -4px; } /* 36×40 · 버튼 사이 8px라 옆과 안 겹침 */
+  .profile-button::after { content: ""; position: absolute; inset: -6px; }
+  .eye-toggle { width: 40px; height: 38px; margin-right: 2px; }
   .pagination-range,
   .page-size { display: none; }
 
