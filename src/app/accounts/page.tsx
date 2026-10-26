@@ -139,7 +139,7 @@ const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
 };
 
 /** 계정 만들기 창에서 주소 오류가 났을 때 이메일 칸 아래 안내(I2 · C2 · 휴대폰 M8) — 같은 창에서 주소를 고쳐 재발송해요. */
-const FIX_ADDRESS_TEXT = "유효하지 않은 이메일 주소입니다. 주소를 고친 뒤 재발송해 주세요.";
+const FIX_ADDRESS_TEXT = "이메일 주소가 유효하지 않으니 고친 뒤 재발송해 주세요.";
 
 /** 메일 서버가 받지 않아 보내지 못한 경우(다시 누르기보다 까닭을 보여 줄 것) */
 const isMailFailure = (r: ResendFailure): r is MailFailureReason | "blocked" =>
