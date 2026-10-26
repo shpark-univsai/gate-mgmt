@@ -997,7 +997,9 @@ function CreateDialog({
     if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
     else if (!EMAIL_RE.test(trimmed)) eError = "이메일 형식을 확인해 주세요.";
     const fixCompany = wrong.company || company.trim();
-    const cError = fixCompany ? "" : "회사명을 입력해 주세요.";
+    let cError = "";
+    if (!fixCompany) cError = "회사명을 입력해 주세요.";
+    else if (!wrong.company && fixCompany.length > COMPANY_MAX) cError = `회사명은 ${COMPANY_MAX}자까지 쓸 수 있습니다.`;
     setEmailError(eError);
     setCompanyError(cError);
     setFormError("");
@@ -1011,8 +1013,15 @@ function CreateDialog({
     if (!res.ok) {
       setSending(false);
       if (res.reason === "duplicate" || res.reason === "in_use") {
-        setCheck(null); // 그사이 상태가 바뀌었어요 — 다시 조회해서 칸 아래에 보여 줘요
-        await runCheck();
+        // 그사이 상태가 바뀌었어요 — 서버에 다시 물어 칸 아래에 보여 줘요.
+        // (runCheck 는 이 렌더의 조회 결과 「new」를 그대로 돌려줘서 다시 묻지 않아요.)
+        try {
+          const result = await checkEmail(trimmed);
+          setCheck({ email: key, result });
+          if (result.status === "pending") pickPendingLanguage(result.language);
+        } catch {
+          setEmailError(CHECK_FAILED);
+        }
         return emailRef.current?.focus();
       }
       return setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
