@@ -908,8 +908,9 @@ function CreateDialog({
   const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
-  // 주소 오류가 3번 이어져 서버가 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙)
-  const blocked = pending?.resendBlocked === true;
+  // 마지막 발송이 주소 오류였거나(3번 막힘 포함) 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙).
+  // 이 창에서 만들거나 보내다 실패한 게 아니라 조회로 알게 된 경우라, 고쳐 재발송(fix)으로 넘기지 않아요 — 다른 이메일을 치면 새로 만들기예요.
+  const blocked = !!pending && (pending.resendBlocked === true || pending.mailFailureReason === "address");
   // 고치는 중인 계정의 주소 그대로인지 — 그대로면 다시 보내도 또 실패하니 발급 취소만
   const fixSame = !!fix && key === fix.email.toLowerCase();
   // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
@@ -973,8 +974,6 @@ function CreateDialog({
     setCheck({ email: asked, result });
     if (result.status === "pending") {
       pickPendingLanguage(result.language);
-      // 주소 오류로 보내지 못한 계정(3번 막힘 포함)이면 고쳐 재발송하는 창으로(C2). 이미 고치는 중이면 그대로.
-      if (!fix && (result.resendBlocked || result.mailFailureReason === "address")) setFix(pendingTarget(result));
     }
     return result;
   }
@@ -1190,6 +1189,12 @@ function CreateDialog({
               value={email}
               onChange={(e) => {
                 setEmail(e.target.value);
+                // 주소 오류 기록에서 주소를 고쳐 새로 만들 때: 회사명이 비어 있으면 그 기록의 회사명을 미리 채우고,
+                // 메일 언어도 그 기록의 언어로 둬요(둘 다 고칠 수 있어요)
+                if (!fix && blocked && pending) {
+                  if (pending.company && !company.trim()) setCompany(pending.company);
+                  langBeforePending.current = null;
+                }
                 if (emailError) setEmailError("");
                 if (formError) setFormError("");
                 setResetOpen(false);
@@ -1228,8 +1233,8 @@ function CreateDialog({
           </div>
         </div>
 
-        {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
-        {!fix && !inUse && (
+        {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중 · 발급 취소만 남은 기록이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
+        {!fix && !inUse && !blocked && (
         <div className="field">
           <span id="language-label" className="t-body-200-b">
             메일 언어
