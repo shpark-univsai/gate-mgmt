@@ -132,10 +132,10 @@ const MAIL_FAILURE_LABEL: Record<MailFailureReason, string> = {
 /** 만들기 · 다시 보내기 직후 창에 보여 주는 실패 까닭(I · I2 · J · K, 휴대폰 M6–M9) */
 const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
   temporary: "일시적인 오류로 안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  address: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
+  address: "이메일 주소가 유효하지 않으니 발급 취소 후 다시 만들어 주세요.",
   unknown: "안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
   // 3번 막힘도 영업에겐 같은 주소 오류 — 같은 문구 · 같은 버튼(닫기 · 발급 취소)
-  blocked: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
+  blocked: "이메일 주소가 유효하지 않으니 발급 취소 후 다시 만들어 주세요.",
 };
 
 /** 계정 만들기 창에서 주소 오류가 났을 때 이메일 칸 아래 안내(I2 · C2 · 휴대폰 M8) — 같은 창에서 주소를 고쳐 재발송해요. */
