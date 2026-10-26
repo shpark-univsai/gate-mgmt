@@ -146,6 +146,14 @@ p {
 .eye-toggle { display: flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; margin-right: 6px; padding: 0; border: 0; background: none; color: var(--gray-400); cursor: pointer; border-radius: var(--radius-control); }
 .eye-toggle:hover { color: var(--gray-500); }
 .help { color: var(--gray-500); }
+/* 칸 이름 줄: 이름 왼쪽 · 「고객이 비밀번호를 잊었나요?」 오른쪽, 펼친 안내는 그 바로 아래(간격 0, 오른쪽 정렬) */
+.field-top { display: flex; flex-direction: column; }
+.field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 18px; }
+.field-link { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--gray-500); font: inherit; font-size: 13px; line-height: 18px; cursor: pointer; }
+.field-link:hover { color: var(--gray-700); }
+.field-link svg { transition: transform 0.15s; }
+.field-link svg.is-up { transform: rotate(180deg); }
+.field-guide { margin: 0; text-align: right; font-size: 13px; line-height: 18px; }
 .error { color: var(--danger-400); }
 
 .segmented { display: flex; gap: 8px; }
@@ -554,6 +562,7 @@ p {
   .dialog-title { font-size: 18px; line-height: 28px; }
   .dialog-form { gap: 16px; }
   .dialog-form .field { gap: 6px; }
+  .dialog-form .field-guide { margin-bottom: 2px; } /* 휴대폰: 줄 간격 6 + 2 = 펼친 안내 → 이메일 칸 8 (MD′) */
   .input-box,
   .segmented button { height: 40px; }
   .dialog-actions .btn { flex: 1; height: 40px; }

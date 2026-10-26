@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand, Dialog, PopupSelect, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { IcArrowLeft, IcArrowRight, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
+import { IcArrowDown, IcArrowLeft, IcArrowRight, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
 import {
   cancelIssue,
   checkEmail,
@@ -898,6 +898,8 @@ function CreateDialog({
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
+  // 사용 중 이메일일 때 「고객이 비밀번호를 잊었나요?」로 펼치는 안내(D′ · MD′). 대신 보내기는 UG-421.
+  const [resetOpen, setResetOpen] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
 
@@ -1144,9 +1146,31 @@ function CreateDialog({
         </div>
 
         <div className="field">
-          <label htmlFor="email" className="t-body-200-b">
-            고객 이메일
-          </label>
+          <div className="field-top">
+            <div className="field-head">
+              <label htmlFor="email" className="t-body-200-b">
+                고객 이메일
+              </label>
+              {/* 사용 중일 때만: 누르면 바로 아래에 안내가 펼쳐지고, 다시 누르면 접혀요 */}
+              {inUse && (
+                <button
+                  type="button"
+                  className="field-link"
+                  aria-expanded={resetOpen}
+                  aria-controls="reset-guide"
+                  onClick={() => setResetOpen((o) => !o)}
+                >
+                  고객이 비밀번호를 잊었나요?
+                  <IcArrowDown size={12} className={resetOpen ? "is-up" : undefined} />
+                </button>
+              )}
+            </div>
+            {inUse && resetOpen && (
+              <p id="reset-guide" className="help field-guide">
+                로그인 화면의 「비밀번호 재설정」을 안내해 주세요.
+              </p>
+            )}
+          </div>
           <div className={`input-box${emailError || inUse || fixSame || fixTaken ? " is-error" : ""}`}>
             <input
               ref={emailRef}
@@ -1159,6 +1183,7 @@ function CreateDialog({
                 setEmail(e.target.value);
                 if (emailError) setEmailError("");
                 if (formError) setFormError("");
+                setResetOpen(false);
               }}
               onBlur={() => void runCheck()}
               aria-invalid={!!emailError || inUse || fixSame || fixTaken}
@@ -1177,7 +1202,7 @@ function CreateDialog({
               <p className="error">이미 만든 계정의 이메일입니다. 다른 주소를 입력해 주세요.</p>
             ) : fix && !inUse ? null : inUse ? (
               // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성
-              <p className="error">이미 사용 중인 계정입니다. 「비밀번호 재설정」을 안내해 주세요.</p>
+              <p className="error">이미 사용 중인 이메일입니다.</p>
             ) : blocked && pending ? (
               // 다시 보낼 수 없는 경우: 까닭은 아래 빨간 안내로, 실행 버튼은 「발급 취소」
               <p className="help">
@@ -1194,8 +1219,8 @@ function CreateDialog({
           </div>
         </div>
 
-        {/* 고치는 중이면 메일 언어는 처음 만든 그대로 — 줄을 숨겨요 */}
-        {!fix && (
+        {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
+        {!fix && !inUse && (
         <div className="field">
           <span id="language-label" className="t-body-200-b">
             메일 언어
