@@ -448,7 +448,7 @@ p {
 .summary-rows dd { margin: 0; font-weight: 600; }
 
 /* 메일 발송 실패 안내: 낱말 중간에서 줄이 바뀌지 않게(PC 는 한 줄, 휴대폰은 문장 끝에서) */
-.mail-failure { word-break: keep-all; }
+.mail-failure { word-break: keep-all; text-wrap: balance; } /* 휴대폰에서 끝 한 단어만 다음 줄로 떨어지지 않게 */
 .mail-failure--lines .mail-failure-sentence { display: block; } /* 두 문장짜리 막힘 안내는 PC 도 문장마다 */
 
 /* ── 완료 알림: 어두운 유리 ── */

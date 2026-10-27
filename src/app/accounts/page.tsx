@@ -132,14 +132,14 @@ const MAIL_FAILURE_LABEL: Record<MailFailureReason, string> = {
 /** 만들기 · 다시 보내기 직후 창에 보여 주는 실패 까닭(I · I2 · J · K, 휴대폰 M6–M9) */
 const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
   temporary: "일시적인 오류로 안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  address: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
+  address: "이메일 주소가 유효하지 않으니 발급 취소 후 다시 만들어 주세요.",
   unknown: "안내 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.",
   // 3번 막힘도 영업에겐 같은 주소 오류 — 같은 문구 · 같은 버튼(닫기 · 발급 취소)
-  blocked: "유효하지 않은 이메일 주소입니다. 발급 취소 후 다시 만들어 주세요.",
+  blocked: "이메일 주소가 유효하지 않으니 발급 취소 후 다시 만들어 주세요.",
 };
 
 /** 계정 만들기 창에서 주소 오류가 났을 때 이메일 칸 아래 안내(I2 · C2 · 휴대폰 M8) — 같은 창에서 주소를 고쳐 재발송해요. */
-const FIX_ADDRESS_TEXT = "유효하지 않은 이메일 주소입니다. 주소를 고친 뒤 재발송해 주세요.";
+const FIX_ADDRESS_TEXT = "이메일 주소가 유효하지 않으니 고친 뒤 재발송해 주세요.";
 
 /** 메일 서버가 받지 않아 보내지 못한 경우(다시 누르기보다 까닭을 보여 줄 것) */
 const isMailFailure = (r: ResendFailure): r is MailFailureReason | "blocked" =>
@@ -852,14 +852,17 @@ function useCancelNow(onCancelled: () => void) {
     if (res.ok) return onCancelled();
     setCancelError(res.reason);
   }
-  return { cancelling, cancelError, cancelNow };
+  /** 대상이 바뀌면(이메일을 고치면) 앞 기록의 취소 실패 안내를 지워요 — 다른 기록에 넘어가지 않게 */
+  const resetCancelError = () => setCancelError("");
+  return { cancelling, cancelError, cancelNow, resetCancelError };
 }
 
 /**
  * 「계정 만들기」 창(B · C · D). 보내기 전 확인은 이 창 하나로 해요.
  * 첫 로그인 전 이메일이면 이 창에서 다시 보내요 — 실패하면 목록의 다시 보내기 창(F)과 같은 결과(J · K)를 보여 줘요.
- * 주소 오류(I2 · C2 · M8)는 결과 화면으로 넘기지 않고 이 창에 남아요: 이메일이 그대로면 [닫기] [발급 취소],
- * 고치면 [닫기] [재발송](I3 · C3 · M8b) — 고친 주소로 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요.
+ * 이 창에서 만들거나 다시 보낸 결과가 주소 오류(I2 · M8)면 결과 화면으로 넘기지 않고 이 창에 남아요: 이메일이 그대로면
+ * [닫기] [발급 취소], 고치면 [닫기] [재발송](I3 · M8b) — 고친 주소로 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요.
+ * 조회로 만난 주소 오류 기록(C2)은 [닫기] [발급 취소]만이고, 이메일을 고치면 보통 새로 만들기예요(C3, 옛 기록은 그대로 — 16687).
  */
 function CreateDialog({
   onClose,
@@ -885,7 +888,7 @@ function CreateDialog({
   const [companyError, setCompanyError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [formError, setFormError] = useState("");
-  const { cancelling, cancelError, cancelNow } = useCancelNow(onCancelled);
+  const { cancelling, cancelError, cancelNow, resetCancelError } = useCancelNow(onCancelled);
   const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
   const [sending, setSending] = useState(false);
   // 이메일 미리 조회 중. 버튼은 잠그지 않아요 — 칸을 벗어나며 시작된 조회 때문에 첫 클릭이 사라졌어요.
@@ -908,8 +911,9 @@ function CreateDialog({
   const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
-  // 주소 오류가 3번 이어져 서버가 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙)
-  const blocked = pending?.resendBlocked === true;
+  // 마지막 발송이 주소 오류였거나(3번 막힘 포함) 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙).
+  // 이 창에서 만들거나 보내다 실패한 게 아니라 조회로 알게 된 경우라, 고쳐 재발송(fix)으로 넘기지 않아요 — 다른 이메일을 치면 새로 만들기예요.
+  const blocked = !!pending && (pending.resendBlocked === true || pending.mailFailureReason === "address");
   // 고치는 중인 계정의 주소 그대로인지 — 그대로면 다시 보내도 또 실패하니 발급 취소만
   const fixSame = !!fix && key === fix.email.toLowerCase();
   // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
@@ -973,8 +977,6 @@ function CreateDialog({
     setCheck({ email: asked, result });
     if (result.status === "pending") {
       pickPendingLanguage(result.language);
-      // 주소 오류로 보내지 못한 계정(3번 막힘 포함)이면 고쳐 재발송하는 창으로(C2). 이미 고치는 중이면 그대로.
-      if (!fix && (result.resendBlocked || result.mailFailureReason === "address")) setFix(pendingTarget(result));
     }
     return result;
   }
@@ -1071,8 +1073,9 @@ function CreateDialog({
     if (!state) return emailRef.current?.focus(); // 조회 실패 — 칸 아래 안내
 
     if (state.status === "in_use") return;
-    // 막힌 계정은 다시 보내지 않아요 — 창에 「닫기」 · 「발급 취소」만 있어요(Enter 로 제출해도 그대로).
-    if (state.status === "pending" && state.resendBlocked) return;
+    // 막힌 계정 · 주소 오류 기록은 다시 보내지 않아요 — 창에 「닫기」 · 「발급 취소」만 있어요(Enter 로 제출해도 그대로).
+    // 화면의 blocked 와 같은 규칙: 조회로 알게 된 주소 오류 기록에 다시 보내 고치는 모드로 들어가지 않게(16687)
+    if (state.status === "pending" && (state.resendBlocked || state.mailFailureReason === "address")) return;
 
     setSending(true);
     const input = { company: company.trim(), email: trimmed, language };
@@ -1190,8 +1193,15 @@ function CreateDialog({
               value={email}
               onChange={(e) => {
                 setEmail(e.target.value);
+                // 주소 오류 기록에서 주소를 고쳐 새로 만들 때: 회사명이 비어 있으면 그 기록의 회사명을 미리 채우고,
+                // 메일 언어도 그 기록의 언어로 둬요(둘 다 고칠 수 있어요)
+                if (!fix && blocked && pending) {
+                  if (pending.company && !company.trim()) setCompany(pending.company);
+                  langBeforePending.current = null;
+                }
                 if (emailError) setEmailError("");
                 if (formError) setFormError("");
+                if (cancelError) resetCancelError();
                 setResetOpen(false);
               }}
               onBlur={() => void runCheck()}
@@ -1228,8 +1238,8 @@ function CreateDialog({
           </div>
         </div>
 
-        {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
-        {!fix && !inUse && (
+        {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중 · 발급 취소만 남은 기록이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
+        {!fix && !inUse && !blocked && (
         <div className="field">
           <span id="language-label" className="t-body-200-b">
             메일 언어
