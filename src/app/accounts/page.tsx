@@ -852,14 +852,17 @@ function useCancelNow(onCancelled: () => void) {
     if (res.ok) return onCancelled();
     setCancelError(res.reason);
   }
-  return { cancelling, cancelError, cancelNow };
+  /** 대상이 바뀌면(이메일을 고치면) 앞 기록의 취소 실패 안내를 지워요 — 다른 기록에 넘어가지 않게 */
+  const resetCancelError = () => setCancelError("");
+  return { cancelling, cancelError, cancelNow, resetCancelError };
 }
 
 /**
  * 「계정 만들기」 창(B · C · D). 보내기 전 확인은 이 창 하나로 해요.
  * 첫 로그인 전 이메일이면 이 창에서 다시 보내요 — 실패하면 목록의 다시 보내기 창(F)과 같은 결과(J · K)를 보여 줘요.
- * 주소 오류(I2 · C2 · M8)는 결과 화면으로 넘기지 않고 이 창에 남아요: 이메일이 그대로면 [닫기] [발급 취소],
- * 고치면 [닫기] [재발송](I3 · C3 · M8b) — 고친 주소로 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요.
+ * 이 창에서 만들거나 다시 보낸 결과가 주소 오류(I2 · M8)면 결과 화면으로 넘기지 않고 이 창에 남아요: 이메일이 그대로면
+ * [닫기] [발급 취소], 고치면 [닫기] [재발송](I3 · M8b) — 고친 주소로 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요.
+ * 조회로 만난 주소 오류 기록(C2)은 [닫기] [발급 취소]만이고, 이메일을 고치면 보통 새로 만들기예요(C3, 옛 기록은 그대로 — 16687).
  */
 function CreateDialog({
   onClose,
@@ -885,7 +888,7 @@ function CreateDialog({
   const [companyError, setCompanyError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [formError, setFormError] = useState("");
-  const { cancelling, cancelError, cancelNow } = useCancelNow(onCancelled);
+  const { cancelling, cancelError, cancelNow, resetCancelError } = useCancelNow(onCancelled);
   const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
   const [sending, setSending] = useState(false);
   // 이메일 미리 조회 중. 버튼은 잠그지 않아요 — 칸을 벗어나며 시작된 조회 때문에 첫 클릭이 사라졌어요.
@@ -1070,8 +1073,9 @@ function CreateDialog({
     if (!state) return emailRef.current?.focus(); // 조회 실패 — 칸 아래 안내
 
     if (state.status === "in_use") return;
-    // 막힌 계정은 다시 보내지 않아요 — 창에 「닫기」 · 「발급 취소」만 있어요(Enter 로 제출해도 그대로).
-    if (state.status === "pending" && state.resendBlocked) return;
+    // 막힌 계정 · 주소 오류 기록은 다시 보내지 않아요 — 창에 「닫기」 · 「발급 취소」만 있어요(Enter 로 제출해도 그대로).
+    // 화면의 blocked 와 같은 규칙: 조회로 알게 된 주소 오류 기록에 다시 보내 고치는 모드로 들어가지 않게(16687)
+    if (state.status === "pending" && (state.resendBlocked || state.mailFailureReason === "address")) return;
 
     setSending(true);
     const input = { company: company.trim(), email: trimmed, language };
@@ -1197,6 +1201,7 @@ function CreateDialog({
                 }
                 if (emailError) setEmailError("");
                 if (formError) setFormError("");
+                if (cancelError) resetCancelError();
                 setResetOpen(false);
               }}
               onBlur={() => void runCheck()}
