@@ -729,7 +729,6 @@ export default function AccountsPage() {
       {cancelTarget && <CancelDialog account={cancelTarget} onClose={closeCancel} onCancelled={afterCancel} />}
 
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
-
     </>
   );
 }
@@ -1431,7 +1430,10 @@ function CreateDialog({
     const file = input.files?.[0];
     input.value = ""; // 입력 칸이 사진을 붙잡고 있지 않게(같은 사진을 다시 골라도 다시 읽어요)
     if (!file) return;
-    // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 다른 사람 사진이 이 발급에 저장되지 않게
+    // 보내는 중이거나 주소를 고치는 중(fix)에 늦게 온 사진은 받지 않아요 — 고치는 동안 보던 사진을 지우거나,
+    // 결과 화면 뒤에 사진이 메모리에 남지 않게
+    if (sending || fix || fixRef.current) return;
+    // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
     setScanFailed(false);
@@ -1462,7 +1464,6 @@ function CreateDialog({
     if (!result.values.email) emailRef.current?.focus();
   }
 
-  // 보여 줄 명함 사진: 이번에 찍은 것, 없으면 고치는 계정의 것(이 기기에 있으면)
   // 명함(칩)에서 들어온 이메일에 헷갈리는 글자가 있으면 다시 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   // @ 앞(로컬 부분)에 있을 때만 — 도메인까지 보면 거의 모든 주소에 떠요
   const showConfusable = scan?.links.email !== undefined && emailHasConfusable(trimmed);
@@ -1491,7 +1492,7 @@ function CreateDialog({
                     type="button"
                     className="btn btn-outline btn-sm"
                     onClick={() => fileRef.current?.click()}
-                    disabled={scanning}
+                    disabled={scanning || sending}
                     aria-busy={scanning || undefined}
                   >
                     {scanning ? SCAN_READING : "명함 다시 찍기"}
@@ -1527,7 +1528,7 @@ function CreateDialog({
                   type="button"
                   className="btn btn-outline scan-button"
                   onClick={() => fileRef.current?.click()}
-                  disabled={scanning}
+                  disabled={scanning || sending}
                   aria-busy={scanning || undefined}
                 >
                   {scanning ? SCAN_READING : "명함 찍어서 채우기"}
