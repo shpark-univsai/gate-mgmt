@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IcArrowDown, IcCheck } from "./icons";
+import { IcArrowDown, IcCheck, IcInputClose } from "./icons";
 
 /** inverse = 어두운 바탕(로그인)용: 흰색 로고 + 반전 배지 */
 export function Brand({ inverse = false }: { inverse?: boolean }) {
@@ -113,15 +113,18 @@ export function Dialog({
   );
 }
 
-/** 완료 알림 — 어두운 유리(반투명 + 흐림). 4초 뒤 사라져요. */
-export function Toast({ title, detail, onDone }: { title: string; detail: string; onDone: () => void }) {
+/**
+ * 완료 알림 — 어두운 유리(반투명 + 흐림). 4초 뒤 사라져요.
+ * tone="error" = 창이 이미 닫힌 뒤의 실패(「작성 중」 명함 저장 등, UG-431) — 같은 자리 · 모양에 아이콘만 빨간 ✕
+ */
+export function Toast({ title, detail, tone, onDone }: { title: string; detail: string; tone?: "error"; onDone: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDone, 4000);
     return () => clearTimeout(t);
   }, [onDone]);
   return (
-    <div className="toast" role="status" aria-live="polite">
-      <IcCheck size={18} className="toast-icon" />
+    <div className={`toast${tone === "error" ? " toast--error" : ""}`} role={tone === "error" ? "alert" : "status"} aria-live={tone === "error" ? "assertive" : "polite"}>
+      {tone === "error" ? <IcInputClose size={18} className="toast-icon" /> : <IcCheck size={18} className="toast-icon" />}
       <div>
         <p className="toast-title">{title}</p>
         <p className="toast-detail">{detail}</p>
