@@ -1,6 +1,7 @@
 // 발급 목록 CSV(UG-431 「CSV 내려받기」). 서버는 줄만 주고(GET /accounts/export) 파일은 브라우저가 만들어요.
 // 엑셀이 한글을 깨뜨리지 않게 UTF-8 BOM, 줄 끝은 CRLF, 칸은 RFC 4180 따옴표 규칙.
 // 고객이 적은 값(회사명 · 이름 등)이 엑셀에서 수식으로 실행되지 않게 = + - @ 탭 · CR 로 시작하면 앞에 ' 를 붙여요(CSV 수식 주입 방지).
+// 연락처 열만 예외 — 서버가 숫자 · 공백 · + - ( ) 만 받아(CreateAccountRequest) 수식이 될 수 없고, 「+82 …」 앞에 ' 가 붙어 보이지 않게.
 import type { AccountStatus, ExportRow, MailLanguage } from "./api";
 
 export const CSV_HEADERS = [
@@ -16,10 +17,13 @@ export const CSV_HEADERS = [
   "만든 일시",
 ] as const;
 
-/** 한 칸. 수식으로 읽힐 첫 글자는 ' 로 막고, 쉼표 · 따옴표 · 줄바꿈이 있으면 따옴표로 감싸요(안의 " 는 "" 로). */
-export function csvCell(value: string | null | undefined): string {
+/**
+ * 한 칸. 수식으로 읽힐 첫 글자는 ' 로 막고(guard), 쉼표 · 따옴표 · 줄바꿈이 있으면 따옴표로 감싸요(안의 " 는 "" 로).
+ * guard = false 는 서버가 글자를 제한하는 열(연락처)에만 써요.
+ */
+export function csvCell(value: string | null | undefined, guard = true): string {
   let v = value ?? "";
-  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+  if (guard && /^[=+\-@\t\r]/.test(v)) v = `'${v}`;
   return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
@@ -57,20 +61,18 @@ export function buildAccountsCsv(rows: readonly ExportRow[], labels: CsvLabels):
     CSV_HEADERS.join(","),
     ...rows.map((r) =>
       [
-        r.company,
-        r.name,
-        r.email,
-        r.phone,
-        labels.language(r.language),
-        labels.status(r.status),
-        r.firstLoginConsent,
-        r.marketingConsent,
-        r.createdBy,
-        kstDateTime(r.createdAt),
-      ]
-        .map(csvCell)
-        .join(","),
+        csvCell(r.company),
+        csvCell(r.name),
+        csvCell(r.email),
+        csvCell(r.phone, false),
+        csvCell(labels.language(r.language)),
+        csvCell(labels.status(r.status)),
+        csvCell(r.firstLoginConsent),
+        csvCell(r.marketingConsent),
+        csvCell(r.createdBy),
+        csvCell(kstDateTime(r.createdAt)),
+      ].join(","),
     ),
   ];
-  return `﻿${lines.join("\r\n")}\r\n`;
+  return `\uFEFF${lines.join("\r\n")}\r\n`;
 }

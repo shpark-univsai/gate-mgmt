@@ -7,8 +7,11 @@ export type ScanField = "company" | "name" | "email" | "phone";
 /** email = 메일 모양(@) · phone = 전화번호 모양(숫자 묶음) · other = 그 밖(이름 · 회사 · 직함 · 주소 등) */
 export type ChipKind = "email" | "phone" | "other";
 
-/** 읽은 한 줄. text = 칩에 보이는 글자(읽은 그대로), value = 메일 · 전화 칩이 칸에 넣는 값(줄에서 뽑은 주소 · 번호) */
-export type Chip = { id: number; text: string; kind: ChipKind; value: string };
+/**
+ * 읽은 한 줄(라벨 · 구분자로 나눈 조각). text = 칩에 보이는 글자(읽은 그대로), value = 메일 · 전화 칩이 칸에 넣는 값(뽑은 주소 · 번호).
+ * fax = 고른 번호가 팩스 라벨 바로 뒤 번호, titled = 같은 줄에 직함이 붙어 있음(이름 후보 순위)
+ */
+export type Chip = { id: number; text: string; kind: ChipKind; value: string; fax?: boolean; titled?: boolean };
 
 export type ScanValues = Record<ScanField, string>;
 
@@ -26,12 +29,27 @@ const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{
 const PHONE_RUN_RE = /\+?\(?\d[\d\s().-]{6,}\d/g;
 // 사업자 등록번호(123-45-67890) — 숫자 묶음이지만 전화번호가 아니에요
 const BIZ_NO_RE = /^\d{3}-\d{2}-\d{5}$/;
+// 날짜(2019.03.01 · 01/03/2019) — 숫자 묶음이지만 전화번호가 아니에요(「Since 2019.03.01」)
+const DATE_RE = /^(19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}$|^\d{1,2}[./-]\d{1,2}[./-](19|20)\d{2}$/;
 const URL_RE = /^(https?:\/\/|www)|\.(com|net|org|co\.kr|kr|io|ai)(\/|$)/i;
-const FAX_RE = /fax|팩스|(^|\s)F\s*[.:)]/i;
+// 팩스 라벨 — 번호 바로 앞 구간(앞 번호가 끝난 뒤 ~ 이 번호 앞)에서만 봐요. 줄 전체에 걸면 「T … F …」 줄의 전화번호도 팩스가 돼요.
+const FAX_BEFORE_RE = /fax|팩스|(^|[^A-Za-z])F\s*[.:)]?\s*$/i;
 
-// 회사 표시. 법인 표시가 「Company」 낱말보다 확실해요(로고 글자 「COMPANY-A」보다 「Company A Co., Ltd.」 줄을 고르게)
-const COMPANY_STRONG_RE = /\(주\)|㈜|\(유\)|주식회사|유한회사|\b(inc|corp|corporation|co|ltd|llc|gmbh|limited)\b\.?/i;
-const COMPANY_RE = /\(주\)|㈜|\(유\)|주식회사|유한회사|\b(inc|corp|corporation|co|ltd|llc|gmbh|limited|company)\b\.?/i;
+// 줄 가운데의 항목 라벨(T. · M. · E. · Tel · Mobile · Fax · Email …) 앞에서 줄을 나눠요 — 「M. 010-… E. hong@…」 처럼 한 줄에 둘이 있으면
+// 메일 칩이 전화번호를 삼켜요. 한 글자 라벨은 대문자만(주소 낱말과 헷갈리지 않게), 바로 뒤에 번호 · 메일이 와야 라벨로 봐요.
+const PHONE_LABEL = "(?:T|M|F|P|H|Tel|TEL|tel|Phone|PHONE|Mobile|MOBILE|Mob|Cell|HP|Fax|FAX|fax|Direct|DID|전화|휴대폰|휴대전화|핸드폰|팩스|직통)";
+const EMAIL_LABEL = "(?:E|E-mail|E-Mail|EMAIL|Email|email|Mail|MAIL|이메일|메일)";
+const LABEL_SPLIT_RE = new RegExp(
+  `\\s+(?=${PHONE_LABEL}\\s*[.:)]?\\s*[+(\\d]|${EMAIL_LABEL}\\s*[.:)]?\\s*[A-Za-z0-9._%+-]+@)`,
+  "g",
+);
+// 구분자: 띄어 쓴 / · · · • 와 | (붙어 있어도)
+const SEPARATOR_RE = /\s+[/·•]\s+|\s*\|\s*/;
+
+// 회사 표시. 법인 표시가 「Company」 낱말보다 확실해요(로고 글자 「COMPANY-A」보다 「Company A Co., Ltd.」 줄을 고르게).
+// 뒤에 - 가 붙은 낱말(Co-founder · Co-CEO)은 법인 표시가 아니에요.
+const COMPANY_STRONG_RE = /\(주\)|㈜|\(유\)|주식회사|유한회사|\b(inc|corp|corporation|co|ltd|llc|gmbh|limited)\b(?!-)\.?/i;
+const COMPANY_RE = /\(주\)|㈜|\(유\)|주식회사|유한회사|\b(inc|corp|corporation|co|ltd|llc|gmbh|limited|company)\b(?!-)\.?/i;
 
 // 직함 · 부서 낱말 — 이름 줄에서 떼어 내고, 이것만 있는 줄은 이름으로 보지 않아요
 const KO_TITLES = new Set(
@@ -59,6 +77,13 @@ const EN_STOPWORDS = new Set(
     "the and of"
   ).split(" "),
 );
+// 이름 줄에 붙는 영문 직함(이름 후보 순위용)
+const EN_TITLES = new Set(
+  (
+    "ceo cto cfo coo cmo cio vp evp svp president chairman founder co-founder manager director head lead officer " +
+    "engineer developer designer consultant representative partner principal executive specialist analyst researcher professor"
+  ).split(" "),
+);
 // 회사 메일이 아니라서 회사명을 짐작할 수 없는 도메인
 const FREE_MAIL = new Set(
   "gmail naver daum hanmail kakao nate outlook hotmail live yahoo icloud me proton protonmail msn".split(" "),
@@ -81,32 +106,61 @@ function joinSpacedHangul(line: string): string {
   return out.join(" ");
 }
 
-/** 읽은 글자 → 줄 목록. 공백을 고르고, 글자 · 숫자가 2개 미만인 잡음 줄과 같은 줄은 빼요. */
-export function readLines(text: string): string[] {
+/** 한 조각 정리: 공백을 고르고, 홀로 읽힌 기호와 앞뒤 테두리 잡음을 떼요. */
+function cleanSegment(raw: string): string {
+  const line = raw
+    // 낱말 사이에 홀로 읽힌 기호(「홍길동 _ 팀장」의 _)
+    .replace(/(^|\s)[_=~—–•·]+(?=\s|$)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    // 앞뒤에 붙는 테두리 · 구분선 잡음
+    .replace(/^[|_=~—–•·:;,'"`]+\s*/, "")
+    .replace(/\s*[|_=~—–•·:;,'"`]+$/, "");
+  return joinSpacedHangul(line);
+}
+
+const isMeaningful = (line: string) => {
+  const meaningful = line.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+  // 글자 · 숫자가 2개 미만이거나 기호가 글자보다 많으면 잡음(무늬 · 로고를 글자로 읽은 것)
+  return meaningful >= 2 && meaningful * 2 >= line.replace(/\s/g, "").length;
+};
+
+/** 직함 낱말만으로 된 조각(「팀장」 · 「Sales Manager」 같은) */
+const isRoleOnly = (seg: string) => {
+  const tokens = seg.split(" ").filter(Boolean);
+  return tokens.length > 0 && tokens.every((t) => isRoleToken(t) || EN_TITLES.has(t.toLowerCase().replace(/[.,]/g, "")));
+};
+const hasRole = (seg: string) => seg.split(" ").some((t) => isRoleToken(t) || EN_TITLES.has(t.toLowerCase().replace(/[.,]/g, "")));
+
+type Segment = { text: string; titled: boolean };
+
+/**
+ * 읽은 글자 → 조각 목록. 줄마다 구분자(/ · | …)와 줄 가운데 항목 라벨(T. · M. · E. · Fax …) 앞에서 나누고 정리해요.
+ * 잡음 조각과 같은 조각은 빼요. titled = 그 조각에 직함이 있거나, 같은 줄 바로 옆 조각이 직함뿐(「홍길동 | 팀장」).
+ */
+function readSegments(text: string): Segment[] {
   const seen = new Set<string>();
-  const lines: string[] = [];
+  const out: Segment[] = [];
   for (const raw of text.split(/\r?\n/)) {
-    let line = raw
-      .replace(/[ \t]/g, " ")
-      .replace(/＠/g, "@")
-      .replace(/\s*@\s*/g, "@")
-      // 낱말 사이에 홀로 읽힌 기호(「홍길동 _ 팀장」의 _)
-      .replace(/(^|\s)[|_=~—–•·]+(?=\s|$)/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      // 줄 앞뒤에 붙는 테두리 · 구분선 잡음
-      .replace(/^[|_=~—–•·:;,'"`]+\s*/, "")
-      .replace(/\s*[|_=~—–•·:;,'"`]+$/, "");
-    line = joinSpacedHangul(line);
-    const meaningful = line.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
-    if (meaningful < 2) continue;
-    // 기호가 글자보다 많으면 잡음(무늬 · 로고를 글자로 읽은 것)
-    if (meaningful * 2 < line.replace(/\s/g, "").length) continue;
-    if (seen.has(line)) continue;
-    seen.add(line);
-    lines.push(line);
+    const line = raw.replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim();
+    const segs = line
+      .split(SEPARATOR_RE)
+      .flatMap((part) => part.split(LABEL_SPLIT_RE))
+      .map(cleanSegment)
+      .filter(isMeaningful);
+    segs.forEach((seg, i) => {
+      if (seen.has(seg)) return;
+      seen.add(seg);
+      const titled = hasRole(seg) || (i > 0 && isRoleOnly(segs[i - 1])) || (i + 1 < segs.length && isRoleOnly(segs[i + 1]));
+      out.push({ text: seg, titled });
+    });
   }
-  return lines;
+  return out;
+}
+
+/** 읽은 글자 → 칩으로 보여 줄 줄(조각) 목록 */
+export function readLines(text: string): string[] {
+  return readSegments(text).map((s) => s.text);
 }
 
 /** 전화번호 모양만 남겨요 — 서버가 받는 글자(숫자 · 공백 · + · - · ( · ))로, 점은 - 로 바꿔요. */
@@ -122,37 +176,68 @@ const digitsOf = (s: string) => s.replace(/\D/g, "");
 /** 휴대전화(010 · +82 10) — 연락처 칸에 먼저 넣어요 */
 const isMobile = (phone: string) => /^(010|8210|82010)/.test(digitsOf(phone));
 
-/** 줄에서 전화번호를 뽑아요(여럿이면 휴대전화 먼저). 없으면 "" */
-export function extractPhone(line: string): string {
+type PhoneHit = { value: string; fax: boolean };
+
+/** 줄의 전화번호들. 날짜 · 사업자 등록번호는 빼고, 번호 바로 앞 구간에 팩스 라벨이 있으면 fax. */
+function phoneHits(line: string): PhoneHit[] {
   const valid = (p: string) => {
     const n = digitsOf(p).length;
     return n >= 8 && n <= 15 && !BIZ_NO_RE.test(p);
   };
-  const found = [...line.matchAll(PHONE_RUN_RE)].flatMap((m) => {
+  const hits: PhoneHit[] = [];
+  let prevEnd = 0;
+  for (const m of line.matchAll(PHONE_RUN_RE)) {
+    const before = line.slice(prevEnd, m.index);
+    prevEnd = m.index + m[0].length;
+    if (DATE_RE.test(m[0].trim())) continue;
+    const fax = FAX_BEFORE_RE.test(before);
     const whole = normalizePhone(m[0]);
     // 「02-123-4567 010-1234-5678」처럼 공백으로만 이어진 두 번호는 한 묶음으로 읽혀요 — 너무 길면 공백에서 나눠 봐요
-    return valid(whole) ? [whole] : whole.split(" ").filter(valid);
-  });
-  return found.find(isMobile) ?? found[0] ?? "";
+    for (const value of valid(whole) ? [whole] : whole.split(" ").filter(valid)) hits.push({ value, fax });
+  }
+  return hits;
 }
 
+/** 고를 번호: 휴대전화(팩스 아님) → 팩스 아닌 번호 → 그 밖 */
+function bestPhone(hits: PhoneHit[]): PhoneHit | undefined {
+  return hits.find((h) => !h.fax && isMobile(h.value)) ?? hits.find((h) => !h.fax) ?? hits[0];
+}
+
+/** 줄에서 전화번호를 뽑아요(여럿이면 휴대전화 먼저, 팩스는 나중). 없으면 "" */
+export function extractPhone(line: string): string {
+  return bestPhone(phoneHits(line))?.value ?? "";
+}
+
+/**
+ * 줄에서 메일 주소를 뽑아요. 붙어 읽힌 앞 라벨(「E.john@…」 · 「Email:…」)과 끝 도메인 뒤에 붙은 낱말(「…company.comTel」)은 떼요.
+ * 앞 라벨은 대문자 E · Email · Mail 만 — 소문자로 시작하는 주소(e.kim@…)는 그대로 둬요.
+ */
 export function extractEmail(line: string): string {
-  return line.match(EMAIL_RE)?.[0] ?? "";
+  const m = line.match(EMAIL_RE);
+  if (!m) return "";
+  const at = m[0].lastIndexOf("@");
+  const local = m[0].slice(0, at).replace(/^(?:E-?[Mm]ail|EMAIL|Mail|MAIL|E)[.:]+/, "") || m[0].slice(0, at);
+  const labels = m[0].slice(at + 1).split(".");
+  const last = labels.pop() ?? "";
+  // 소문자 끝 도메인 뒤에 대문자로 시작하는 낱말이 붙었으면 잘라요(comTel → com)
+  const cut = last.match(/^([a-z]{2,})[A-Z]/);
+  labels.push(cut ? cut[1] : last);
+  return `${local}@${labels.join(".")}`;
 }
 
-/** 한 줄의 종류와 칸에 넣을 값. 메일이 함께 있는 줄은 메일로 봐요(메일 칸이 더 중요해요). */
-export function classifyLine(line: string): { kind: ChipKind; value: string } {
+/** 한 줄의 종류와 칸에 넣을 값. 메일이 함께 있는 줄은 메일로 봐요(메일 칸이 더 중요해요 — 라벨로 나눈 뒤라 드물어요). */
+export function classifyLine(line: string): { kind: ChipKind; value: string; fax?: boolean } {
   const email = extractEmail(line);
   if (email) return { kind: "email", value: email };
-  const phone = extractPhone(line);
-  if (phone) return { kind: "phone", value: phone };
+  const phone = bestPhone(phoneHits(line));
+  if (phone) return { kind: "phone", value: phone.value, ...(phone.fax ? { fax: true } : {}) };
   return { kind: "other", value: line };
 }
 
 export function toChips(text: string): Chip[] {
-  return readLines(text)
+  return readSegments(text)
     .slice(0, MAX_CHIPS)
-    .map((line, i) => ({ id: i + 1, text: line, ...classifyLine(line) }));
+    .map((seg, i) => ({ id: i + 1, text: seg.text, ...classifyLine(seg.text), ...(seg.titled ? { titled: true } : {}) }));
 }
 
 export const looksLikeCompany = (line: string) => COMPANY_RE.test(line);
@@ -220,26 +305,32 @@ export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks 
   put("email", chips.find((c) => c.kind === "email"));
 
   const phones = chips.filter((c) => c.kind === "phone");
-  put("phone", phones.find((c) => isMobile(c.value)) ?? phones.find((c) => !FAX_RE.test(c.text)) ?? phones[0]);
+  put("phone", phones.find((c) => !c.fax && isMobile(c.value)) ?? phones.find((c) => !c.fax) ?? phones[0]);
 
   const others = () => chips.filter((c) => c.kind === "other" && !used.has(c.id));
   // 홈페이지 주소 줄(www.company-a.com)은 회사명이 아니에요 — 「company」 낱말이 들어 있어도
   const candidates = () => others().filter((c) => !URL_RE.test(c.text));
-  let company = candidates().find((c) => COMPANY_STRONG_RE.test(c.text)) ?? candidates().find((c) => looksLikeCompany(c.text));
-  if (!company && values.email) {
-    const label = values.email.split("@")[1]?.split(".")[0]?.toLowerCase() ?? "";
-    const key = lettersOf(label);
-    if (key.length >= 3 && !FREE_MAIL.has(label)) {
-      company = candidates().find((c) => {
-        const l = lettersOf(c.text);
-        return l.length >= 3 && nameFromLine(c.text) === null && (l.includes(key) || key.includes(l));
-      });
-    }
-  }
+  // 회사 메일 도메인(company-a.com → companya)과 맞는 줄 — 회사명 후보이고, 이름 후보에서는 빼요
+  const domain = values.email.split("@")[1]?.split(".")[0]?.toLowerCase() ?? "";
+  const key = !FREE_MAIL.has(domain) ? lettersOf(domain) : "";
+  const matchesDomain = (c: Chip) => {
+    const l = lettersOf(c.text);
+    return key.length >= 3 && l.length >= 3 && (l.includes(key) || key.includes(l));
+  };
+  const company =
+    candidates().find((c) => COMPANY_STRONG_RE.test(c.text)) ??
+    candidates().find((c) => looksLikeCompany(c.text)) ??
+    candidates().find(matchesDomain);
   put("company", company);
 
-  const named = others().filter((c) => nameFromLine(c.text) !== null);
-  put("name", named.find((c) => /[가-힣]/.test(c.text)) ?? named[0]);
+  // 이름 후보 순위: 직함과 같은 줄 > 한글 3글자 > 그 밖의 한글 > 로마자 — 법인 표시 없는 2~4글자 회사명(「유니브스」)이 이름으로 가지 않게
+  const score = (c: Chip) => {
+    const name = nameFromLine(c.text) ?? "";
+    const ko = /^[가-힣]+$/.test(name);
+    return (c.titled ? 4 : 0) + (ko && name.length === 3 ? 2 : 0) + (ko ? 1 : 0);
+  };
+  const named = others().filter((c) => !matchesDomain(c) && nameFromLine(c.text) !== null);
+  put("name", named.reduce<Chip | undefined>((best, c) => (!best || score(c) > score(best) ? c : best), undefined));
 
   return { values, links };
 }
@@ -248,6 +339,12 @@ export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks 
 export function scanCard(text: string): { chips: Chip[]; values: ScanValues; links: ScanLinks } {
   const chips = toChips(text);
   return { chips, ...autoFill(chips) };
+}
+
+/** 칩이 「칸에 들어감」으로 보이는지 — 잠긴 칸(숨은 값)에 연결된 칩은 「아직 안 씀」으로 보여요 */
+export function isFilled(links: ScanLinks, chipId: number, locked: readonly ScanField[] = []): boolean {
+  const f = fieldOf(links, chipId);
+  return f !== null && !locked.includes(f);
 }
 
 /** 이 칩이 들어가 있는 칸(없으면 null) */
@@ -263,7 +360,7 @@ export function fieldOf(links: ScanLinks, chipId: number): ScanField | null {
  * - 그 밖의 칩 → 커서가 있는 칸. 커서가 없으면 회사명 → 이름 중 빈 칸, 둘 다 차 있으면 넣지 않고 이름 칸에 커서(3)
  * - 이미 칩이 들어간 칸에 넣으면 바꿔 끼우고 앞 칩은 「아직 안 씀」(4)
  * - 직접 고쳐 연결이 끊긴 칩은 「아직 안 씀」이라 칸을 지우지 않고 다시 넣어요(6)
- * locked = 지금 고칠 수 없는 칸(이미 만든 계정의 회사명 등) — 그 칸에는 넣지 않아요.
+ * locked = 지금 고칠 수 없는 칸(이미 만든 계정의 회사명 등) — 그 칸에는 넣지 않고, 그 칸에 연결된 칩은 「아직 안 씀」으로 봐요.
  */
 export function tapChip(
   chip: Chip,
@@ -272,7 +369,12 @@ export function tapChip(
   cursor: ScanField | null,
   locked: readonly ScanField[] = [],
 ): ChipTap {
-  const current = fieldOf(links, chip.id);
+  let current = fieldOf(links, chip.id);
+  if (current && locked.includes(current)) {
+    // 잠긴 칸의 칩은 화면에서 「아직 안 씀」으로 보여요 — 누르면 잠긴 칸(숨은 값)을 비우지 않고 연결만 풀어 새로 넣어요
+    links = unlink(links, current);
+    current = null;
+  }
   if (current) {
     const next = { ...links };
     delete next[current];

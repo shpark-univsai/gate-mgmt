@@ -24,8 +24,8 @@ import {
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
-import { readCardText } from "@/lib/card-ocr";
-import { fieldOf, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
+import { createCardReader } from "@/lib/card-ocr";
+import { isFilled, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -335,7 +335,12 @@ export default function AccountsPage() {
     const res = await exportAccounts(query);
     setExporting(false);
     if (!res.ok) return setExportError({ for: query, text: res.reason === "too_many" ? EXPORT_TOO_MANY : EXPORT_FAILED });
-    downloadCsv(buildAccountsCsv(res.rows, { language: languageName, status: (s) => STATUS_LABEL[s] }), exportFileName(new Date()));
+    try {
+      downloadCsv(buildAccountsCsv(res.rows, { language: languageName, status: (s) => STATUS_LABEL[s] }), exportFileName(new Date()));
+    } catch {
+      // 파일 만들기 · 내려받기 실패(브라우저 메모리 등)도 같은 안내
+      return setExportError({ for: query, text: EXPORT_FAILED });
+    }
     setToast({ title: "CSV 파일을 내려받았습니다", detail: `계정 ${res.rows.length}개` });
   }
 
@@ -975,6 +980,11 @@ function CreateDialog({
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
+  // 명함 읽기가 끝났을 때 고치는 모드인지 보려고(읽는 동안 바뀔 수 있어요)
+  const fixRef = useRef<Account | null>(null);
+  useEffect(() => {
+    fixRef.current = fix;
+  }, [fix]);
   // 사용 중 이메일일 때 「고객이 비밀번호를 잊었나요?」로 펼치는 안내(D′ · MD′). 대신 보내기는 UG-421.
   const [resetOpen, setResetOpen] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -983,6 +993,12 @@ function CreateDialog({
   const phoneRef = useRef<HTMLInputElement>(null);
   // 명함 읽기(UG-431). 사진은 상태에 두지 않아요 — 읽는 함수 안에서만 쓰고 버려요.
   const fileRef = useRef<HTMLInputElement>(null);
+  // 읽기 도구 — 창이 열려 있는 동안 일꾼을 다시 쓰고, 창을 닫으면 닫아요
+  const [reader] = useState(createCardReader);
+  useEffect(() => {
+    reader.open();
+    return () => reader.dispose();
+  }, [reader]);
   const [scanning, setScanning] = useState(false);
   const [scan, setScan] = useState<{ chips: Chip[]; links: ScanLinks } | null>(null);
   const [scanFailed, setScanFailed] = useState(false);
@@ -1068,7 +1084,8 @@ function CreateDialog({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy.current) return;
+    // 명함을 읽는 동안에는 보내지 않아요 — 읽은 값이 보낸 뒤에 칸을 바꾸지 않게
+    if (busy.current || scanning) return;
     busy.current = true;
     try {
       await submit();
@@ -1087,11 +1104,12 @@ function CreateDialog({
     let cError = "";
     if (!fixCompany) cError = "회사명을 입력해 주세요.";
     else if (!wrong.company && fixCompany.length > COMPANY_MAX) cError = `회사명은 ${COMPANY_MAX}자까지 쓸 수 있습니다.`;
-    // 회사명처럼 이름 · 연락처도 고치는 계정의 것 그대로(칸이 잠겨요). 서버가 회사명을 주지 않은 옛 기록이면 입력값 — 이름은 비어도 돼요.
-    const fixName = wrong.company ? (wrong.name ?? "") : name.trim();
-    const fixPhone = wrong.company ? (wrong.phone ?? "") : phone.trim();
-    const nError = wrong.company ? "" : nameErrorOf(fixName, false);
-    const pError = wrong.company ? "" : phoneErrorOf(fixPhone);
+    // 고치는 계정에 이름이 있으면(이 창에서 만든 계정) 이름 · 연락처는 그 계정 것 그대로(칸이 잠겨요).
+    // 없으면(조회로 만난 기록 C2 — 조회가 이름을 주지 않음 · 이름 없는 옛 기록) 칸을 열고 새로 만들 때처럼 이름은 필수.
+    const fixName = wrong.name ? wrong.name : name.trim();
+    const fixPhone = wrong.name ? (wrong.phone ?? "") : phone.trim();
+    const nError = wrong.name ? "" : nameErrorOf(fixName, true);
+    const pError = wrong.name ? "" : phoneErrorOf(fixPhone);
     setEmailError(eError);
     setCompanyError(cError);
     setNameError(nError);
@@ -1221,18 +1239,22 @@ function CreateDialog({
 
   // 고치는 중이면 그 계정의 회사명(서버가 회사명을 주지 않았으면 입력), 아니면 첫 로그인 전 기록의 회사명 — 고칠 수 없어요
   const companyLocked = fix ? !!fix.company : !!pending;
-  // 이름 · 연락처도 같은 때 잠가요. 고치는 중이면 그 계정의 값, 첫 로그인 전 기록이면 비워 둬요(조회가 주지 않고, 다시 보내기엔 쓰지 않아요).
-  const personLocked = companyLocked;
-  const nameShown = fix?.company ? (fix.name ?? "") : !fix && pending ? "" : name;
-  const phoneShown = fix?.company ? (fix.phone ?? "") : !fix && pending ? "" : phone;
+  // 이름 · 연락처: 고치는 중이면 그 계정에 이름이 있을 때만 잠가요(그 계정 값). 이름이 없으면(C2 · 옛 기록) 열어서 받아요.
+  // 첫 로그인 전 기록이면 잠그고 비워 둬요(조회가 주지 않고, 다시 보내기엔 쓰지 않아요).
+  const personLocked = fix ? !!fix.name : !!pending;
+  const nameShown = fix?.name ? fix.name : !fix && pending ? "" : name;
+  const phoneShown = fix?.name ? (fix.phone ?? "") : !fix && pending ? "" : phone;
+  // 칩을 넣지 않을 칸(잠긴 칸) — 그 칸에 연결된 칩은 「아직 안 씀」으로 보여요
+  const lockedFields: ScanField[] = [...(companyLocked ? (["company"] as const) : []), ...(personLocked ? (["name", "phone"] as const) : [])];
 
   /** 이메일 칸 값 바꾸기 — 직접 칠 때와 명함 · 칩으로 넣을 때가 같은 정리를 해요(앞 기록의 안내가 남지 않게). */
-  function changeEmail(value: string) {
+  // companyNow = 지금 회사명 칸 값(명함으로 함께 채울 때는 새 값 — 옛 기록 회사명이 명함 회사명을 덮지 않게)
+  function changeEmail(value: string, companyNow: string = company) {
     setEmail(value);
     // 주소 오류 기록에서 주소를 고쳐 새로 만들 때: 회사명이 비어 있으면 그 기록의 회사명을 미리 채우고,
     // 메일 언어도 그 기록의 언어로 둬요(둘 다 고칠 수 있어요)
     if (!fix && blocked && pending) {
-      if (pending.company && !company.trim()) setCompany(pending.company);
+      if (pending.company && !companyNow.trim()) setCompany(pending.company);
       langBeforePending.current = null;
     }
     if (emailError) setEmailError("");
@@ -1252,7 +1274,7 @@ function CreateDialog({
       setName(v);
       setNameError("");
     },
-    email: changeEmail,
+    email: (v) => changeEmail(v),
     phone: (v) => {
       setPhone(v);
       setPhoneError("");
@@ -1285,8 +1307,7 @@ function CreateDialog({
   function onChip(chip: Chip, now: number) {
     if (!scan) return;
     const at = cursorField(now);
-    const locked: ScanField[] = personLocked ? ["company", "name", "phone"] : [];
-    const r = tapChip(chip, scan.links, { company, name, email, phone }, at, locked);
+    const r = tapChip(chip, scan.links, { company, name, email, phone }, at, lockedFields);
     setScan({ ...scan, links: r.links });
     if (r.set) putField[r.set.field](r.set.value);
     // 커서는 있던 칸에 그대로(메일 · 전화 칩이 다른 칸에 들어가도) — 다음 칩도 같은 칸을 고를 수 있게
@@ -1307,16 +1328,22 @@ function CreateDialog({
     setScanFailed(false);
     let text: string | null;
     try {
-      text = await readCardText(photo);
+      text = await reader.read(photo);
     } catch {
       text = null;
     } finally {
       setScanning(false);
     }
+    // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
+    if (fixRef.current) return;
     const result = text === null ? null : scanCard(text);
     if (!result || result.chips.length === 0) return setScanFailed(true);
     setScan({ chips: result.chips, links: result.links });
-    (Object.keys(putField) as ScanField[]).forEach((f) => putField[f](result.values[f]));
+    // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기가 명함 회사명을 덮지 않게(비었을 때만 채워요)
+    putField.company(result.values.company);
+    putField.name(result.values.name);
+    putField.phone(result.values.phone);
+    changeEmail(result.values.email, result.values.company);
     cursor.current = null;
     setEmailMissing(!result.values.email);
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
@@ -1353,7 +1380,7 @@ function CreateDialog({
                 </div>
                 <div className="scan-chips" role="group" aria-label="명함에서 읽은 줄">
                   {scan.chips.map((chip) => {
-                    const filled = fieldOf(scan.links, chip.id) !== null;
+                    const filled = isFilled(scan.links, chip.id, lockedFields);
                     return (
                       <button
                         key={chip.id}
@@ -1624,7 +1651,7 @@ function CreateDialog({
                 </button>
               )
             ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || fixTaken || sending} aria-busy={sending || checking || undefined}>
+              <button type="submit" className="btn btn-dark" disabled={inUse || fixTaken || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -1646,7 +1673,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || sending} aria-busy={sending || checking || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || sending || scanning} aria-busy={sending || checking || undefined}>
               {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
           </div>
