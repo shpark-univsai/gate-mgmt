@@ -187,11 +187,7 @@ p {
 .scan-chip.is-filled { background: var(--gray-200); border-color: transparent; color: var(--gray-900); font-weight: 700; }
 .scan-chip:disabled { cursor: default; }
 
-/* ── 명함 사진 · 작성하던 명함(기획 16861) · 헷갈리는 글자 ── */
-.card-photo { display: flex; flex-direction: column; gap: 6px; }
-.draft-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px; border: 1px solid var(--gray-200); border-radius: var(--radius-control); background: var(--gray-50); }
-.draft-notice p { margin: 0; color: var(--gray-900); }
-.draft-notice-actions { display: flex; gap: 8px; }
+/* ── 명함 사진(발급 창 메모리에만) · 헷갈리는 글자 ── */
 .card-thumb { align-self: flex-start; display: block; width: 96px; height: 60px; padding: 0; border: 1px solid var(--gray-200); border-radius: var(--radius-control); overflow: hidden; background: var(--gray-50); cursor: zoom-in; }
 .card-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .photo-viewer {
