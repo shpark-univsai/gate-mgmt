@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand, Dialog, PopupSelect, Toast } from "@/components/ui";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { IcArrowDown, IcArrowLeft, IcArrowRight, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
+import { IcArrowDown, IcArrowLeft, IcArrowRight, IcCamera, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
 import {
   cancelIssue,
   checkEmail,
@@ -26,7 +26,18 @@ import { useStaff } from "@/lib/session";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader } from "@/lib/card-ocr";
 import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
-import { confusableParts, emailHasConfusable, isFilled, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
+import {
+  confusableParts,
+  emailDomain,
+  emailHasConfusable,
+  isFilled,
+  scanCard,
+  tapChip,
+  unlink,
+  type Chip,
+  type ScanField,
+  type ScanLinks,
+} from "@/lib/card-scan";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -53,6 +64,8 @@ const personInput = (name: string, phone: string) => ({ ...(name ? { name } : {}
 // 안내 문구는 명함 사진 문구와 함께 card-photo.ts 한 곳에
 const SCAN_HELP = CARD_PHOTO_TEXT.scanHelp;
 const SCAN_READING = "명함을 읽고 있습니다…";
+// 읽는 동안만(N2) — 첫 읽기는 글자 읽기 도구(약 8MB)를 내려받아 더 걸려요
+const SCAN_WAIT = "보통 몇 초 걸립니다. 처음 한 번은 글자 읽기 도구를 내려받아 조금 더 걸립니다.";
 const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있으니 고객과 함께 확인해 주세요.";
 // 읽기 도구를 받지 못했거나(첫 사용 · 인터넷 없음) 글자를 찾지 못함 — 막힌 게 아니라 직접 입력하면 돼서 회색
 const SCAN_FAILED = "명함을 읽지 못했습니다. 다시 찍거나 직접 입력해 주세요.";
@@ -186,6 +199,8 @@ const MAIL_FAILURE_TEXT: Record<MailFailureReason | "blocked", string> = {
 
 /** 계정 만들기 창에서 주소 오류가 났을 때 이메일 칸 아래 안내(I2 · C2 · 휴대폰 M8) — 같은 창에서 주소를 고쳐 재발송해요. */
 const FIX_ADDRESS_TEXT = "이메일 주소가 유효하지 않으니 고친 뒤 재발송해 주세요.";
+/** 만들기 전 도메인 확인에 걸려 서버가 계정을 만들지 않음(MGMT-108) — 이메일 칸 아래 안내. 서버 문구 대신 이 화면 문구를 써요. */
+const DOMAIN_ERROR_TEXT = "도메인을 다시 확인해 주세요.";
 
 /** 메일 서버가 받지 않아 보내지 못한 경우(다시 누르기보다 까닭을 보여 줄 것) */
 const isMailFailure = (r: ResendFailure): r is MailFailureReason | "blocked" =>
@@ -451,9 +466,26 @@ export default function AccountsPage() {
       <main className="content">
         <div className="page-title">
           <h1 className="t-heading-300">계정 발급</h1>
-          <button type="button" className="btn btn-dark btn-sm" onClick={() => setCreating(true)}>
-            계정 만들기
-          </button>
+          <div className="page-actions">
+            {exportError?.for === applied && (
+              <span className="error" role="alert">
+                {exportError.text}
+              </span>
+            )}
+            {/* 「CSV 내려받기」(N5) — 「계정 만들기」 왼쪽. PC · 아이패드만(휴대폰은 .export-button 을 숨겨요) */}
+            <button
+              type="button"
+              className="btn btn-outline btn-sm export-button"
+              onClick={onExport}
+              disabled={exporting}
+              aria-busy={exporting || undefined}
+            >
+              {exporting ? "내려받는 중…" : "CSV 내려받기"}
+            </button>
+            <button type="button" className="btn btn-dark btn-sm" onClick={() => setCreating(true)}>
+              계정 만들기
+            </button>
+          </div>
         </div>
 
         <section className="overview" aria-label="요약">
@@ -535,15 +567,6 @@ export default function AccountsPage() {
             ))}
           </div>
           <span className="count">총 {total}개</span>
-          {/* PC · 아이패드만 — 휴대폰은 .toolbar .btn 을 숨겨요 */}
-          <button type="button" className="btn btn-outline btn-sm" onClick={onExport} disabled={exporting} aria-busy={exporting || undefined}>
-            {exporting ? "내려받는 중…" : "CSV 내려받기"}
-          </button>
-          {exportError?.for === applied && (
-            <span className="error" role="alert">
-              {exportError.text}
-            </span>
-          )}
           {loadError && rows.length > 0 && (
             <span className="error" role="alert">
               {LOAD_FAILED}
@@ -793,22 +816,41 @@ function CardPhotoViewer({ src, onClose }: { src: string; onClose: () => void })
   );
 }
 
-/** 명함에서 읽은 이메일을 다시 보여 주며 헷갈리는 글자(0 · O · o, 1 · l · I · i)만 강조해요. */
-function ConfusableEmail({ email }: { email: string }) {
+/**
+ * 명함에서 읽은 이메일 칸 아래 안내 — 위아래로 쌓아 겹치지 않게.
+ * 로컬 부분(@ 앞)에 헷갈리는 글자(0 · O, 1 · l · I)가 있으면 이메일을 다시 보여 주며 그 글자만 강조하고,
+ * 도메인이 있으면 「도메인 — 명함과 같은지 확인해 주세요.」(도메인만 굵게, 기획 16846 — company-a.com 을 company-a.qi 로 읽는 일).
+ */
+function ScannedEmailNotes({ email }: { email: string }) {
+  const confusable = emailHasConfusable(email);
+  const domain = emailDomain(email);
+  if (!confusable && !domain) return null;
   return (
     <div className="confusable">
-      <p className="confusable-email" translate="no">
-        {confusableParts(email).map((p, i) =>
-          p.confusable ? (
-            <mark key={i} className="confusable-char">
-              {p.text}
-            </mark>
-          ) : (
-            <span key={i}>{p.text}</span>
-          ),
-        )}
-      </p>
-      <p className="help">{CARD_PHOTO_TEXT.confusable}</p>
+      {confusable && (
+        <>
+          <p className="confusable-email" translate="no">
+            {confusableParts(email).map((p, i) =>
+              p.confusable ? (
+                <mark key={i} className="confusable-char">
+                  {p.text}
+                </mark>
+              ) : (
+                <span key={i}>{p.text}</span>
+              ),
+            )}
+          </p>
+          <p className="help">{CARD_PHOTO_TEXT.confusable}</p>
+        </>
+      )}
+      {domain && (
+        <p className="help">
+          <strong className="domain-check" translate="no">
+            {domain}
+          </strong>{" "}
+          — {CARD_PHOTO_TEXT.domainCheck}
+        </p>
+      )}
     </div>
   );
 }
@@ -1231,6 +1273,11 @@ function CreateDialog({
         }
         return emailRef.current?.focus();
       }
+      if (res.reason === "domain") {
+        // 도메인 확인에 걸려 새 계정을 만들지 않았어요 — 잘못된 주소의 계정도 그대로 두고 이 창에서 다시 고쳐요
+        setEmailError(DOMAIN_ERROR_TEXT);
+        return emailRef.current?.focus();
+      }
       return setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
     }
     // 잘못된 주소의 계정은 메일이 아무에게도 가지 않았어요 — 확인 없이 정리해요. 실패해도 목록에 「이메일 주소 오류」로 남아 직접 취소할 수 있어요.
@@ -1339,6 +1386,10 @@ function CreateDialog({
       } catch {
         setEmailError(CHECK_FAILED);
       }
+      emailRef.current?.focus();
+    } else if (res.reason === "domain") {
+      // 도메인 확인에 걸려 계정을 만들지 않았어요 — 창은 닫지 않고 이메일 칸 아래에 안내해요
+      setEmailError(DOMAIN_ERROR_TEXT);
       emailRef.current?.focus();
     } else setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
   }
@@ -1453,7 +1504,8 @@ function CreateDialog({
     const result = text === null ? null : scanCard(text);
     if (!result || result.chips.length === 0) return setScanFailed(true);
     setScan({ chips: result.chips, links: result.links });
-    // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기가 명함 회사명을 덮지 않게(비었을 때만 채워요)
+    // 회사명 · 이름은 비워요(처음 채우기는 이메일 · 연락처만 — 직원이 칩을 눌러 넣어요, 기획 16846)
+    // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기는 회사명 칸이 비었을 때만 채워요
     putField.company(result.values.company);
     putField.name(result.values.name);
     putField.phone(result.values.phone);
@@ -1464,9 +1516,8 @@ function CreateDialog({
     if (!result.values.email) emailRef.current?.focus();
   }
 
-  // 명함(칩)에서 들어온 이메일에 헷갈리는 글자가 있으면 다시 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
-  // @ 앞(로컬 부분)에 있을 때만 — 도메인까지 보면 거의 모든 주소에 떠요
-  const showConfusable = scan?.links.email !== undefined && emailHasConfusable(trimmed);
+  // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
+  const scannedEmail = scan?.links.email !== undefined;
 
   if (mailFailure) {
     return (
@@ -1518,8 +1569,9 @@ function CreateDialog({
                     );
                   })}
                 </div>
+                {/* 다시 읽는 동안에는 지난 결과(「명함에서 읽었습니다…」) 대신 기다림 안내 — 낭독기가 읽게 같은 상태 줄에 */}
                 <p className="help" role="status">
-                  {scanFailed ? SCAN_FAILED : SCAN_DONE}
+                  {scanning ? SCAN_WAIT : scanFailed ? SCAN_FAILED : SCAN_DONE}
                 </p>
               </>
             ) : (
@@ -1531,11 +1583,14 @@ function CreateDialog({
                   disabled={scanning || sending}
                   aria-busy={scanning || undefined}
                 >
+                  <IcCamera size={16} />
                   {scanning ? SCAN_READING : "명함 찍어서 채우기"}
                 </button>
-                <p className="help" role="status">
-                  {scanFailed ? SCAN_FAILED : SCAN_HELP}
-                </p>
+                {/* 읽는 동안(N2)은 안내 아래에 기다림 안내를 한 줄 더 — 둘 다 상태 줄 안이라 낭독기가 읽어요 */}
+                <div className="scan-status" role="status">
+                  <p className="help">{scanFailed ? SCAN_FAILED : SCAN_HELP}</p>
+                  {scanning && <p className="help">{SCAN_WAIT}</p>}
+                </div>
               </>
             )}
           </div>
@@ -1553,7 +1608,7 @@ function CreateDialog({
                 autoComplete="organization"
                 // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
                 readOnly={companyLocked}
-                placeholder={!fix && pending && !pending.company ? "이미 만든 계정의 회사명 그대로" : undefined}
+                placeholder={!fix && pending ? (pending.company ? undefined : "이미 만든 계정의 회사명 그대로") : "회사명"}
                 value={fix?.company ? fix.company : !fix && pending ? (pending.company ?? "") : company}
                 onChange={(e) => {
                   setCompany(e.target.value);
@@ -1583,7 +1638,7 @@ function CreateDialog({
                 id="person-name"
                 autoComplete="off"
                 readOnly={personLocked}
-                placeholder={!fix && pending ? "이미 만든 계정 그대로" : undefined}
+                placeholder={!fix && pending ? "이미 만든 계정 그대로" : "고객 이름"}
                 value={nameShown}
                 onChange={(e) => {
                   setName(e.target.value);
@@ -1638,6 +1693,7 @@ function CreateDialog({
                 type="email"
                 inputMode="email"
                 autoComplete="off"
+                placeholder="name@company.com"
                 value={email}
                 onChange={(e) => {
                   changeEmail(e.target.value);
@@ -1682,8 +1738,8 @@ function CreateDialog({
                 <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
               )}
             </div>
-            {/* 명함에서 읽은 이메일의 헷갈리는 글자 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
-            {showConfusable && <ConfusableEmail email={trimmed} />}
+            {/* 명함에서 읽은 이메일의 헷갈리는 글자 · 도메인 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
+            {scannedEmail && <ScannedEmailNotes email={trimmed} />}
           </div>
 
           <div className="field">
@@ -1698,7 +1754,7 @@ function CreateDialog({
                 inputMode="tel"
                 autoComplete="off"
                 readOnly={personLocked}
-                placeholder={!fix && pending ? "이미 만든 계정 그대로" : undefined}
+                placeholder={!fix && pending ? "이미 만든 계정 그대로" : personLocked ? undefined : "+65 0000 0000"}
                 value={phoneShown}
                 onChange={(e) => {
                   setPhone(e.target.value);

@@ -158,10 +158,11 @@ p {
 /* 칸 두 개를 한 줄에(회사명 · 이름 / 고객 이메일 · 연락처) — 휴대폰은 위아래로 */
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .field-row > .field { min-width: 0; }
-.field-optional { margin-left: 2px; font-weight: 400; color: var(--gray-500); }
+.field-optional { margin-left: 2px; } /* 「(선택)」 — 칸 이름과 같은 굵은 검정(N1) */
 
 /* ── 명함 찍어서 채우기 (UG-431) ── */
 .scan { display: flex; flex-direction: column; gap: 8px; }
+.scan-status { display: flex; flex-direction: column; gap: 8px; } /* 안내 · 읽는 중 안내(N2) — 한 상태 줄(role=status) 안에 */
 .scan-button { width: 100%; }
 .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scan-title { flex: 1; min-width: 0; color: var(--gray-700); font-weight: 600; }
@@ -206,6 +207,7 @@ p {
 /* 고정폭 글꼴 — 0 · O, 1 · l · I 가 모양으로 갈리게 */
 .confusable-email { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 20px; letter-spacing: 0.02em; color: var(--gray-900); overflow-wrap: anywhere; }
 .confusable-char { padding: 0 1px; border-radius: 2px; background: var(--gray-200); color: var(--gray-900); font-weight: 800; }
+.domain-check { font-weight: 700; color: var(--gray-900); overflow-wrap: anywhere; } /* 명함에서 읽은 이메일의 도메인 — 「명함과 같은지 확인해 주세요.」 앞 */
 
 .segmented { display: flex; gap: 8px; }
 .segmented button {
@@ -327,6 +329,7 @@ p {
 
 .content { padding: 24px; display: flex; flex-direction: column; gap: 24px; }
 .page-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.page-actions { display: flex; align-items: center; gap: 8px; min-width: 0; } /* 「CSV 내려받기」 · 「계정 만들기」(N5) */
 
 .overview { display: grid; grid-template-columns: repeat(4, 1fr); }
 .metric {
@@ -392,7 +395,7 @@ p {
 .popup-select-option.is-active { background: var(--gray-500); } /* 어두운 유리 위에서 글자가 보이는 밝기 */
 .popup-select-option[aria-selected="true"] { font-weight: 600; }
 .popup-select-check { flex: none; color: var(--gray-0); }
-.count { margin-left: auto; color: var(--gray-500); white-space: nowrap; } /* 옆에 오류 안내가 붙어도(CSV 내려받기 실패) 「총 N개」는 한 줄로 */
+.count { margin-left: auto; color: var(--gray-500); white-space: nowrap; } /* 옆에 목록 오류 안내가 붙어도 「총 N개」는 한 줄로 */
 
 .table { border: 1px solid var(--gray-200); border-bottom: 0; overflow-x: auto; } /* 창이 좁으면(태블릿 · 창 나누기) 표 안에서 옆으로 밀어 봐요 */
 .tr {
@@ -543,7 +546,8 @@ p {
   .overview,
   .table,
   .select,
-  .toolbar .btn { display: none; }
+  .toolbar .btn,
+  .export-button { display: none; }
   .avatar { width: 28px; height: 28px; font-size: 12px; }
   /* 휴대폰 위쪽 띠: 로고 · 배지를 한 단계 작게 */
   .app-nav .brand { gap: 6px; }

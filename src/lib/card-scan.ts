@@ -1,6 +1,6 @@
 // 명함 읽기(UG-431) — 읽은 글자를 줄(칩)로 나누고, 네 칸(회사명 · 이름 · 고객 이메일 · 연락처)에 넣는 규칙.
 // 화면 · 브라우저에 기대지 않는 순수 함수만 둬요(글자 읽기 자체는 card-ocr.ts). 칩 규칙 번호는 Figma 「칩 동작 규칙 (N3b)」.
-// 회사명 · 이름은 짐작이에요 — 틀리면 직원이 칩을 눌러 바꾸거나 직접 고쳐요.
+// 처음 채우기는 모양이 정해진 이메일 · 연락처만 — 회사명 · 이름은 잘못 읽는 일이 많아(한글 이름 「Sau TH」 등, 기획 16846) 직원이 칩을 눌러 넣어요.
 
 export type ScanField = "company" | "name" | "email" | "phone";
 
@@ -9,9 +9,9 @@ export type ChipKind = "email" | "phone" | "other";
 
 /**
  * 읽은 한 줄(라벨 · 구분자로 나눈 조각). text = 칩에 보이는 글자(읽은 그대로), value = 메일 · 전화 칩이 칸에 넣는 값(뽑은 주소 · 번호).
- * fax = 고른 번호가 팩스 라벨 바로 뒤 번호, titled = 같은 줄에 직함이 붙어 있음(이름 후보 순위)
+ * fax = 고른 번호가 팩스 라벨 바로 뒤 번호
  */
-export type Chip = { id: number; text: string; kind: ChipKind; value: string; fax?: boolean; titled?: boolean };
+export type Chip = { id: number; text: string; kind: ChipKind; value: string; fax?: boolean };
 
 export type ScanValues = Record<ScanField, string>;
 
@@ -31,7 +31,6 @@ const PHONE_RUN_RE = /\+?\(?\d[\d\s().-]{6,}\d/g;
 const BIZ_NO_RE = /^\d{3}-\d{2}-\d{5}$/;
 // 날짜(2019.03.01 · 01/03/2019) — 숫자 묶음이지만 전화번호가 아니에요(「Since 2019.03.01」)
 const DATE_RE = /^(19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}$|^\d{1,2}[./-]\d{1,2}[./-](19|20)\d{2}$/;
-const URL_RE = /^(https?:\/\/|www)|\.(com|net|org|co\.kr|kr|io|ai)(\/|$)/i;
 // 팩스 라벨 — 번호 바로 앞 구간(앞 번호가 끝난 뒤 ~ 이 번호 앞)에서만 봐요. 줄 전체에 걸면 「T … F …」 줄의 전화번호도 팩스가 돼요.
 const FAX_BEFORE_RE = /fax|팩스|(^|[^A-Za-z])F\s*[.:)]?\s*$/i;
 
@@ -46,9 +45,7 @@ const LABEL_SPLIT_RE = new RegExp(
 // 구분자: 띄어 쓴 / · · · • 와 | (붙어 있어도)
 const SEPARATOR_RE = /\s+[/·•]\s+|\s*\|\s*/;
 
-// 회사 표시. 법인 표시가 「Company」 낱말보다 확실해요(로고 글자 「COMPANY-A」보다 「Company A Co., Ltd.」 줄을 고르게).
-// 뒤에 - 가 붙은 낱말(Co-founder · Co-CEO)은 법인 표시가 아니에요.
-const COMPANY_STRONG_RE = /\(주\)|㈜|\(유\)|주식회사|유한회사|\b(inc|corp|corporation|co|ltd|llc|gmbh|limited)\b(?!-)\.?/i;
+// 회사 표시 — 회사명 줄은 이름 칸에 넣을 때 이름으로 보지 않아요. 뒤에 - 가 붙은 낱말(Co-founder · Co-CEO)은 법인 표시가 아니에요.
 const COMPANY_RE = /\(주\)|㈜|\(유\)|주식회사|유한회사|\b(inc|corp|corporation|co|ltd|llc|gmbh|limited|company)\b(?!-)\.?/i;
 
 // 직함 · 부서 낱말 — 이름 줄에서 떼어 내고, 이것만 있는 줄은 이름으로 보지 않아요
@@ -76,17 +73,6 @@ const EN_STOPWORDS = new Set(
     "general assistant associate specialist analyst researcher professor dr mr ms mrs strategy product operations " +
     "the and of"
   ).split(" "),
-);
-// 이름 줄에 붙는 영문 직함(이름 후보 순위용)
-const EN_TITLES = new Set(
-  (
-    "ceo cto cfo coo cmo cio vp evp svp president chairman founder co-founder manager director head lead officer " +
-    "engineer developer designer consultant representative partner principal executive specialist analyst researcher professor"
-  ).split(" "),
-);
-// 회사 메일이 아니라서 회사명을 짐작할 수 없는 도메인
-const FREE_MAIL = new Set(
-  "gmail naver daum hanmail kakao nate outlook hotmail live yahoo icloud me proton protonmail msn".split(" "),
 );
 
 /** 띄어 읽힌 한글 낱자(「홍 길 동」)를 붙여요 — 명함은 이름을 띄어 쓰는 일이 많아요. */
@@ -125,42 +111,60 @@ const isMeaningful = (line: string) => {
   return meaningful >= 2 && meaningful * 2 >= line.replace(/\s/g, "").length;
 };
 
-/** 직함 낱말만으로 된 조각(「팀장」 · 「Sales Manager」 같은) */
-const isRoleOnly = (seg: string) => {
-  const tokens = seg.split(" ").filter(Boolean);
-  return tokens.length > 0 && tokens.every((t) => isRoleToken(t) || EN_TITLES.has(t.toLowerCase().replace(/[.,]/g, "")));
-};
-const hasRole = (seg: string) => seg.split(" ").some((t) => isRoleToken(t) || EN_TITLES.has(t.toLowerCase().replace(/[.,]/g, "")));
-
-type Segment = { text: string; titled: boolean };
+// 깨진 줄 판별(isGarbled)용. 줄에 섞여도 되는 기호 — 그 밖의 기호($ % * = ? ! [ ] { } < > 등)는 잘못 읽은 표시로 봐요.
+const ALLOWED_SYMBOL_RE = /[.,()&'’\-/+#@:;~·"“”㈜®™©]/u;
+// 짧은 토막으로 세지 않는 소문자 낱말(이름 · 회사명 · 주소에 흔한 전치사 · 관사)
+const SHORT_WORDS = new Set("of de la le da du di et at in on to by".split(" "));
 
 /**
- * 읽은 글자 → 조각 목록. 줄마다 구분자(/ · | …)와 줄 가운데 항목 라벨(T. · M. · E. · Fax …) 앞에서 나누고 정리해요.
- * 잡음 조각과 같은 조각은 빼요. titled = 그 조각에 직함이 있거나, 같은 줄 바로 옆 조각이 직함뿐(「홍길동 | 팀장」).
+ * 낱말이 의미 없는 짧은 토막인지 — 소문자로 시작하는 1~2글자 로마자만(대문자 약어 AI · HR, 「Ji」 같은 이름 음절은 아님).
+ * 한글 한 글자는 세지 않아요 — 「R&D 및 AI 팀」 · 「B 동 3 층」 · 「Kim 김」처럼 정상 줄에 흔해요.
  */
-function readSegments(text: string): Segment[] {
+function isFragment(token: string): boolean {
+  const core = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  if (!core || /\d/.test(core)) return false;
+  return /^[A-Za-z]{1,2}$/.test(core) && !/^[A-Z][a-z]?$|^[A-Z]{2}$/.test(core) && !SHORT_WORDS.has(core);
+}
+
+/**
+ * 글자 읽기가 무늬 · 로고를 잘못 읽어 깨진 줄인지(예: 「SRT $e ud an 헤르 PIE AR」) — 칩에서 빼요.
+ * 정상 줄(이름 · 회사명 · 주소 · 직함)이 빠지지 않게 보수적으로: 짧은 토막(isFragment)이 2개 넘게 있어야 하고,
+ * - 토막이 낱말의 절반을 넘거나,
+ * - 토막이 낱말의 1/3 이상이면서 이상한 기호가 섞였거나 한 줄에 한글 · 로마자가 뒤섞였을 때만 깨졌다고 봐요.
+ * 메일 · 전화 줄은 보지 않아요(모양이 정해져 있어 따로 뽑아요).
+ */
+export function isGarbled(line: string): boolean {
+  if (extractEmail(line) || phoneHits(line).length > 0) return false;
+  const tokens = line.split(" ").filter(Boolean);
+  const fragments = tokens.filter(isFragment).length;
+  if (fragments < 2) return false;
+  if (fragments * 2 > tokens.length) return true;
+  const oddSymbol = [...line].some((ch) => !/[\p{L}\p{N}\s]/u.test(ch) && !ALLOWED_SYMBOL_RE.test(ch));
+  const mixedScript = /[가-힣]/.test(line) && /[A-Za-z]/.test(line);
+  return fragments * 3 >= tokens.length && (oddSymbol || mixedScript);
+}
+
+/**
+ * 읽은 글자 → 칩으로 보여 줄 줄(조각) 목록. 줄마다 구분자(/ · | …)와 줄 가운데 항목 라벨(T. · M. · E. · Fax …) 앞에서 나누고 정리해요.
+ * 잡음 조각 · 깨진 줄(isGarbled)과 같은 조각은 빼요.
+ */
+export function readLines(text: string): string[] {
   const seen = new Set<string>();
-  const out: Segment[] = [];
+  const out: string[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim();
     const segs = line
       .split(SEPARATOR_RE)
       .flatMap((part) => part.split(LABEL_SPLIT_RE))
       .map(cleanSegment)
-      .filter(isMeaningful);
-    segs.forEach((seg, i) => {
-      if (seen.has(seg)) return;
+      .filter((seg) => isMeaningful(seg) && !isGarbled(seg));
+    for (const seg of segs) {
+      if (seen.has(seg)) continue;
       seen.add(seg);
-      const titled = hasRole(seg) || (i > 0 && isRoleOnly(segs[i - 1])) || (i + 1 < segs.length && isRoleOnly(segs[i + 1]));
-      out.push({ text: seg, titled });
-    });
+      out.push(seg);
+    }
   }
   return out;
-}
-
-/** 읽은 글자 → 칩으로 보여 줄 줄(조각) 목록 */
-export function readLines(text: string): string[] {
-  return readSegments(text).map((s) => s.text);
 }
 
 /** 전화번호 모양만 남겨요 — 서버가 받는 글자(숫자 · 공백 · + · - · ( · ))로, 점은 - 로 바꿔요. */
@@ -235,9 +239,9 @@ export function classifyLine(line: string): { kind: ChipKind; value: string; fax
 }
 
 export function toChips(text: string): Chip[] {
-  return readSegments(text)
+  return readLines(text)
     .slice(0, MAX_CHIPS)
-    .map((seg, i) => ({ id: i + 1, text: seg.text, ...classifyLine(seg.text), ...(seg.titled ? { titled: true } : {}) }));
+    .map((line, i) => ({ id: i + 1, text: line, ...classifyLine(line) }));
 }
 
 export const looksLikeCompany = (line: string) => COMPANY_RE.test(line);
@@ -284,54 +288,24 @@ export function chipValueFor(chip: Chip, field: ScanField): string {
   return chip.text;
 }
 
-const lettersOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
-
 /**
- * 처음 채우기(동작 규칙 3 · 칩 규칙 1 · 7): 메일은 @ 모양, 연락처는 숫자 묶음(휴대전화 → 팩스 아닌 번호 → 그 밖),
- * 회사명은 회사 표시((주) · ㈜ · 주식회사 · Inc · Co., Ltd · Corp · LLC …) 줄 → 없으면 회사 메일 도메인과 맞는 줄,
- * 이름은 이름 모양 줄(한글 먼저). 못 찾은 칸은 비워요(동작 규칙 4).
+ * 처음 채우기(동작 규칙 3 · 칩 규칙 1 · 7): 모양이 정해진 메일(@ 모양) · 연락처(숫자 묶음 — 휴대전화 → 팩스 아닌 번호 → 그 밖)만 채워요.
+ * 회사명 · 이름은 비워 두고 직원이 칩을 눌러 넣어요(기획 16846 — 잘못 읽은 이름 · 회사명이 칸에 들어가 그대로 보내지지 않게).
+ * 못 찾은 칸도 비워요(동작 규칙 4).
  */
 export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks } {
   const values: ScanValues = { company: "", name: "", email: "", phone: "" };
   const links: ScanLinks = {};
-  const used = new Set<number>();
   const put = (field: ScanField, chip: Chip | undefined) => {
     if (!chip) return;
     values[field] = chipValueFor(chip, field);
     links[field] = chip.id;
-    used.add(chip.id);
   };
 
   put("email", chips.find((c) => c.kind === "email"));
 
   const phones = chips.filter((c) => c.kind === "phone");
   put("phone", phones.find((c) => !c.fax && isMobile(c.value)) ?? phones.find((c) => !c.fax) ?? phones[0]);
-
-  const others = () => chips.filter((c) => c.kind === "other" && !used.has(c.id));
-  // 홈페이지 주소 줄(www.company-a.com)은 회사명이 아니에요 — 「company」 낱말이 들어 있어도
-  const candidates = () => others().filter((c) => !URL_RE.test(c.text));
-  // 회사 메일 도메인(company-a.com → companya)과 맞는 줄 — 회사명 후보이고, 이름 후보에서는 빼요
-  const domain = values.email.split("@")[1]?.split(".")[0]?.toLowerCase() ?? "";
-  const key = !FREE_MAIL.has(domain) ? lettersOf(domain) : "";
-  const matchesDomain = (c: Chip) => {
-    const l = lettersOf(c.text);
-    return key.length >= 3 && l.length >= 3 && (l.includes(key) || key.includes(l));
-  };
-  const company =
-    candidates().find((c) => COMPANY_STRONG_RE.test(c.text)) ??
-    candidates().find((c) => looksLikeCompany(c.text)) ??
-    candidates().find(matchesDomain);
-  put("company", company);
-
-  // 이름 후보 순위: 직함과 같은 줄 > 한글 3글자 > 그 밖의 한글 > 로마자 — 법인 표시 없는 2~4글자 회사명(「유니브스」)이 이름으로 가지 않게
-  const score = (c: Chip) => {
-    const name = nameFromLine(c.text) ?? "";
-    const ko = /^[가-힣]+$/.test(name);
-    return (c.titled ? 4 : 0) + (ko && name.length === 3 ? 2 : 0) + (ko ? 1 : 0);
-  };
-  const named = others().filter((c) => !matchesDomain(c) && nameFromLine(c.text) !== null);
-  put("name", named.reduce<Chip | undefined>((best, c) => (!best || score(c) > score(best) ? c : best), undefined));
-
   return { values, links };
 }
 
@@ -399,16 +373,18 @@ export function unlink(links: ScanLinks, field: ScanField): ScanLinks {
   return next;
 }
 
-/** 명함 글자 읽기에서 서로 헷갈리기 쉬운 글자(0 · O · o, 1 · l · I · i) */
-const CONFUSABLE_RE = /[0Oo1lIi]/;
+/**
+ * 명함 글자 읽기에서 서로 헷갈리기 쉬운 글자(0 · O, 1 · l · I). 소문자 o · i 는 빼요 — 모양이 달라 헷갈리지 않고,
+ * 거의 모든 주소에 있어 강조가 늘 떠요(기획 16846).
+ */
+const CONFUSABLE_RE = /[0O1lI]/;
 
 export function hasConfusable(text: string): boolean {
   return CONFUSABLE_RE.test(text);
 }
 
 /**
- * 이메일 @ 앞(로컬 부분)에 헷갈리는 글자가 있는지. 도메인(.com · .io · gmail …)은 보지 않아요 —
- * 거의 모든 주소에 o · i 가 있어 안내가 늘 뜨고, 도메인은 회사 · 메일 서비스 이름이라 틀려도 알아보기 쉬워요.
+ * 이메일 @ 앞(로컬 부분)에 헷갈리는 글자가 있는지. 도메인은 보지 않아요 — 도메인은 따로 「명함과 같은지」 안내해요(emailDomain).
  */
 export function emailHasConfusable(email: string): boolean {
   const at = email.lastIndexOf("@");
@@ -428,4 +404,10 @@ export function confusableParts(text: string): { text: string; confusable: boole
     else parts.push({ text: ch, confusable });
   }
   return parts;
+}
+
+/** 이메일의 도메인(@ 뒤). @ 가 없거나 뒤가 비면 "" — 명함에서 읽은 이메일 칸 아래 「도메인 확인」 안내에 굵게 보여요. */
+export function emailDomain(email: string): string {
+  const at = email.lastIndexOf("@");
+  return at === -1 ? "" : email.slice(at + 1);
 }
