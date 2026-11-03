@@ -162,6 +162,7 @@ p {
 
 /* ── 명함 찍어서 채우기 (UG-431) ── */
 .scan { display: flex; flex-direction: column; gap: 8px; }
+.scan-status { display: flex; flex-direction: column; gap: 8px; } /* 안내 · 읽는 중 안내(N2) — 한 상태 줄(role=status) 안에 */
 .scan-button { width: 100%; }
 .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scan-title { flex: 1; min-width: 0; color: var(--gray-700); font-weight: 600; }

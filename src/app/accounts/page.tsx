@@ -819,7 +819,7 @@ function CardPhotoViewer({ src, onClose }: { src: string; onClose: () => void })
 /**
  * 명함에서 읽은 이메일 칸 아래 안내 — 위아래로 쌓아 겹치지 않게.
  * 로컬 부분(@ 앞)에 헷갈리는 글자(0 · O, 1 · l · I)가 있으면 이메일을 다시 보여 주며 그 글자만 강조하고,
- * 도메인이 있으면 「도메인 — 명함과 같은지 확인해 주세요.」(도메인만 굵게, 기획 16846 — univs.ai 를 univs.qi 로 읽는 일).
+ * 도메인이 있으면 「도메인 — 명함과 같은지 확인해 주세요.」(도메인만 굵게, 기획 16846 — company-a.com 을 company-a.qi 로 읽는 일).
  */
 function ScannedEmailNotes({ email }: { email: string }) {
   const confusable = emailHasConfusable(email);
@@ -1569,10 +1569,10 @@ function CreateDialog({
                     );
                   })}
                 </div>
+                {/* 다시 읽는 동안에는 지난 결과(「명함에서 읽었습니다…」) 대신 기다림 안내 — 낭독기가 읽게 같은 상태 줄에 */}
                 <p className="help" role="status">
-                  {scanFailed ? SCAN_FAILED : SCAN_DONE}
+                  {scanning ? SCAN_WAIT : scanFailed ? SCAN_FAILED : SCAN_DONE}
                 </p>
-                {scanning && <p className="help">{SCAN_WAIT}</p>}
               </>
             ) : (
               <>
@@ -1586,10 +1586,11 @@ function CreateDialog({
                   <IcCamera size={16} />
                   {scanning ? SCAN_READING : "명함 찍어서 채우기"}
                 </button>
-                <p className="help" role="status">
-                  {scanFailed ? SCAN_FAILED : SCAN_HELP}
-                </p>
-                {scanning && <p className="help">{SCAN_WAIT}</p>}
+                {/* 읽는 동안(N2)은 안내 아래에 기다림 안내를 한 줄 더 — 둘 다 상태 줄 안이라 낭독기가 읽어요 */}
+                <div className="scan-status" role="status">
+                  <p className="help">{scanFailed ? SCAN_FAILED : SCAN_HELP}</p>
+                  {scanning && <p className="help">{SCAN_WAIT}</p>}
+                </div>
               </>
             )}
           </div>

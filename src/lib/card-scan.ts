@@ -116,11 +116,13 @@ const ALLOWED_SYMBOL_RE = /[.,()&'’\-/+#@:;~·"“”㈜®™©]/u;
 // 짧은 토막으로 세지 않는 소문자 낱말(이름 · 회사명 · 주소에 흔한 전치사 · 관사)
 const SHORT_WORDS = new Set("of de la le da du di et at in on to by".split(" "));
 
-/** 낱말이 의미 없는 짧은 토막인지 — 소문자로 시작하는 1~2글자 로마자(대문자 약어 AI · HR, 「Ji」 같은 이름 음절은 아님) · 홀로 남은 한글 한 글자 */
+/**
+ * 낱말이 의미 없는 짧은 토막인지 — 소문자로 시작하는 1~2글자 로마자만(대문자 약어 AI · HR, 「Ji」 같은 이름 음절은 아님).
+ * 한글 한 글자는 세지 않아요 — 「R&D 및 AI 팀」 · 「B 동 3 층」 · 「Kim 김」처럼 정상 줄에 흔해요.
+ */
 function isFragment(token: string): boolean {
   const core = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
   if (!core || /\d/.test(core)) return false;
-  if (/^[가-힣]$/.test(core)) return true;
   return /^[A-Za-z]{1,2}$/.test(core) && !/^[A-Z][a-z]?$|^[A-Z]{2}$/.test(core) && !SHORT_WORDS.has(core);
 }
 

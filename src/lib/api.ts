@@ -149,7 +149,7 @@ const MGMT = "/api/v1/mgmt";
 
 /**
  * 계정 만들기 전 도메인 확인에 걸림(UG-431, HTTP 400) — 받는 주소의 도메인이 메일을 받을 수 없어(도메인 없음 · 메일 서버 없음)
- * 서버가 아무것도 만들지 않았어요. 명함에서 도메인을 잘못 읽은 경우(univs.ai → univs.qi)가 대표적이에요.
+ * 서버가 아무것도 만들지 않았어요. 명함에서 도메인을 잘못 읽은 경우(company-a.com → company-a.qi)가 대표적이에요.
  */
 const RECIPIENT_DOMAIN_UNDELIVERABLE = "MGMT-108";
 
