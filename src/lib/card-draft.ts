@@ -48,6 +48,23 @@ export function scanFromDraft(json: unknown): ScanState | null {
   return { chips, links };
 }
 
+// 제어 문자(줄바꿈 · 탭 등, Java Character.isISOControl 과 같은 범위) — 서버가 받지 않아요(PJ-101)
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
+ * 「작성 중」으로 남길 칸 값 — 제어 문자는 공백으로, 앞뒤 공백은 떼고, 서버 상한(max, UTF-16 글자 수)에서 잘라요.
+ * 긴 칩 · 붙여 넣은 글 때문에 저장이 통째로 실패하지 않게. 자를 때 이모지 같은 짝 글자 반쪽은 남기지 않아요.
+ * cutOff = 넘으면 자르지 않고 비워요(이메일 — 자르면 엉뚱한 주소가 돼요).
+ */
+export function draftField(value: string, max: number, cutOff = false): string {
+  let v = value.replace(CONTROL_RE, " ").trim();
+  if (v.length <= max) return v;
+  if (cutOff) return "";
+  v = v.slice(0, max);
+  if (/[\ud800-\udbff]$/.test(v)) v = v.slice(0, -1);
+  return v.trimEnd();
+}
+
 /** 창의 사진(data URL) → 서버에 보낼 순수 base64. JPEG 가 아니면(브라우저가 JPEG 로 만들지 못함) null — 서버가 받지 않아요(MGMT-111) */
 export function photoForDraft(dataUrl: string | null): string | null {
   return dataUrl && dataUrl.startsWith(JPEG_PREFIX) ? dataUrl.slice(JPEG_PREFIX.length) : null;

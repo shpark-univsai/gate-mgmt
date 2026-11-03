@@ -18,6 +18,7 @@ import {
   logout,
   resendGuide,
   saveCardDraft,
+  CARD_DRAFT_MAX,
   type Account,
   type AccountStatus,
   type AccountSummary,
@@ -33,7 +34,7 @@ import { useStaff } from "@/lib/session";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader } from "@/lib/card-ocr";
 import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
-import { chipsForDraft, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
+import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
 import {
   confusableParts,
   emailDomain,
@@ -181,6 +182,8 @@ type DraftKeep = { id: string | null; input: CardDraftInput; remove?: false } | 
 const DRAFT_LABEL = "작성 중";
 // 창은 이미 닫혔으므로 목록 위 알림으로(기존 완료 알림과 같은 자리 · 모양, 아이콘만 오류)
 const DRAFT_SAVE_FAILED = "작성 중인 명함을 저장하지 못했습니다";
+const DRAFTS_LOAD_FAILED = "작성 중인 명함을 불러오지 못했습니다.";
+const DRAFT_GONE = { title: "작성 중인 명함이 없어 남기지 않았습니다", detail: "계정을 만들었거나 다른 직원이 지웠습니다" };
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 const LOAD_FAILED = "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
@@ -269,8 +272,10 @@ export default function AccountsPage() {
   // 계정 만들기 창. draft = 「작성 중」 명함을 이어서 만들 때 서버에서 받은 것(칩 · 사진 포함)
   const [creating, setCreating] = useState<{ draft: CardDraftDetail | null } | null>(null);
   // 「작성 중」 명함 목록(UG-431 기획 16864) — 그때의 조건(applied)에만 붙여요. 요약 카드 · CSV · 페이지 수에는 섞지 않아요.
-  const [draftList, setDraftList] = useState<{ for: typeof applied; items: CardDraft[] } | null>(null);
-  const [draftsError, setDraftsError] = useState(false);
+  // total = 서버의 전체 장 수(한 번에 100장까지만 받아요)
+  const [draftList, setDraftList] = useState<{ for: typeof applied; items: CardDraft[]; total: number } | null>(null);
+  // 불러오기 실패 안내도 그때의 조건에만 — 상태 필터를 바꾸면(「작성 중」 해당 없음) 사라져요
+  const [draftsErrorFor, setDraftsErrorFor] = useState<typeof applied | null>(null);
   // 이어서 만들기로 여는 중인 명함(서버에서 칩 · 사진을 받는 동안 버튼을 잠가요)
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [draftDeleteTarget, setDraftDeleteTarget] = useState<CardDraft | null>(null);
@@ -333,13 +338,13 @@ export default function AccountsPage() {
     let alive = true;
     const query = applied;
     listCardDrafts(query.keyword)
-      .then((items) => {
+      .then(({ items, total }) => {
         if (!alive) return;
-        setDraftList({ for: query, items });
-        setDraftsError(false);
+        setDraftList({ for: query, items, total });
+        setDraftsErrorFor(null);
       })
       .catch(() => {
-        if (alive) setDraftsError(true);
+        if (alive) setDraftsErrorFor(query);
       });
     return () => {
       alive = false;
@@ -354,6 +359,15 @@ export default function AccountsPage() {
   const current = Math.min(page, pageCount);
   const visible = rows;
   const drafts = applied.status === "all" && current === 1 && draftList?.for === applied ? draftList.items : [];
+  // 「작성 중」이 100장을 넘으면 최근 100장만 받아요 — 목록 위에 한 줄
+  const draftsCut = drafts.length > 0 && draftList !== null && draftList.total > draftList.items.length;
+  const draftsError = draftsErrorFor === applied;
+  // 다른 창이 열려 있는지 — 이어서 만들기 응답이 늦게 와도 창을 겹쳐 열지 않게(응답을 버려요)
+  const modalOpen = !!creating || !!resendTarget || !!cancelTarget || !!draftDeleteTarget;
+  const modalOpenRef = useRef(modalOpen);
+  useEffect(() => {
+    modalOpenRef.current = modalOpen;
+  }, [modalOpen]);
   const from = total ? (current - 1) * pageSize + 1 : 0;
   const to = Math.min(current * pageSize, total);
   const emptyText = loadError
@@ -431,12 +445,31 @@ export default function AccountsPage() {
     (keep: DraftKeep) => {
       const run = async () => {
         if (keep.remove) {
-          await deleteCardDraft(keep.id);
+          // 칸 · 사진을 다 비우고 닫음 — 남길 것이 없어 지워요
+          if (!(await deleteCardDraft(keep.id)))
+            setToast({ tone: "error", title: "작성 중인 명함을 지우지 못했습니다", detail: "목록에서 [지우기]로 다시 지워 주세요" });
           return reload();
         }
-        const res = await saveCardDraft(keep.id, keep.input);
-        if (res.ok) setFreshId(`draft:${res.draft.id}`);
-        else if (res.reason !== "not_found")
+        let res = await saveCardDraft(keep.id, keep.input);
+        // 칸 값을 서버가 받지 않음(PJ-101) — 칸은 상한 · 제어 문자를 이미 정리해 보냈어요. 그래도면 네 칸 없이 사진 · 칩만 한 번 더
+        let kept: string | null = null;
+        if (!res.ok && res.reason === "invalid") {
+          const { language, chips, photo, keepPhoto } = keep.input;
+          const hasPhoto = !!photo || !!keepPhoto;
+          if (hasPhoto || chips) {
+            res = await saveCardDraft(keep.id, {
+              ...(language ? { language } : {}),
+              ...(chips ? { chips } : {}),
+              ...(photo ? { photo } : keepPhoto ? { keepPhoto } : {}),
+            });
+            kept = hasPhoto && chips ? "명함 사진과 읽은 줄만 남겼습니다" : hasPhoto ? "명함 사진만 남겼습니다" : "읽은 줄만 남겼습니다";
+          }
+        }
+        if (res.ok) {
+          setFreshId(`draft:${res.draft.id}`);
+          if (kept) setToast({ tone: "error", title: "작성 중인 명함의 입력값을 남기지 못했습니다", detail: kept });
+        } else if (res.reason === "not_found") setToast({ tone: "error", ...DRAFT_GONE });
+        else
           setToast({
             tone: "error",
             title: DRAFT_SAVE_FAILED,
@@ -457,15 +490,22 @@ export default function AccountsPage() {
     [reload],
   );
 
-  /** 이어서 만들기 — 닫을 때 시작한 저장이 남았으면 끝난 뒤에 칩 · 사진까지 받아 창을 열어요. */
+  /**
+   * 이어서 만들기 — 닫을 때 시작한 저장이 남았으면 끝난 뒤에 칩 · 사진까지 받아 창을 열어요.
+   * 받는 동안 [계정 만들기] · 그 줄의 [지우기] · 다른 줄의 [이어서 만들기]는 잠가요. 그래도 그사이 다른 창이 열렸으면 응답은 버려요.
+   */
   async function resumeDraft(d: CardDraft) {
-    if (resumingId) return;
+    if (resumingId || modalOpenRef.current) return;
     setResumingId(d.id);
     await draftSaves.current.get(d.id);
     const res = await getCardDraft(d.id);
     setResumingId(null);
-    if (res.ok) return setCreating({ draft: res.detail });
+    if (res.ok) {
+      if (!modalOpenRef.current) setCreating((c) => c ?? { draft: res.detail });
+      return;
+    }
     reload();
+    if (modalOpenRef.current) return;
     setToast(
       res.reason === "not_found"
         ? { tone: "error", title: "작성 중인 명함이 없습니다", detail: "계정을 만들었거나 다른 직원이 지웠습니다" }
@@ -478,6 +518,14 @@ export default function AccountsPage() {
     await draftSaves.current.get(id);
     return deleteCardDraft(id);
   }
+
+  /** 이어서 만든 창에서 이미 만든 계정에 안내 메일을 다시 보냄 — 그 명함은 다 썼어요. 창은 기다리지 않고, 지운 뒤 목록을 새로 고쳐요. */
+  const discardUsedDraft = useCallback(
+    (id: string) => {
+      void deleteCardDraft(id).then(() => reload());
+    },
+    [reload],
+  );
 
   const afterDraftDeleted = useCallback(() => {
     setDraftDeleteTarget(null);
@@ -593,7 +641,13 @@ export default function AccountsPage() {
             >
               {exporting ? "내려받는 중…" : "CSV 내려받기"}
             </button>
-            <button type="button" className="btn btn-dark btn-sm" onClick={() => setCreating({ draft: null })}>
+            <button
+              type="button"
+              className="btn btn-dark btn-sm"
+              onClick={() => setCreating({ draft: null })}
+              // 이어서 만들기 응답을 기다리는 동안은 새 창을 열지 않아요(두 창이 겹치지 않게)
+              disabled={resumingId !== null}
+            >
               계정 만들기
             </button>
           </div>
@@ -678,11 +732,17 @@ export default function AccountsPage() {
             ))}
           </div>
           <span className="count">총 {total}개</span>
-          {((loadError && rows.length > 0) || draftsError) && (
+          {loadError && rows.length > 0 && (
             <span className="error" role="alert">
               {LOAD_FAILED}
             </span>
           )}
+          {draftsError && (
+            <span className="error" role="alert">
+              {DRAFTS_LOAD_FAILED}
+            </span>
+          )}
+          {draftsCut && <span className="help">작성 중인 명함이 많아 최근 100개만 보입니다.</span>}
         </form>
 
         {/* PC: 표 */}
@@ -716,7 +776,7 @@ export default function AccountsPage() {
                   >
                     {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
                   </button>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => setDraftDeleteTarget(d)}>
+                  <button type="button" className="btn btn-outline btn-sm" onClick={() => setDraftDeleteTarget(d)} disabled={resumingId === d.id}>
                     지우기
                   </button>
                 </span>
@@ -789,7 +849,7 @@ export default function AccountsPage() {
                 <span className="card-status">
                   <DraftStatus />
                   {/* 드물게 쓰는 「지우기」는 발급 취소처럼 더보기 안에 — 자주 쓰는 이어서 만들기만 카드에 보여요 */}
-                  <CardMore label="지우기" onSelect={() => setDraftDeleteTarget(d)} />
+                  <CardMore label="지우기" onSelect={() => setDraftDeleteTarget(d)} disabled={resumingId === d.id} />
                 </span>
               </div>
               <div className="card-line">
@@ -897,7 +957,10 @@ export default function AccountsPage() {
 
       {creating && (
         <CreateDialog
+          // 이어서 만든 명함 · 새 창마다 새로 그려요(앞 창의 상태가 남지 않게)
+          key={creating.draft?.draft.id ?? "new"}
           draft={creating.draft}
+          onDraftUsed={discardUsedDraft}
           onClose={(keep) => {
             setCreating(null);
             reload();
@@ -1040,7 +1103,7 @@ function ScannedEmailNotes({ email }: { email: string }) {
 }
 
 /** 휴대폰 카드 더보기(⋮) — 「발급 취소」 · 「작성 중」 카드의 「지우기」. 프로필 메뉴와 같은 어두운 유리. */
-function CardMore({ label, onSelect }: { label: string; onSelect: () => void }) {
+function CardMore({ label, onSelect, disabled = false }: { label: string; onSelect: () => void; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -1063,7 +1126,7 @@ function CardMore({ label, onSelect }: { label: string; onSelect: () => void }) 
 
   return (
     <div className="card-more" ref={ref}>
-      <button ref={buttonRef} type="button" className="card-more-button" aria-label="더보기" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+      <button ref={buttonRef} type="button" className="card-more-button" aria-label="더보기" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)} disabled={disabled}>
         <IcMoreVert size={18} />
       </button>
       {open && (
@@ -1268,6 +1331,7 @@ function useCancelNow(onCancelled: () => void) {
  */
 function CreateDialog({
   draft,
+  onDraftUsed,
   onClose,
   onCreated,
   onMailFailed,
@@ -1276,6 +1340,8 @@ function CreateDialog({
   onCancelled,
 }: {
   draft: CardDraftDetail | null;
+  /** 이어서 만든 명함을 다 씀(이미 만든 계정에 안내 메일을 다시 보냄) — 목록이 뒤에서 지워요 */
+  onDraftUsed: (id: string) => void;
   /** keep = 「작성 중」으로 남길 것(없으면 남기지 않음) — 저장은 창을 닫은 뒤 목록이 해요 */
   onClose: (keep: DraftKeep | null) => void;
   onCreated: (a: Account) => void;
@@ -1354,9 +1420,17 @@ function CreateDialog({
   function draftToKeep(): DraftKeep | null {
     if (fix || mailFailure || sending) return null;
     const id = draft && draftAlive.current ? draft.draft.id : null;
-    const values = { company: company.trim(), name: name.trim(), email: email.trim(), phone: phone.trim() };
-    const keepPhoto = !!photo && photo === draftPhoto;
-    const newPhoto = keepPhoto ? null : photoForDraft(photo);
+    // 서버 상한으로 자르고 제어 문자는 공백으로(긴 칩 · 붙여 넣은 글로 저장이 통째로 실패하지 않게). 이메일은 넘으면 비워요.
+    const values = {
+      company: draftField(company, CARD_DRAFT_MAX.company),
+      name: draftField(name, CARD_DRAFT_MAX.name),
+      email: draftField(email, CARD_DRAFT_MAX.email, true),
+      phone: draftField(phone, CARD_DRAFT_MAX.phone),
+    };
+    // 사진: 새로 찍어 다 읽은 사진만 보내요. 읽는 중(scanning) · 다시 읽기가 사진을 만들지 못한 경우는
+    // 이어서 만든 창이면 원래 사진 그대로(keepPhoto), 새 창이면 사진 없이 — 원래 사진을 지우는 건 직원이 지울 때뿐(지금은 그런 버튼이 없어요)
+    const newPhoto = !scanning && photo && photo !== draftPhoto ? photoForDraft(photo) : null;
+    const keepPhoto = !!draftPhoto && !newPhoto;
     if (!Object.values(values).some(Boolean) && !keepPhoto && !newPhoto) return id ? { id, remove: true } : null;
     const chips = chipsForDraft(scan);
     // 첫 로그인 전 이메일이라 메일 언어를 잠깐 바꿨으면 직원이 고른 언어로
@@ -1371,11 +1445,11 @@ function CreateDialog({
   }
   const close = () => onClose(draftToKeep());
 
-  /** 이어서 만든 명함을 다 썼어요(이미 만든 계정에 안내 메일을 다시 보냄) — 목록의 「작성 중」 줄 · 사진을 지워요. */
-  async function consumeDraft() {
+  /** 이어서 만든 명함을 다 썼어요(이미 만든 계정에 안내 메일을 다시 보냄) — 목록의 「작성 중」 줄 · 사진은 목록이 뒤에서 지워요. */
+  function consumeDraft() {
     if (!draft || !draftAlive.current) return;
     draftAlive.current = false;
-    await deleteCardDraft(draft.draft.id);
+    onDraftUsed(draft.draft.id);
   }
   /** 계정 만들기 요청에 붙일 이어서 만든 명함 번호 — 계정이 만들어지면 서버가 그 명함을 지워요 */
   const draftIdInput = () => {
@@ -1589,8 +1663,8 @@ function CreateDialog({
     if (state.status === "pending") {
       const res = await resendGuide(state.id, language);
       // 이미 만든 계정에 메일을 보냈어요(실패 포함) — 이어서 만든 명함은 다 썼어요(주소를 고치는 중 · 결과 화면은 남기지 않아요)
-      if (res.ok || isMailFailure(res.reason)) await consumeDraft();
       setSending(false);
+      if (res.ok || isMailFailure(res.reason)) consumeDraft();
       if (res.ok) return onResent();
       if (isMailFailure(res.reason)) {
         // 주소 오류 · 막힘은 이 창에서 주소를 고쳐 재발송(C2), 그 밖의 실패는 목록의 다시 보내기 창과 같은 결과를 보여 줘요.

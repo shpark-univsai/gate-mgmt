@@ -377,9 +377,16 @@ export type CardDraftInput = {
 
 /**
  * not_found = 그사이 계정을 만들었거나 다른 직원이 지움(MGMT-109 — 새로 남기지 않아요)
- * photo = 사진이 너무 크거나(MGMT-110 · 112) JPEG 가 아님(MGMT-111) / failed = 서버 · 네트워크 문제
+ * photo = 사진이 너무 크거나(MGMT-110 · 112) JPEG 가 아님(MGMT-111)
+ * invalid = 칸 값을 받지 않음(PJ-101 — 길이 · 제어 문자 · 빈 명함) / failed = 서버 · 네트워크 문제
  */
-export type CardDraftSaveResult = { ok: true; draft: CardDraft } | { ok: false; reason: "not_found" | "photo" | "failed" };
+export type CardDraftSaveResult = { ok: true; draft: CardDraft } | { ok: false; reason: "not_found" | "photo" | "invalid" | "failed" };
+
+/**
+ * 「작성 중」 명함 칸 길이 상한 — 서버(CardDraftRequest @Size)와 같아요. 줄바꿈 · 탭 같은 제어 문자도 서버가 받지 않아요(PJ-101).
+ * 계정 만들기 칸(회사명 · 이름 40, 연락처 30)과 같고, 이메일은 255.
+ */
+export const CARD_DRAFT_MAX = { company: 40, name: 40, email: 255, phone: 30 } as const;
 
 const CARD_DRAFT_NOT_FOUND = "MGMT-109";
 const CARD_DRAFT_PHOTO_ERRORS: readonly string[] = ["MGMT-110", "MGMT-111", "MGMT-112"];
@@ -407,14 +414,15 @@ const toCardDraft = (d: CardDraftDto): CardDraft => ({
 
 const isDraftNotFound = (e: unknown) => e instanceof ApiError && (e.code === CARD_DRAFT_NOT_FOUND || (e.status === 404 && !e.code));
 
-/** 「작성 중」 명함 목록 — 모든 직원 것. 목록 화면의 검색어가 있으면 같은 검색어로 걸러요(한 번에 최대 100장). */
-export async function listCardDrafts(keyword = ""): Promise<CardDraft[]> {
+/** 「작성 중」 명함 목록 — 모든 직원 것. 목록 화면의 검색어가 있으면 같은 검색어로 걸러요(한 번에 최대 100장, total = 전체 장 수). */
+export async function listCardDrafts(keyword = ""): Promise<{ items: CardDraft[]; total: number }> {
   const params = new URLSearchParams();
   if (keyword.trim()) params.set("keyword", keyword.trim());
   params.set("page", "1");
   params.set("size", "100");
   const data = await authed<{ content: CardDraftDto[]; totalElements: number }>("GET", `${MGMT}/card-drafts?${params}`);
-  return data.content.map(toCardDraft);
+  const items = data.content.map(toCardDraft);
+  return { items, total: Math.max(items.length, Number(data.totalElements) || 0) };
 }
 
 /** 이어서 만들기 — 칩 · 사진까지. not_found = 그사이 계정을 만들었거나 지워짐 */
@@ -445,6 +453,7 @@ export async function saveCardDraft(id: string | null, input: CardDraftInput): P
   } catch (e) {
     if (id && isDraftNotFound(e)) return { ok: false, reason: "not_found" };
     if (e instanceof ApiError && ((e.code && CARD_DRAFT_PHOTO_ERRORS.includes(e.code)) || e.status === 413)) return { ok: false, reason: "photo" };
+    if (e instanceof ApiError && e.code === "PJ-101") return { ok: false, reason: "invalid" };
     return { ok: false, reason: "failed" };
   }
 }
