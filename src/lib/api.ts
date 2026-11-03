@@ -122,7 +122,8 @@ export type CreateAccountResult =
   // 계정은 만들었지만 안내 메일은 못 보냈어요 — 까닭에 따라 목록에서 다시 보내거나 발급 취소해요
   | { ok: true; account: Account; mailSent: false; mailFailureReason: MailFailureReason }
   // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
-  | { ok: false; reason: "duplicate" | "in_use" | "failed" };
+  // domain = 받는 주소의 도메인이 메일을 받을 수 없어 서버가 계정을 만들지 않음(MGMT-108 — 명함에서 도메인을 잘못 읽은 경우 등)
+  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" };
 
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨 / failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
@@ -145,6 +146,12 @@ export type LoginResult =
   | { ok: false; reason: "invalid" | "forbidden" | "failed" | "password" };
 
 const MGMT = "/api/v1/mgmt";
+
+/**
+ * 계정 만들기 전 도메인 확인에 걸림(UG-431, HTTP 400) — 받는 주소의 도메인이 메일을 받을 수 없어(도메인 없음 · 메일 서버 없음)
+ * 서버가 아무것도 만들지 않았어요. 명함에서 도메인을 잘못 읽은 경우(univs.ai → univs.qi)가 대표적이에요.
+ */
+const RECIPIENT_DOMAIN_UNDELIVERABLE = "MGMT-108";
 
 /** 서버 · 네트워크 문제(다시 시도하면 될 수 있는 것)인지 */
 const isTransient = (e: unknown) =>
@@ -286,7 +293,8 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
       return { ok: true, account, mailSent: false, mailFailureReason };
     }
     return { ok: false, reason: data.reason ?? "failed" };
-  } catch {
+  } catch (e) {
+    if (e instanceof ApiError && e.code === RECIPIENT_DOMAIN_UNDELIVERABLE) return { ok: false, reason: "domain" };
     return { ok: false, reason: "failed" };
   }
 }
