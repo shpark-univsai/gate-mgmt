@@ -125,38 +125,54 @@ const CAPS_WORDS = new Set(
   ).split(" "),
 );
 
+// 로마자 한국 성씨(대문자 1 + 소문자) — 「Park JH」 「Kim, YJ」처럼 성씨 뒤 대문자 2글자는 이름 이니셜이라 토막으로 세지 않아요(「Sau TH」와 구분)
+const KO_SURNAMES = new Set(
+  (
+    "kim lee yi rhee park pak bak choi choe jung jeong chung kang cho jo yoon yun jang chang lim im han oh seo suh shin sin " +
+    "kwon gwon hwang ahn an song jeon jun chun hong yoo yu ryu ko go moon mun yang son sohn bae baek paek heo hur huh nam " +
+    "shim sim noh roh no ha kwak gwak sung seong cha joo ju woo wu koo gu min na jin ji eom um chae won bang kong gong hyun " +
+    "ham byun byeon yeom yeo choo chu do so seok suk sun seol ma gil yeon wi pyo myung ki ban wang geum ok yook yuk in " +
+    "maeng je mo tak kook guk eo eun yong ye kyung bong sa bu hwangbo namgoong namkung seonwoo jegal dokgo"
+  ).split(" "),
+);
+// 한 글자지만 부서 · 주소 단위라 뜻이 있는 한글(「dx 팀」 「영업2 팀」)
+const KO_UNITS = new Set("팀 과 부 실 국 층 호 동 관 점 원 처 단".split(" "));
+
 /** 낱말 앞뒤의 기호를 뗀 알맹이 */
 const coreOf = (token: string) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 
 /**
- * 낱말이 의미 없는 짧은 토막인지(기획 16846 · 16861). 정상 줄에 흔한 짧은 낱말(한글 한 글자 「및」 · 「동」, 「Ji」 같은 이름 음절,
- * AI · HR 같은 약어, 숫자)은 세지 않아요.
- * - 소문자로 시작하는 1~2글자 로마자(「ud」 「dg」 「ha」)
- * - 숫자가 섞인 짧은 한글 조각(「이아7」) — 한글 1~3글자 뒤에 숫자. 「4층」 「101호」처럼 숫자가 앞이면 주소라 세지 않고, 「제2」도 빼요
- * - 이상한 기호($ % ^ …)만 있는 낱말(「^^」 「%」)
- * - 대문자 2글자(「TH」) — 줄 첫 낱말이 아니고, 줄에 소문자 로마자가 있을 때만(caps). 「LG 전자」 「LEE JI AN」 「JH Park」은 그대로 둬요.
+ * 낱말 종류(기획 16846 · 16861).
+ * - frag: 의미 없는 짧은 토막 — 소문자로 시작하는 1~2글자 로마자(「ud」 「dg」), 이상한 기호($ % ^ …)만 있는 낱말(「^^」)
+ * - caps: 대문자 2글자 토막(「TH」) — 줄 첫 낱말이 아니고, 줄에 소문자 로마자가 있고, 알려진 약어가 아니고,
+ *   첫 낱말이 로마자 성씨가 아닐 때만(「Park JH」 「Kim, YJ」는 이름 이니셜). 「LG 전자」 「LEE JI AN」 「JH Park」은 그대로.
+ * - digit: 숫자가 섞인 짧은 한글(「이아7」) — 「카페24」 「타워2」 「영업2 팀」처럼 정상 이름에도 흔해서, 줄 전체가 뜻 없는 짧은 낱말일 때만 봐요
+ * - ok: 그 밖(한글 한 글자 「및」, 「Ji」 같은 이름 음절, 약어, 숫자 등)
  */
-function isFragment(token: string, caps: boolean): boolean {
+type TokenKind = "frag" | "caps" | "digit" | "ok";
+
+function tokenKind(token: string, capsCounts: boolean): TokenKind {
   const core = coreOf(token);
-  if (!core) return [...token].some(isOddSymbol);
-  if (/^(?!제)[가-힣]{1,3}\d{1,3}$/.test(core)) return true;
-  if (/\d/.test(core)) return false;
-  if (caps && /^[A-Z]{2}$/.test(core)) return !CAPS_WORDS.has(core);
-  return /^[a-z][A-Za-z]?$/.test(core) && !SHORT_WORDS.has(core.toLowerCase());
+  if (!core) return [...token].some(isOddSymbol) ? "frag" : "ok";
+  if (/^(?!제)[가-힣]{1,3}\d{1,3}$/.test(core)) return "digit";
+  if (/\d/.test(core)) return "ok";
+  if (capsCounts && /^[A-Z]{2}$/.test(core) && !CAPS_WORDS.has(core)) return "caps";
+  return /^[a-z][A-Za-z]?$/.test(core) && !SHORT_WORDS.has(core.toLowerCase()) ? "frag" : "ok";
 }
 
-/** 토막이 아닌 「뜻이 있는」 낱말인지 — 한글 2글자 이상, 로마자 · 숫자 3글자 이상, 알려진 약어 */
+/** 토막이 아닌 「뜻이 있는」 낱말인지 — 한글 2글자 이상, 로마자 · 숫자 3글자 이상, 알려진 약어, 부서 · 주소 단위(팀 · 층), 「3층」 「101호」 */
 function isSubstantial(token: string): boolean {
   const core = coreOf(token);
-  return /^[가-힣]{2,}$/.test(core) || [...core].length >= 3 || CAPS_WORDS.has(core);
+  return /^[가-힣]{2,}$/.test(core) || [...core].length >= 3 || CAPS_WORDS.has(core) || KO_UNITS.has(core) || /^\d+[가-힣]+$/.test(core);
 }
 
 /**
  * 글자 읽기가 무늬 · 로고를 잘못 읽어 깨진 줄인지(예: 「SRT $e ud an 헤르 PIE AR」 「은 이아7 났」 「Sau TH」) — 칩에서 빼요.
- * 정상 줄(이름 · 회사명 · 주소 · 직함 · 부서)이 빠지는 쪽이 더 나빠서, 짧은 토막(isFragment)이 있는 줄만 봐요.
+ * 정상 줄(이름 · 회사명 · 주소 · 직함 · 부서)이 빠지는 쪽이 더 나빠서, 토막(tokenKind)이 있는 줄만 봐요.
  * - 공백 빼고 2글자 이하(「ud」 「를 0」) — 한글 2글자(「김민」 같은 이름)만 남겨요. 「HR」 「AI」 홀로도 빠져요(이름 · 회사명 칸에 쓸 일이 없어요).
- * - 토막이 낱말의 절반 이상(「Tx dg」 「Sau TH」 「ud an」)
- * - 토막이 하나뿐이어도 나머지가 모두 뜻 없는 짧은 낱말(「은 이아7 났」)
+ * - 토막(frag · caps)이 낱말의 절반 이상 — 토막이 2개 이상이거나 대문자 토막이 있을 때(「ud an」 「Sau TH」).
+ *   토막 하나에 뜻 있는 낱말이 붙은 줄(「iM 뱅크」 「eo Studio」)은 남겨요.
+ * - 토막(숫자 섞인 한글 포함)이 있고 나머지가 모두 뜻 없는 짧은 낱말(「은 이아7 났」 「Tx dg」) — 숫자 섞인 한글 한 낱말뿐인 줄(「카페24」)은 남겨요.
  * - 토막이 2개 이상 · 낱말의 1/3 이상이면서 이상한 기호가 섞였거나 한 줄에 한글 · 로마자가 뒤섞였을 때
  * 메일 · 전화 줄은 보지 않아요(모양이 정해져 있어 따로 뽑아요).
  */
@@ -165,15 +181,20 @@ export function isGarbled(line: string): boolean {
   const compact = line.replace(/\s/g, "");
   if ([...compact].length <= 2) return !/^[가-힣]{2}$/.test(compact);
   const tokens = line.split(" ").filter(Boolean);
-  const caps = /[a-z]/.test(line);
-  const isFrag = tokens.map((t, i) => isFragment(t, caps && i > 0));
-  const fragments = isFrag.filter(Boolean).length;
-  if (fragments === 0) return false;
-  if (fragments * 2 >= tokens.length) return true;
-  if (!tokens.some((t, i) => !isFrag[i] && isSubstantial(t))) return true;
+  const surnameFirst = KO_SURNAMES.has(coreOf(tokens[0]).toLowerCase());
+  const capsCounts = /[a-z]/.test(line) && !surnameFirst;
+  const kinds = tokens.map((t, i) => tokenKind(t, capsCounts && i > 0));
+  const frags = kinds.filter((k) => k === "frag").length;
+  const caps = kinds.filter((k) => k === "caps").length;
+  const digits = kinds.filter((k) => k === "digit").length;
+  const strong = frags + caps;
+  if (strong + digits === 0) return false;
+  if ((strong >= 2 || caps >= 1) && strong * 2 >= tokens.length) return true;
+  const restMeaningless = !tokens.some((t, i) => kinds[i] === "ok" && isSubstantial(t));
+  if (restMeaningless && (strong >= 1 || tokens.length >= 2)) return true;
   const oddSymbol = [...line].some(isOddSymbol);
   const mixedScript = /[가-힣]/.test(line) && /[A-Za-z]/.test(line);
-  return fragments >= 2 && fragments * 3 >= tokens.length && (oddSymbol || mixedScript);
+  return strong >= 2 && strong * 3 >= tokens.length && (oddSymbol || mixedScript);
 }
 
 /**
