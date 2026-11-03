@@ -111,37 +111,90 @@ const isMeaningful = (line: string) => {
   return meaningful >= 2 && meaningful * 2 >= line.replace(/\s/g, "").length;
 };
 
-// 깨진 줄 판별(isGarbled)용. 줄에 섞여도 되는 기호 — 그 밖의 기호($ % * = ? ! [ ] { } < > 등)는 잘못 읽은 표시로 봐요.
+// 깨진 줄 판별(isGarbled)용. 줄에 섞여도 되는 기호 — 그 밖의 기호($ % * = ? ! ^ [ ] { } < > 등)는 잘못 읽은 표시로 봐요.
 const ALLOWED_SYMBOL_RE = /[.,()&'’\-/+#@:;~·"“”㈜®™©]/u;
+const isOddSymbol = (ch: string) => !/[\p{L}\p{N}\s]/u.test(ch) && !ALLOWED_SYMBOL_RE.test(ch);
 // 짧은 토막으로 세지 않는 소문자 낱말(이름 · 회사명 · 주소에 흔한 전치사 · 관사)
 const SHORT_WORDS = new Set("of de la le da du di et at in on to by".split(" "));
+// 명함에 흔한 대문자 두 글자 낱말(부서 · 직함 · 분야 · 나라 · 회사 약칭) — 「대문자 2글자 토막」으로 세지 않아요(기획 16861)
+const CAPS_WORDS = new Set(
+  (
+    "AI AR VR XR MR HR GA QA QC CS CX UX UI IT IR PR PM PO PD MD GM VP BD BI SI CI TF SW HW IP OS DB ML DL DT DX AX " +
+    "EV TV PC HQ RA SE TL II US UK EU KR JP CN LA NY SF " +
+    "LG SK KT GS LS CJ HD KB NH"
+  ).split(" "),
+);
+
+// 로마자 한국 성씨(대문자 1 + 소문자) — 「Park JH」 「Kim, YJ」처럼 성씨 뒤 대문자 2글자는 이름 이니셜이라 토막으로 세지 않아요(「Sau TH」와 구분)
+const KO_SURNAMES = new Set(
+  (
+    "kim lee yi rhee park pak bak choi choe jung jeong chung kang cho jo yoon yun jang chang lim im han oh seo suh shin sin " +
+    "kwon gwon hwang ahn an song jeon jun chun hong yoo yu ryu ko go moon mun yang son sohn bae baek paek heo hur huh nam " +
+    "shim sim noh roh no ha kwak gwak sung seong cha joo ju woo wu koo gu min na jin ji eom um chae won bang kong gong hyun " +
+    "ham byun byeon yeom yeo choo chu do so seok suk sun seol ma gil yeon wi pyo myung ki ban wang geum ok yook yuk in " +
+    "maeng je mo tak kook guk eo eun yong ye kyung bong sa bu hwangbo namgoong namkung seonwoo jegal dokgo"
+  ).split(" "),
+);
+// 한 글자지만 부서 · 주소 단위라 뜻이 있는 한글(「dx 팀」 「영업2 팀」)
+const KO_UNITS = new Set("팀 과 부 실 국 층 호 동 관 점 원 처 단".split(" "));
+
+/** 낱말 앞뒤의 기호를 뗀 알맹이 */
+const coreOf = (token: string) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 
 /**
- * 낱말이 의미 없는 짧은 토막인지 — 소문자로 시작하는 1~2글자 로마자만(대문자 약어 AI · HR, 「Ji」 같은 이름 음절은 아님).
- * 한글 한 글자는 세지 않아요 — 「R&D 및 AI 팀」 · 「B 동 3 층」 · 「Kim 김」처럼 정상 줄에 흔해요.
+ * 낱말 종류(기획 16846 · 16861).
+ * - frag: 의미 없는 짧은 토막 — 소문자로 시작하는 1~2글자 로마자(「ud」 「dg」), 이상한 기호($ % ^ …)만 있는 낱말(「^^」)
+ * - caps: 대문자 2글자 토막(「TH」) — 줄 첫 낱말이 아니고, 줄에 소문자 로마자가 있고, 알려진 약어가 아니고,
+ *   첫 낱말이 로마자 성씨가 아닐 때만(「Park JH」 「Kim, YJ」는 이름 이니셜). 「LG 전자」 「LEE JI AN」 「JH Park」은 그대로.
+ * - digit: 숫자가 섞인 짧은 한글(「이아7」) — 「카페24」 「타워2」 「영업2 팀」처럼 정상 이름에도 흔해서, 줄 전체가 뜻 없는 짧은 낱말일 때만 봐요
+ * - ok: 그 밖(한글 한 글자 「및」, 「Ji」 같은 이름 음절, 약어, 숫자 등)
  */
-function isFragment(token: string): boolean {
-  const core = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-  if (!core || /\d/.test(core)) return false;
-  return /^[A-Za-z]{1,2}$/.test(core) && !/^[A-Z][a-z]?$|^[A-Z]{2}$/.test(core) && !SHORT_WORDS.has(core);
+type TokenKind = "frag" | "caps" | "digit" | "ok";
+
+function tokenKind(token: string, capsCounts: boolean): TokenKind {
+  const core = coreOf(token);
+  if (!core) return [...token].some(isOddSymbol) ? "frag" : "ok";
+  if (/^(?!제)[가-힣]{1,3}\d{1,3}$/.test(core)) return "digit";
+  if (/\d/.test(core)) return "ok";
+  if (capsCounts && /^[A-Z]{2}$/.test(core) && !CAPS_WORDS.has(core)) return "caps";
+  return /^[a-z][A-Za-z]?$/.test(core) && !SHORT_WORDS.has(core.toLowerCase()) ? "frag" : "ok";
+}
+
+/** 토막이 아닌 「뜻이 있는」 낱말인지 — 한글 2글자 이상, 로마자 · 숫자 3글자 이상, 알려진 약어, 부서 · 주소 단위(팀 · 층), 「3층」 「101호」 */
+function isSubstantial(token: string): boolean {
+  const core = coreOf(token);
+  return /^[가-힣]{2,}$/.test(core) || [...core].length >= 3 || CAPS_WORDS.has(core) || KO_UNITS.has(core) || /^\d+[가-힣]+$/.test(core);
 }
 
 /**
- * 글자 읽기가 무늬 · 로고를 잘못 읽어 깨진 줄인지(예: 「SRT $e ud an 헤르 PIE AR」) — 칩에서 빼요.
- * 정상 줄(이름 · 회사명 · 주소 · 직함)이 빠지지 않게 보수적으로: 짧은 토막(isFragment)이 2개 넘게 있어야 하고,
- * - 토막이 낱말의 절반을 넘거나,
- * - 토막이 낱말의 1/3 이상이면서 이상한 기호가 섞였거나 한 줄에 한글 · 로마자가 뒤섞였을 때만 깨졌다고 봐요.
+ * 글자 읽기가 무늬 · 로고를 잘못 읽어 깨진 줄인지(예: 「SRT $e ud an 헤르 PIE AR」 「은 이아7 났」 「Sau TH」) — 칩에서 빼요.
+ * 정상 줄(이름 · 회사명 · 주소 · 직함 · 부서)이 빠지는 쪽이 더 나빠서, 토막(tokenKind)이 있는 줄만 봐요.
+ * - 공백 빼고 2글자 이하(「ud」 「를 0」) — 한글 2글자(「김민」 같은 이름)만 남겨요. 「HR」 「AI」 홀로도 빠져요(이름 · 회사명 칸에 쓸 일이 없어요).
+ * - 토막(frag · caps)이 낱말의 절반 이상 — 토막이 2개 이상이거나 대문자 토막이 있을 때(「ud an」 「Sau TH」).
+ *   토막 하나에 뜻 있는 낱말이 붙은 줄(「iM 뱅크」 「eo Studio」)은 남겨요.
+ * - 토막(숫자 섞인 한글 포함)이 있고 나머지가 모두 뜻 없는 짧은 낱말(「은 이아7 났」 「Tx dg」) — 숫자 섞인 한글 한 낱말뿐인 줄(「카페24」)은 남겨요.
+ * - 토막이 2개 이상 · 낱말의 1/3 이상이면서 이상한 기호가 섞였거나 한 줄에 한글 · 로마자가 뒤섞였을 때
  * 메일 · 전화 줄은 보지 않아요(모양이 정해져 있어 따로 뽑아요).
  */
 export function isGarbled(line: string): boolean {
   if (extractEmail(line) || phoneHits(line).length > 0) return false;
+  const compact = line.replace(/\s/g, "");
+  if ([...compact].length <= 2) return !/^[가-힣]{2}$/.test(compact);
   const tokens = line.split(" ").filter(Boolean);
-  const fragments = tokens.filter(isFragment).length;
-  if (fragments < 2) return false;
-  if (fragments * 2 > tokens.length) return true;
-  const oddSymbol = [...line].some((ch) => !/[\p{L}\p{N}\s]/u.test(ch) && !ALLOWED_SYMBOL_RE.test(ch));
+  const surnameFirst = KO_SURNAMES.has(coreOf(tokens[0]).toLowerCase());
+  const capsCounts = /[a-z]/.test(line) && !surnameFirst;
+  const kinds = tokens.map((t, i) => tokenKind(t, capsCounts && i > 0));
+  const frags = kinds.filter((k) => k === "frag").length;
+  const caps = kinds.filter((k) => k === "caps").length;
+  const digits = kinds.filter((k) => k === "digit").length;
+  const strong = frags + caps;
+  if (strong + digits === 0) return false;
+  if ((strong >= 2 || caps >= 1) && strong * 2 >= tokens.length) return true;
+  const restMeaningless = !tokens.some((t, i) => kinds[i] === "ok" && isSubstantial(t));
+  if (restMeaningless && (strong >= 1 || tokens.length >= 2)) return true;
+  const oddSymbol = [...line].some(isOddSymbol);
   const mixedScript = /[가-힣]/.test(line) && /[A-Za-z]/.test(line);
-  return fragments * 3 >= tokens.length && (oddSymbol || mixedScript);
+  return strong >= 2 && strong * 3 >= tokens.length && (oddSymbol || mixedScript);
 }
 
 /**

@@ -261,7 +261,7 @@ export default function AccountsPage() {
     if (staff === null) router.replace("/login");
   }, [staff, router]);
 
-  // 예전 판(7일 기기 보관)이 남긴 명함 사진 저장소 정리 — UG-431 기획 16841, 지워도 되는 때는 card-photo.ts 참고
+  // 예전 판(기기 보관)이 남긴 명함 저장소 정리 — UG-431 기획 16841 · 16864, 지워도 되는 때는 card-photo.ts 참고
   useEffect(() => {
     purgeLegacyCardPhotos();
   }, []);
