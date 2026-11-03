@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 명함 읽기 도구(UG-431) — node_modules 에서 복사한 빌드 산출물
+    "public/ocr/**",
   ]),
 ]);
 

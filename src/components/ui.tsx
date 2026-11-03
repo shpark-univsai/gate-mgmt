@@ -25,11 +25,14 @@ export function Dialog({
   title,
   onClose,
   closable = true,
+  wide = false,
   children,
 }: {
   title: string;
   onClose: () => void;
   closable?: boolean;
+  /** 칸을 두 줄로 나란히 두는 창(계정 만들기 — 회사명 · 이름 / 이메일 · 연락처)은 조금 넓게 */
+  wide?: boolean;
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -100,7 +103,7 @@ export function Dialog({
 
   return (
     <div ref={scrimRef} className="scrim" onMouseDown={(e) => e.target === e.currentTarget && closable && onClose()}>
-      <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={trapTab}>
+      <div ref={ref} className={`dialog${wide ? " dialog--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={trapTab}>
         <h2 id="dialog-title" className="dialog-title">
           {title}
         </h2>

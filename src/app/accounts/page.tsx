@@ -9,6 +9,7 @@ import {
   cancelIssue,
   checkEmail,
   createAccount,
+  exportAccounts,
   getSummary,
   listAccounts,
   logout,
@@ -22,9 +23,37 @@ import {
   type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
+import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
+import { createCardReader } from "@/lib/card-ocr";
+import { isFilled, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// 고객 이름 · 연락처(UG-431) — 서버(CreateAccountRequest)와 같은 한도 · 같은 글자
+const NAME_MAX = 40;
+const PHONE_MAX = 30;
+const PHONE_RE = /^[0-9 +()-]*$/;
+
+/** 이름 칸 안내. required = 새로 만들 때(고치는 재발송의 옛 기록은 비어도 돼요) */
+const nameErrorOf = (v: string, required: boolean) =>
+  !v ? (required ? "이름을 입력해 주세요." : "") : v.length > NAME_MAX ? `이름은 ${NAME_MAX}자까지 쓸 수 있습니다.` : "";
+/** 연락처 칸 안내 — 선택 항목이라 비면 통과 */
+const phoneErrorOf = (v: string) =>
+  !v
+    ? ""
+    : v.length > PHONE_MAX
+      ? `연락처는 ${PHONE_MAX}자까지 쓸 수 있습니다.`
+      : !PHONE_RE.test(v)
+        ? "연락처에는 숫자 · 공백 · + - ( ) 만 쓸 수 있습니다."
+        : "";
+/** 만들기 요청의 이름 · 연락처 — 빈 값은 보내지 않아요 */
+const personInput = (name: string, phone: string) => ({ ...(name ? { name } : {}), ...(phone ? { phone } : {}) });
+
+const SCAN_HELP = "명함에서 이메일 · 이름 · 회사명 · 연락처를 읽어 아래 칸을 채웁니다. 사진은 저장하지 않습니다.";
+const SCAN_READING = "명함을 읽고 있습니다…";
+const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있으니 고객과 함께 확인해 주세요.";
+// 읽기 도구를 받지 못했거나(첫 사용 · 인터넷 없음) 글자를 찾지 못함 — 막힌 게 아니라 직접 입력하면 돼서 회색
+const SCAN_FAILED = "명함을 읽지 못했습니다. 다시 찍거나 직접 입력해 주세요.";
 
 const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactElement }[] = [
   { value: "en", label: "English", Flag: FlagUS },
@@ -121,6 +150,21 @@ type ToastState = { title: string; detail: string } | null;
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 const LOAD_FAILED = "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+// 「CSV 내려받기」 실패(UG-431). 너무 많을 때는 서버(MGMT-107)의 한국어 문구와 같은 말 — 서버 문구는 브라우저 언어를 따라 영어로 올 수 있어요.
+const EXPORT_TOO_MANY = "내보낼 기록이 10,000건을 넘습니다. 검색어나 상태로 범위를 좁혀 다시 시도해 주세요.";
+const EXPORT_FAILED = "CSV 파일을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.";
+
+/** 브라우저에서 만든 CSV 를 파일로 내려받아요. 임시 주소는 내려받기가 시작된 뒤 지워요(Safari 는 바로 지우면 받지 못해요). */
+function downloadCsv(text: string, fileName: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 /** 목록 줄 상태: 안내 메일을 보내지 못한 첫 로그인 전 계정은 까닭을 빨간 글씨로 보여 줘요(필터 · 요약은 그대로 「첫 로그인 전」). */
 const MAIL_FAILURE_LABEL: Record<MailFailureReason, string> = {
@@ -191,6 +235,9 @@ export default function AccountsPage() {
   const [cancelTarget, setCancelTarget] = useState<Account | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  // 내려받기 실패 안내는 그때의 조건(applied)에만 붙여요 — 검색 조건을 바꾸면 저절로 사라져요.
+  const [exportError, setExportError] = useState<{ for: typeof applied; text: string } | null>(null);
 
   // 로그인 확인. 화면 이동용이고, 실제 권한 검사는 서버가 해요(로그인이 끊기면 서버 호출이 로그인 화면으로 보내요).
   useEffect(() => {
@@ -277,6 +324,24 @@ export default function AccountsPage() {
     setPage(1);
     setApplied({ keyword: keyword.trim(), status: v });
     reload();
+  }
+
+  /** 「CSV 내려받기」(N5) — 검색 칸에 쳐 둔 글자가 아니라 지금 목록에 걸린 조건(applied) 그대로 전부 내려받아요. */
+  async function onExport() {
+    if (exporting) return;
+    const query = applied;
+    setExporting(true);
+    setExportError(null);
+    const res = await exportAccounts(query);
+    setExporting(false);
+    if (!res.ok) return setExportError({ for: query, text: res.reason === "too_many" ? EXPORT_TOO_MANY : EXPORT_FAILED });
+    try {
+      downloadCsv(buildAccountsCsv(res.rows, { language: languageName, status: (s) => STATUS_LABEL[s] }), exportFileName(new Date()));
+    } catch {
+      // 파일 만들기 · 내려받기 실패(브라우저 메모리 등)도 같은 안내
+      return setExportError({ for: query, text: EXPORT_FAILED });
+    }
+    setToast({ title: "CSV 파일을 내려받았습니다", detail: `계정 ${res.rows.length}개` });
   }
 
   function onReset() {
@@ -408,7 +473,7 @@ export default function AccountsPage() {
                   clearKeyword();
                 }
               }}
-              placeholder="회사명, 고객 이메일 검색"
+              placeholder="회사명, 이름, 고객 이메일 검색"
             />
             {keyword && (
               <button type="button" className="search-clear" onClick={clearKeyword} aria-label="검색어 지우기">
@@ -463,6 +528,15 @@ export default function AccountsPage() {
             ))}
           </div>
           <span className="count">총 {total}개</span>
+          {/* PC · 아이패드만 — 휴대폰은 .toolbar .btn 을 숨겨요 */}
+          <button type="button" className="btn btn-outline btn-sm" onClick={onExport} disabled={exporting} aria-busy={exporting || undefined}>
+            {exporting ? "내려받는 중…" : "CSV 내려받기"}
+          </button>
+          {exportError?.for === applied && (
+            <span className="error" role="alert">
+              {exportError.text}
+            </span>
+          )}
           {loadError && rows.length > 0 && (
             <span className="error" role="alert">
               {LOAD_FAILED}
@@ -863,6 +937,7 @@ function useCancelNow(onCancelled: () => void) {
  * 이 창에서 만들거나 다시 보낸 결과가 주소 오류(I2 · M8)면 결과 화면으로 넘기지 않고 이 창에 남아요: 이메일이 그대로면
  * [닫기] [발급 취소], 고치면 [닫기] [재발송](I3 · M8b) — 고친 주소로 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요.
  * 조회로 만난 주소 오류 기록(C2)은 [닫기] [발급 취소]만이고, 이메일을 고치면 보통 새로 만들기예요(C3, 옛 기록은 그대로 — 16687).
+ * UG-431: 고객 이름(필수) · 연락처(선택) 칸과 「명함 찍어서 채우기」(N1~N4 · 칩 N3b). 명함 사진은 기기 안에서만 읽어요(card-ocr.ts).
  */
 function CreateDialog({
   onClose,
@@ -883,10 +958,14 @@ function CreateDialog({
   onCancelled: () => void;
 }) {
   const [company, setCompany] = useState("");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [language, setLanguage] = useState<MailLanguage>("en");
   const [companyError, setCompanyError] = useState("");
+  const [nameError, setNameError] = useState("");
   const [emailError, setEmailError] = useState("");
+  const [phoneError, setPhoneError] = useState("");
   const [formError, setFormError] = useState("");
   const { cancelling, cancelError, cancelNow, resetCancelError } = useCancelNow(onCancelled);
   const [check, setCheck] = useState<{ email: string; result: EmailCheck } | null>(null);
@@ -901,10 +980,32 @@ function CreateDialog({
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
+  // 명함 읽기가 끝났을 때 고치는 모드인지 보려고(읽는 동안 바뀔 수 있어요)
+  const fixRef = useRef<Account | null>(null);
+  useEffect(() => {
+    fixRef.current = fix;
+  }, [fix]);
   // 사용 중 이메일일 때 「고객이 비밀번호를 잊었나요?」로 펼치는 안내(D′ · MD′). 대신 보내기는 UG-421.
   const [resetOpen, setResetOpen] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+  // 명함 읽기(UG-431). 사진은 상태에 두지 않아요 — 읽는 함수 안에서만 쓰고 버려요.
+  const fileRef = useRef<HTMLInputElement>(null);
+  // 읽기 도구 — 창이 열려 있는 동안 일꾼을 다시 쓰고, 창을 닫으면 닫아요
+  const [reader] = useState(createCardReader);
+  useEffect(() => {
+    reader.open();
+    return () => reader.dispose();
+  }, [reader]);
+  const [scanning, setScanning] = useState(false);
+  const [scan, setScan] = useState<{ chips: Chip[]; links: ScanLinks } | null>(null);
+  const [scanFailed, setScanFailed] = useState(false);
+  // 명함에서 메일 주소를 찾지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요.
+  const [emailMissing, setEmailMissing] = useState(false);
+  // 커서가 있는 칸(칩 규칙 3). 칩을 누르면 칸에서 초점이 빠질 수 있어서(아이패드) 방금 빠진 칸도 커서로 봐요.
+  const cursor = useRef<{ field: ScanField; blurredAt: number | null } | null>(null);
 
   const trimmed = email.trim();
   const key = trimmed.toLowerCase();
@@ -983,7 +1084,8 @@ function CreateDialog({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy.current) return;
+    // 명함을 읽는 동안에는 보내지 않아요 — 읽은 값이 보낸 뒤에 칸을 바꾸지 않게
+    if (busy.current || scanning) return;
     busy.current = true;
     try {
       await submit();
@@ -1002,16 +1104,26 @@ function CreateDialog({
     let cError = "";
     if (!fixCompany) cError = "회사명을 입력해 주세요.";
     else if (!wrong.company && fixCompany.length > COMPANY_MAX) cError = `회사명은 ${COMPANY_MAX}자까지 쓸 수 있습니다.`;
+    // 고치는 계정에 이름이 있으면(이 창에서 만든 계정) 이름 · 연락처는 그 계정 것 그대로(칸이 잠겨요).
+    // 없으면(조회로 만난 기록 C2 — 조회가 이름을 주지 않음 · 이름 없는 옛 기록) 칸을 열고 새로 만들 때처럼 이름은 필수.
+    const fixName = wrong.name ? wrong.name : name.trim();
+    const fixPhone = wrong.name ? (wrong.phone ?? "") : phone.trim();
+    const nError = wrong.name ? "" : nameErrorOf(fixName, true);
+    const pError = wrong.name ? "" : phoneErrorOf(fixPhone);
     setEmailError(eError);
     setCompanyError(cError);
+    setNameError(nError);
+    setPhoneError(pError);
     setFormError("");
     if (cError) return companyRef.current?.focus();
+    if (nError) return nameRef.current?.focus();
     if (eError) return emailRef.current?.focus();
+    if (pError) return phoneRef.current?.focus();
     const state = current ?? (await runCheck());
     if (!state || state.status !== "new") return emailRef.current?.focus(); // 사용 중 · 다른 발급 기록 · 조회 실패 — 칸 아래 안내
 
     setSending(true);
-    const res = await createAccount({ company: fixCompany, email: trimmed, language: wrong.language });
+    const res = await createAccount({ company: fixCompany, email: trimmed, language: wrong.language, ...personInput(fixName, fixPhone) });
     if (!res.ok) {
       setSending(false);
       if (res.reason === "duplicate" || res.reason === "in_use") {
@@ -1061,15 +1173,25 @@ function CreateDialog({
     }
 
     let cError = "";
+    let nError = "";
+    let pError = "";
+    // 이미 만든 계정(첫 로그인 전)이면 회사명 · 이름 · 연락처는 쓰지 않아요(다시 보내기) — 막지 않아요.
     if (state?.status !== "pending") {
       if (!company.trim()) cError = "회사명을 입력해 주세요.";
       else if (company.trim().length > COMPANY_MAX) cError = `회사명은 ${COMPANY_MAX}자까지 쓸 수 있습니다.`;
+      nError = nameErrorOf(name.trim(), true);
+      pError = phoneErrorOf(phone.trim());
     }
     setCompanyError(cError);
+    setNameError(nError);
     setEmailError(eError);
+    setPhoneError(pError);
     setFormError("");
+    // 초점은 화면 순서대로: 회사명 → 이름 → 고객 이메일 → 연락처
     if (cError) return companyRef.current?.focus();
+    if (nError) return nameRef.current?.focus();
     if (eError) return emailRef.current?.focus();
+    if (pError) return phoneRef.current?.focus();
     if (!state) return emailRef.current?.focus(); // 조회 실패 — 칸 아래 안내
 
     if (state.status === "in_use") return;
@@ -1078,7 +1200,7 @@ function CreateDialog({
     if (state.status === "pending" && (state.resendBlocked || state.mailFailureReason === "address")) return;
 
     setSending(true);
-    const input = { company: company.trim(), email: trimmed, language };
+    const input = { company: company.trim(), email: trimmed, language, ...personInput(name.trim(), phone.trim()) };
     if (state.status === "pending") {
       const res = await resendGuide(state.id, language);
       setSending(false);
@@ -1117,6 +1239,116 @@ function CreateDialog({
 
   // 고치는 중이면 그 계정의 회사명(서버가 회사명을 주지 않았으면 입력), 아니면 첫 로그인 전 기록의 회사명 — 고칠 수 없어요
   const companyLocked = fix ? !!fix.company : !!pending;
+  // 이름 · 연락처: 고치는 중이면 그 계정에 이름이 있을 때만 잠가요(그 계정 값). 이름이 없으면(C2 · 옛 기록) 열어서 받아요.
+  // 첫 로그인 전 기록이면 잠그고 비워 둬요(조회가 주지 않고, 다시 보내기엔 쓰지 않아요).
+  const personLocked = fix ? !!fix.name : !!pending;
+  const nameShown = fix?.name ? fix.name : !fix && pending ? "" : name;
+  const phoneShown = fix?.name ? (fix.phone ?? "") : !fix && pending ? "" : phone;
+  // 칩을 넣지 않을 칸(잠긴 칸) — 그 칸에 연결된 칩은 「아직 안 씀」으로 보여요
+  const lockedFields: ScanField[] = [...(companyLocked ? (["company"] as const) : []), ...(personLocked ? (["name", "phone"] as const) : [])];
+
+  /** 이메일 칸 값 바꾸기 — 직접 칠 때와 명함 · 칩으로 넣을 때가 같은 정리를 해요(앞 기록의 안내가 남지 않게). */
+  // companyNow = 지금 회사명 칸 값(명함으로 함께 채울 때는 새 값 — 옛 기록 회사명이 명함 회사명을 덮지 않게)
+  function changeEmail(value: string, companyNow: string = company) {
+    setEmail(value);
+    // 주소 오류 기록에서 주소를 고쳐 새로 만들 때: 회사명이 비어 있으면 그 기록의 회사명을 미리 채우고,
+    // 메일 언어도 그 기록의 언어로 둬요(둘 다 고칠 수 있어요)
+    if (!fix && blocked && pending) {
+      if (pending.company && !companyNow.trim()) setCompany(pending.company);
+      langBeforePending.current = null;
+    }
+    if (emailError) setEmailError("");
+    if (formError) setFormError("");
+    if (cancelError) resetCancelError();
+    setResetOpen(false);
+    if (value.trim()) setEmailMissing(false);
+  }
+
+  /** 칸마다 값 넣기(명함 · 칩). 그 칸의 오류 안내는 지워요. */
+  const putField: Record<ScanField, (v: string) => void> = {
+    company: (v) => {
+      setCompany(v);
+      setCompanyError("");
+    },
+    name: (v) => {
+      setName(v);
+      setNameError("");
+    },
+    email: (v) => changeEmail(v),
+    phone: (v) => {
+      setPhone(v);
+      setPhoneError("");
+    },
+  };
+  const fieldRef: Record<ScanField, React.RefObject<HTMLInputElement | null>> = {
+    company: companyRef,
+    name: nameRef,
+    email: emailRef,
+    phone: phoneRef,
+  };
+
+  /** 직접 고치면 그 칸의 칩은 「아직 안 씀」으로(칩 규칙 6) — 고친 글자는 그대로 */
+  const unlinkField = (field: ScanField) => setScan((s) => (s && s.links[field] !== undefined ? { ...s, links: unlink(s.links, field) } : s));
+
+  const onFieldFocus = (field: ScanField) => {
+    cursor.current = { field, blurredAt: null };
+  };
+  /** at = 이벤트 시각(e.timeStamp) */
+  const onFieldBlur = (field: ScanField, at: number) => {
+    if (cursor.current?.field === field) cursor.current = { field, blurredAt: at };
+  };
+  /** 지금(now = 이벤트 시각) 커서가 있는 칸. 칩을 눌러 방금(0.5초 안) 빠진 칸도 커서로 봐요 — 다른 곳을 눌러 빠졌으면 커서 없음. */
+  function cursorField(now: number): ScanField | null {
+    const c = cursor.current;
+    if (!c) return null;
+    return c.blurredAt === null || now - c.blurredAt < 500 ? c.field : null;
+  }
+
+  function onChip(chip: Chip, now: number) {
+    if (!scan) return;
+    const at = cursorField(now);
+    const r = tapChip(chip, scan.links, { company, name, email, phone }, at, lockedFields);
+    setScan({ ...scan, links: r.links });
+    if (r.set) putField[r.set.field](r.set.value);
+    // 커서는 있던 칸에 그대로(메일 · 전화 칩이 다른 칸에 들어가도) — 다음 칩도 같은 칸을 고를 수 있게
+    const focus = r.focus ?? at;
+    if (focus) fieldRef[focus].current?.focus();
+  }
+
+  /**
+   * 명함 사진을 읽어 네 칸을 채워요(동작 규칙 1~4 · 칩 규칙 1 · 7). 사진은 이 함수 안에서만 쓰고 서버로 보내지 않아요.
+   * 다시 찍으면 칩 목록을 바꾸고 네 칸을 새로 채워요(읽지 못한 칸은 비워요). 읽지 못하면 칸은 그대로 두고 안내만 해요.
+   */
+  async function onPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.currentTarget;
+    const photo = input.files?.[0];
+    input.value = ""; // 입력 칸이 사진을 붙잡고 있지 않게(같은 사진을 다시 골라도 다시 읽어요)
+    if (!photo) return;
+    setScanning(true);
+    setScanFailed(false);
+    let text: string | null;
+    try {
+      text = await reader.read(photo);
+    } catch {
+      text = null;
+    } finally {
+      setScanning(false);
+    }
+    // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
+    if (fixRef.current) return;
+    const result = text === null ? null : scanCard(text);
+    if (!result || result.chips.length === 0) return setScanFailed(true);
+    setScan({ chips: result.chips, links: result.links });
+    // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기가 명함 회사명을 덮지 않게(비었을 때만 채워요)
+    putField.company(result.values.company);
+    putField.name(result.values.name);
+    putField.phone(result.values.phone);
+    changeEmail(result.values.email, result.values.company);
+    cursor.current = null;
+    setEmailMissing(!result.values.email);
+    // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
+    if (!result.values.email) emailRef.current?.focus();
+  }
 
   if (mailFailure) {
     return (
@@ -1127,113 +1359,240 @@ function CreateDialog({
   }
 
   return (
-    <Dialog title="Gate 계정 만들기" onClose={onClose} closable={!sending}>
+    <Dialog title="Gate 계정 만들기" onClose={onClose} closable={!sending} wide>
       <form className="dialog-form" onSubmit={onSubmit} noValidate>
-        <div className="field">
-          <label htmlFor="company" className="t-body-200-b">
-            회사명
-          </label>
-          <div className={`input-box${companyError ? " is-error" : ""}${companyLocked ? " is-readonly" : ""}`}>
-            <input
-              ref={companyRef}
-              id="company"
-              autoComplete="organization"
-              // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
-              readOnly={companyLocked}
-              placeholder={!fix && pending && !pending.company ? "이미 만든 계정의 회사명 그대로" : undefined}
-              value={fix?.company ? fix.company : !fix && pending ? (pending.company ?? "") : company}
-              onChange={(e) => {
-                setCompany(e.target.value);
-                if (companyError) setCompanyError("");
-              }}
-              aria-invalid={!!companyError}
-              aria-describedby={companyError ? "company-error" : undefined}
-            />
-          </div>
-          {companyError && (
-            <p id="company-error" className="error">
-              {companyError}
-            </p>
-          )}
-        </div>
-
-        <div className="field">
-          <div className="field-top">
-            <div className="field-head">
-              <label htmlFor="email" className="t-body-200-b">
-                고객 이메일
-              </label>
-              {/* 사용 중일 때만: 누르면 바로 아래에 안내가 펼쳐지고, 다시 누르면 접혀요 */}
-              {inUse && (
+        {/* 명함 찍어서 채우기(N1~N4) — 주소를 고치는 중(fix)에는 다른 명함을 읽을 일이 없어 숨겨요 */}
+        {!fix && (
+          <div className="scan">
+            {scan ? (
+              <>
+                <div className="scan-head">
+                  <span className="scan-title">명함에서 읽은 줄 · 누르면 커서가 있는 칸에 들어갑니다</span>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={scanning}
+                    aria-busy={scanning || undefined}
+                  >
+                    {scanning ? SCAN_READING : "명함 다시 찍기"}
+                  </button>
+                </div>
+                <div className="scan-chips" role="group" aria-label="명함에서 읽은 줄">
+                  {scan.chips.map((chip) => {
+                    const filled = isFilled(scan.links, chip.id, lockedFields);
+                    return (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        className={`scan-chip${filled ? " is-filled" : ""}`}
+                        aria-pressed={filled}
+                        title={chip.text}
+                        // 누르는 동안 칸의 커서가 빠지지 않게(PC). 아이패드는 cursorField 가 방금 빠진 칸을 기억해요.
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => onChip(chip, e.timeStamp)}
+                        disabled={scanning}
+                      >
+                        {chip.text}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="help" role="status">
+                  {scanFailed ? SCAN_FAILED : SCAN_DONE}
+                </p>
+              </>
+            ) : (
+              <>
                 <button
                   type="button"
-                  className="field-link"
-                  aria-expanded={resetOpen}
-                  aria-controls="reset-guide"
-                  onClick={() => setResetOpen((o) => !o)}
+                  className="btn btn-outline scan-button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={scanning}
+                  aria-busy={scanning || undefined}
                 >
-                  고객이 비밀번호를 잊었나요?
-                  <IcArrowDown size={12} className={resetOpen ? "is-up" : undefined} />
+                  {scanning ? SCAN_READING : "명함 찍어서 채우기"}
                 </button>
-              )}
+                <p className="help" role="status">
+                  {scanFailed ? SCAN_FAILED : SCAN_HELP}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="field-row">
+          <div className="field">
+            <label htmlFor="company" className="t-body-200-b">
+              회사명
+            </label>
+            <div className={`input-box${companyError ? " is-error" : ""}${companyLocked ? " is-readonly" : ""}`}>
+              <input
+                ref={companyRef}
+                id="company"
+                autoComplete="organization"
+                // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
+                readOnly={companyLocked}
+                placeholder={!fix && pending && !pending.company ? "이미 만든 계정의 회사명 그대로" : undefined}
+                value={fix?.company ? fix.company : !fix && pending ? (pending.company ?? "") : company}
+                onChange={(e) => {
+                  setCompany(e.target.value);
+                  if (companyError) setCompanyError("");
+                  unlinkField("company");
+                }}
+                onFocus={() => onFieldFocus("company")}
+                onBlur={(e) => onFieldBlur("company", e.timeStamp)}
+                aria-invalid={!!companyError}
+                aria-describedby={companyError ? "company-error" : undefined}
+              />
             </div>
-            {inUse && resetOpen && (
-              <p id="reset-guide" className="help field-guide">
-                로그인 화면의 「비밀번호 재설정」을 안내해 주세요.
+            {companyError && (
+              <p id="company-error" className="error">
+                {companyError}
               </p>
             )}
           </div>
-          <div className={`input-box${emailError || inUse || fixSame || fixTaken ? " is-error" : ""}`}>
-            <input
-              ref={emailRef}
-              id="email"
-              type="email"
-              inputMode="email"
-              autoComplete="off"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                // 주소 오류 기록에서 주소를 고쳐 새로 만들 때: 회사명이 비어 있으면 그 기록의 회사명을 미리 채우고,
-                // 메일 언어도 그 기록의 언어로 둬요(둘 다 고칠 수 있어요)
-                if (!fix && blocked && pending) {
-                  if (pending.company && !company.trim()) setCompany(pending.company);
-                  langBeforePending.current = null;
-                }
-                if (emailError) setEmailError("");
-                if (formError) setFormError("");
-                if (cancelError) resetCancelError();
-                setResetOpen(false);
-              }}
-              onBlur={() => void runCheck()}
-              aria-invalid={!!emailError || inUse || fixSame || fixTaken}
-              aria-describedby="email-note"
-            />
+
+          <div className="field">
+            <label htmlFor="person-name" className="t-body-200-b">
+              이름
+            </label>
+            <div className={`input-box${nameError ? " is-error" : ""}${personLocked ? " is-readonly" : ""}`}>
+              <input
+                ref={nameRef}
+                id="person-name"
+                autoComplete="off"
+                readOnly={personLocked}
+                placeholder={!fix && pending ? "이미 만든 계정 그대로" : undefined}
+                value={nameShown}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (nameError) setNameError("");
+                  unlinkField("name");
+                }}
+                onFocus={() => onFieldFocus("name")}
+                onBlur={(e) => onFieldBlur("name", e.timeStamp)}
+                aria-invalid={!!nameError}
+                aria-describedby={nameError ? "name-error" : undefined}
+              />
+            </div>
+            {nameError && (
+              <p id="name-error" className="error">
+                {nameError}
+              </p>
+            )}
           </div>
-          <div id="email-note" role="status" aria-live="polite">
-            {emailError ? (
-              <p className="error">{emailError}</p>
-            ) : fix && cancelError ? (
-              <p className="error">{cancelErrorText(cancelError)}</p>
-            ) : fixSame ? (
-              // 주소 오류(I2 · C2): PC 는 한 줄, 휴대폰은 문장마다
-              <Sentences text={FIX_ADDRESS_TEXT} />
-            ) : fixTaken ? (
-              <p className="error">이미 만든 계정의 이메일입니다. 다른 주소를 입력해 주세요.</p>
-            ) : fix && !inUse ? null : inUse ? (
-              // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성
-              <p className="error">이미 사용 중인 이메일입니다.</p>
-            ) : blocked && pending ? (
-              // 다시 보낼 수 없는 경우: 까닭은 아래 빨간 안내로, 실행 버튼은 「발급 취소」
-              <p className="help">
-                이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}).
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <div className="field-top">
+              <div className="field-head">
+                <label htmlFor="email" className="t-body-200-b">
+                  고객 이메일
+                </label>
+                {/* 사용 중일 때만: 누르면 바로 아래에 안내가 펼쳐지고, 다시 누르면 접혀요 */}
+                {inUse && (
+                  <button
+                    type="button"
+                    className="field-link"
+                    aria-expanded={resetOpen}
+                    aria-controls="reset-guide"
+                    onClick={() => setResetOpen((o) => !o)}
+                  >
+                    고객이 비밀번호를 잊었나요?
+                    <IcArrowDown size={12} className={resetOpen ? "is-up" : undefined} />
+                  </button>
+                )}
+              </div>
+              {inUse && resetOpen && (
+                <p id="reset-guide" className="help field-guide">
+                  로그인 화면의 「비밀번호 재설정」을 안내해 주세요.
+                </p>
+              )}
+            </div>
+            <div className={`input-box${emailError || inUse || fixSame || fixTaken ? " is-error" : ""}`}>
+              <input
+                ref={emailRef}
+                id="email"
+                type="email"
+                inputMode="email"
+                autoComplete="off"
+                value={email}
+                onChange={(e) => {
+                  changeEmail(e.target.value);
+                  unlinkField("email");
+                }}
+                onFocus={() => onFieldFocus("email")}
+                onBlur={(e) => {
+                  onFieldBlur("email", e.timeStamp);
+                  void runCheck();
+                }}
+                aria-invalid={!!emailError || inUse || fixSame || fixTaken}
+                aria-describedby="email-note"
+              />
+            </div>
+            <div id="email-note" role="status" aria-live="polite">
+              {emailError ? (
+                <p className="error">{emailError}</p>
+              ) : fix && cancelError ? (
+                <p className="error">{cancelErrorText(cancelError)}</p>
+              ) : fixSame ? (
+                // 주소 오류(I2 · C2): PC 는 한 줄, 휴대폰은 문장마다
+                <Sentences text={FIX_ADDRESS_TEXT} />
+              ) : fixTaken ? (
+                <p className="error">이미 만든 계정의 이메일입니다. 다른 주소를 입력해 주세요.</p>
+              ) : fix && !inUse ? null : inUse ? (
+                // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성
+                <p className="error">이미 사용 중인 이메일입니다.</p>
+              ) : blocked && pending ? (
+                // 다시 보낼 수 없는 경우: 까닭은 아래 빨간 안내로, 실행 버튼은 「발급 취소」
+                <p className="help">
+                  이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}).
+                </p>
+              ) : pending ? (
+                // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「안내 메일 다시 보내기」
+                <p className="help">
+                  이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
+                </p>
+              ) : emailMissing ? (
+                // 명함에서 메일 주소를 못 읽음(N4) — 막힌 게 아니라 회색(C 와 같은 모양)
+                <p className="help">메일 주소를 찾지 못했습니다. 직접 입력해 주세요.</p>
+              ) : (
+                <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="field">
+            <label htmlFor="person-phone" className="t-body-200-b">
+              연락처<span className="field-optional">(선택)</span>
+            </label>
+            <div className={`input-box${phoneError ? " is-error" : ""}${personLocked ? " is-readonly" : ""}`}>
+              <input
+                ref={phoneRef}
+                id="person-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="off"
+                readOnly={personLocked}
+                placeholder={!fix && pending ? "이미 만든 계정 그대로" : undefined}
+                value={phoneShown}
+                onChange={(e) => {
+                  setPhone(e.target.value);
+                  if (phoneError) setPhoneError("");
+                  unlinkField("phone");
+                }}
+                onFocus={() => onFieldFocus("phone")}
+                onBlur={(e) => onFieldBlur("phone", e.timeStamp)}
+                aria-invalid={!!phoneError}
+                aria-describedby={phoneError ? "phone-error" : undefined}
+              />
+            </div>
+            {phoneError && (
+              <p id="phone-error" className="error">
+                {phoneError}
               </p>
-            ) : pending ? (
-              // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「안내 메일 다시 보내기」
-              <p className="help">
-                이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
-              </p>
-            ) : (
-              <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
             )}
           </div>
         </div>
@@ -1292,7 +1651,7 @@ function CreateDialog({
                 </button>
               )
             ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || fixTaken || sending} aria-busy={sending || checking || undefined}>
+              <button type="submit" className="btn btn-dark" disabled={inUse || fixTaken || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -1314,11 +1673,13 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || sending} aria-busy={sending || checking || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || sending || scanning} aria-busy={sending || checking || undefined}>
               {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
           </div>
         )}
+        {/* 아이패드 · 휴대폰은 카메라가 바로 열려요(capture). 폼 끝에 둬요 — 창이 열릴 때 초점이 회사명 칸에 가게(Dialog 는 첫 input 에 초점) */}
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onPhoto} />
       </form>
     </Dialog>
   );
