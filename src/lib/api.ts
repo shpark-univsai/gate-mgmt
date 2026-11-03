@@ -72,6 +72,8 @@ export type CreateAccountInput = {
   name?: string;
   /** 고객 연락처(UG-431, 선택). 숫자 · 공백 · + · - · ( · ) 만, 최대 30자 */
   phone?: string;
+  /** 「작성 중」 명함을 이어서 만든 창이면 그 번호(UG-431 기획 16864) — 계정이 만들어지면(메일 실패 포함) 서버가 그 명함을 지워요 */
+  draftId?: number;
 };
 
 /**
@@ -331,5 +333,128 @@ export async function cancelIssue(accountId: string): Promise<CancelResult> {
     if (e instanceof ApiError && e.code === "MGMT-102") return { ok: false, reason: "in_use" };
     if (e instanceof ApiError && e.code === "MGMT-101") return { ok: false, reason: "not_found" };
     return { ok: false, reason: "failed" };
+  }
+}
+
+/**
+ * 「작성 중」 명함(UG-431 기획 16864). 계정 만들기 창에서 명함을 찍었거나 칸을 채운 뒤 만들지 않고 닫으면 서버에 남겨요 —
+ * 다른 기기 · 다른 직원도 목록에서 보고 이어서 만들 수 있어요. 계정을 만들면(서버가 draftId 로) · [지우기] · 찍은 날부터 30일(서버)에 지워요.
+ * 요약 카드 · CSV 에는 들어가지 않아요(발급 기록이 아니에요). 못 채운 칸 · 고르지 않은 메일 언어는 null.
+ */
+export type CardDraft = {
+  id: string;
+  company: string | null;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  language: MailLanguage | null;
+  hasPhoto: boolean;
+  capturedAt: string;
+  expiresAt: string;
+  createdBy: string;
+  createdAt: string;
+  updatedBy: string;
+  updatedAt: string;
+};
+
+/** 이어서 만들기로 열 때 받는 것 — chips = 창이 저장한 칩 상태(JSON 그대로), photo = 명함 사진(순수 base64 JPEG) */
+export type CardDraftDetail = { draft: CardDraft; chips: unknown; photo: string | null };
+
+/**
+ * 남기는 값. 갱신(PUT)은 통째 바꾸기라 보내지 않은 칸은 지워져요.
+ * 사진: 새로 찍었으면 photo(data: 접두사 없는 base64 JPEG), 그대로면 keepPhoto: true, 지웠으면 둘 다 빼요.
+ */
+export type CardDraftInput = {
+  company?: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  language?: MailLanguage;
+  chips?: unknown;
+  photo?: string;
+  keepPhoto?: boolean;
+};
+
+/**
+ * not_found = 그사이 계정을 만들었거나 다른 직원이 지움(MGMT-109 — 새로 남기지 않아요)
+ * photo = 사진이 너무 크거나(MGMT-110 · 112) JPEG 가 아님(MGMT-111) / failed = 서버 · 네트워크 문제
+ */
+export type CardDraftSaveResult = { ok: true; draft: CardDraft } | { ok: false; reason: "not_found" | "photo" | "failed" };
+
+const CARD_DRAFT_NOT_FOUND = "MGMT-109";
+const CARD_DRAFT_PHOTO_ERRORS: readonly string[] = ["MGMT-110", "MGMT-111", "MGMT-112"];
+
+type CardDraftDto = Partial<Omit<CardDraft, "id" | "hasPhoto">> & { id: string | number; hasPhoto?: boolean | null };
+
+const LANGUAGES: readonly string[] = ["en", "ko"] satisfies MailLanguage[];
+const textOrNull = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+
+const toCardDraft = (d: CardDraftDto): CardDraft => ({
+  id: String(d.id),
+  company: textOrNull(d.company),
+  name: textOrNull(d.name),
+  email: textOrNull(d.email),
+  phone: textOrNull(d.phone),
+  language: typeof d.language === "string" && LANGUAGES.includes(d.language) ? d.language : null,
+  hasPhoto: d.hasPhoto === true,
+  capturedAt: d.capturedAt ?? "",
+  expiresAt: d.expiresAt ?? "",
+  createdBy: d.createdBy ?? "",
+  createdAt: d.createdAt ?? "",
+  updatedBy: d.updatedBy ?? "",
+  updatedAt: d.updatedAt ?? "",
+});
+
+const isDraftNotFound = (e: unknown) => e instanceof ApiError && (e.code === CARD_DRAFT_NOT_FOUND || (e.status === 404 && !e.code));
+
+/** 「작성 중」 명함 목록 — 모든 직원 것. 목록 화면의 검색어가 있으면 같은 검색어로 걸러요(한 번에 최대 100장). */
+export async function listCardDrafts(keyword = ""): Promise<CardDraft[]> {
+  const params = new URLSearchParams();
+  if (keyword.trim()) params.set("keyword", keyword.trim());
+  params.set("page", "1");
+  params.set("size", "100");
+  const data = await authed<{ content: CardDraftDto[]; totalElements: number }>("GET", `${MGMT}/card-drafts?${params}`);
+  return data.content.map(toCardDraft);
+}
+
+/** 이어서 만들기 — 칩 · 사진까지. not_found = 그사이 계정을 만들었거나 지워짐 */
+export async function getCardDraft(
+  id: string,
+): Promise<{ ok: true; detail: CardDraftDetail } | { ok: false; reason: "not_found" | "failed" }> {
+  try {
+    const data = await authed<{ draft: CardDraftDto; chips?: unknown; photo?: string | null }>(
+      "GET",
+      `${MGMT}/card-drafts/${encodeURIComponent(id)}`,
+    );
+    return {
+      ok: true,
+      detail: { draft: toCardDraft(data.draft), chips: data.chips ?? null, photo: typeof data.photo === "string" && data.photo ? data.photo : null },
+    };
+  } catch (e) {
+    return { ok: false, reason: isDraftNotFound(e) ? "not_found" : "failed" };
+  }
+}
+
+/** 남기기 — id 가 없으면 새로(POST), 있으면 그 명함을 통째 바꿔요(PUT). */
+export async function saveCardDraft(id: string | null, input: CardDraftInput): Promise<CardDraftSaveResult> {
+  try {
+    const data = id
+      ? await authed<CardDraftDto>("PUT", `${MGMT}/card-drafts/${encodeURIComponent(id)}`, input)
+      : await authed<CardDraftDto>("POST", `${MGMT}/card-drafts`, input);
+    return { ok: true, draft: toCardDraft(data) };
+  } catch (e) {
+    if (id && isDraftNotFound(e)) return { ok: false, reason: "not_found" };
+    if (e instanceof ApiError && ((e.code && CARD_DRAFT_PHOTO_ERRORS.includes(e.code)) || e.status === 413)) return { ok: false, reason: "photo" };
+    return { ok: false, reason: "failed" };
+  }
+}
+
+/** [지우기] — 사진 · 칩 · 입력한 값 모두. 이미 없으면(계정을 만들었거나 다른 직원이 지움) 그대로 성공이에요(멱등). */
+export async function deleteCardDraft(id: string): Promise<boolean> {
+  try {
+    await authed<{ deleted: boolean }>("DELETE", `${MGMT}/card-drafts/${encodeURIComponent(id)}`);
+    return true;
+  } catch (e) {
+    return isDraftNotFound(e);
   }
 }

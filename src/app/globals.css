@@ -167,6 +167,8 @@ p {
 .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scan-title { flex: 1; min-width: 0; color: var(--gray-700); font-weight: 600; }
 .scan-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scan-body { display: flex; align-items: flex-start; gap: 8px; } /* 찍은 명함 사진(작게)은 칩 왼쪽(N7) */
+.scan-body .scan-chips { flex: 1; min-width: 0; }
 /* 「아직 안 씀」: 흰 바탕 · 회색 테두리 */
 .scan-chip {
   max-width: 100%;
@@ -187,8 +189,8 @@ p {
 .scan-chip.is-filled { background: var(--gray-200); border-color: transparent; color: var(--gray-900); font-weight: 700; }
 .scan-chip:disabled { cursor: default; }
 
-/* ── 명함 사진(발급 창 메모리에만) · 헷갈리는 글자 ── */
-.card-thumb { align-self: flex-start; display: block; width: 96px; height: 60px; padding: 0; border: 1px solid var(--gray-200); border-radius: var(--radius-control); overflow: hidden; background: var(--gray-50); cursor: zoom-in; }
+/* ── 명함 사진(발급 창 · 「작성 중」 명함) · 헷갈리는 글자 ── */
+.card-thumb { flex: none; align-self: flex-start; display: block; width: 96px; height: 60px; padding: 0; border: 1px solid var(--gray-200); border-radius: var(--radius-control); overflow: hidden; background: var(--gray-50); cursor: zoom-in; }
 .card-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .photo-viewer {
   position: fixed;
@@ -428,6 +430,8 @@ p {
 .status--pending .status-dot { background: var(--status-wait); }
 .status--cancelled { color: var(--gray-500); }
 .status--cancelled .status-dot { background: var(--gray-400); }
+/* 「작성 중」 명함(UG-431 기획 16864) — 회색 점, 글자는 다른 상태와 같은 색(발급 취소처럼 흐리지 않게) */
+.status--draft .status-dot { background: var(--gray-400); }
 /* 안내 메일을 보내지 못한 첫 로그인 전 계정(일시적 발송 오류 · 이메일 주소 오류 · 메일 발송 실패) */
 .status--mail-failed { color: var(--danger-400); }
 .status--mail-failed .status-dot { background: var(--danger-400); }
@@ -523,6 +527,7 @@ p {
   border-radius: var(--radius-control);
 }
 .toast-icon { color: var(--success-600); flex: none; }
+.toast--error .toast-icon { color: var(--danger-400); } /* 창이 닫힌 뒤의 실패(「작성 중」 명함 저장 등) */
 .toast-title { color: var(--gray-0); font-weight: 700; }
 .toast-detail { margin-top: 2px; color: var(--gray-300); }
 
