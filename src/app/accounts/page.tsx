@@ -26,7 +26,7 @@ import { useStaff } from "@/lib/session";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader } from "@/lib/card-ocr";
 import { CARD_PHOTO_TEXT, deleteCardPhoto, loadCardPhoto, saveCardPhoto, syncCardPhotos } from "@/lib/card-photo";
-import { confusableParts, hasConfusable, isFilled, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
+import { confusableParts, emailHasConfusable, isFilled, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
 
 const COMPANY_MAX = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -448,6 +448,7 @@ export default function AccountsPage() {
           email={staff.email}
           onLogout={() => {
             logout();
+            // 로그아웃 때 이 기기의 명함 사진도 지울지는 기획 답(16840) 대기 — 정해지면 여기서 void clearCardPhotos()
             router.replace("/login");
           }}
         />
@@ -661,7 +662,7 @@ export default function AccountsPage() {
                     : `${languageShort(a.language)} · ${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
                 </span>
                 {photoIds.has(a.id) && (
-                  <button type="button" className="link-action link-action--muted" onClick={() => void openRowPhoto(a.id)}>
+                  <button type="button" className="link-action link-action--muted card-photo-link" onClick={() => void openRowPhoto(a.id)}>
                     {CARD_PHOTO_TEXT.listButton}
                   </button>
                 )}
@@ -791,6 +792,13 @@ function CardPhotoViewer({ src, onClose }: { src: string; onClose: () => void })
     const opener = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
+      // 초점은 이 화면 안에만(뒤 창 · 목록으로 빠지지 않게) — 초점 가능한 것이 「닫기」뿐이라 거기 고정
+      if (e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeRef.current?.focus();
+        return;
+      }
       if (e.key !== "Escape") return;
       e.preventDefault();
       e.stopPropagation();
@@ -1107,7 +1115,7 @@ function CreateDialog({
   const companyRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
-  // 명함 읽기(UG-431). 사진은 상태에 두지 않아요 — 읽는 함수 안에서만 쓰고 버려요.
+  // 명함 읽기(UG-431). 찍은 원본(Blob)은 상태에 두지 않아요 — 읽는 함수 안에서만 쓰고 버리고, 비교용으로 줄인 사진(photo)만 둬요.
   const fileRef = useRef<HTMLInputElement>(null);
   // 읽기 도구 — 창이 열려 있는 동안 일꾼을 다시 쓰고, 창을 닫으면 닫아요
   const [reader] = useState(createCardReader);
@@ -1459,9 +1467,11 @@ function CreateDialog({
     const file = input.files?.[0];
     input.value = ""; // 입력 칸이 사진을 붙잡고 있지 않게(같은 사진을 다시 골라도 다시 읽어요)
     if (!file) return;
+    // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 다른 사람 사진이 이 발급에 저장되지 않게
+    setPhoto(null);
     setScanning(true);
     setScanFailed(false);
-    let text: string | null;
+    let text: string | null = null;
     let preview: string | null = null;
     try {
       ({ text, preview } = await reader.read(file));
@@ -1472,11 +1482,11 @@ function CreateDialog({
     }
     // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
     if (fixRef.current) return;
+    // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교)
+    setPhoto(preview);
     const result = text === null ? null : scanCard(text);
     if (!result || result.chips.length === 0) return setScanFailed(true);
     setScan({ chips: result.chips, links: result.links });
-    // 비교용 사진도 이번 명함으로(못 만들었으면 앞 사진을 남기지 않아요 — 다른 명함과 헷갈리지 않게)
-    setPhoto(preview);
     // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기가 명함 회사명을 덮지 않게(비었을 때만 채워요)
     putField.company(result.values.company);
     putField.name(result.values.name);
@@ -1491,7 +1501,8 @@ function CreateDialog({
   // 보여 줄 명함 사진: 이번에 찍은 것, 없으면 고치는 계정의 것(이 기기에 있으면)
   const shownPhoto = photo ?? (fix && storedPhoto?.id === fix.id ? storedPhoto.src : null);
   // 명함(칩)에서 들어온 이메일에 헷갈리는 글자가 있으면 다시 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
-  const showConfusable = scan?.links.email !== undefined && hasConfusable(trimmed);
+  // @ 앞(로컬 부분)에 있을 때만 — 도메인까지 보면 거의 모든 주소에 떠요
+  const showConfusable = scan?.links.email !== undefined && emailHasConfusable(trimmed);
 
   if (mailFailure) {
     return (
@@ -1704,11 +1715,10 @@ function CreateDialog({
                 // 명함에서 메일 주소를 못 읽음(N4) — 막힌 게 아니라 회색(C 와 같은 모양)
                 <p className="help">메일 주소를 찾지 못했습니다. 직접 입력해 주세요.</p>
               ) : (
-                // 헷갈리는 글자 안내가 이 자리를 대신해요(아래)
-                !showConfusable && <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
+                <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
               )}
             </div>
-            {/* 명함에서 읽은 이메일의 헷갈리는 글자 — 위 안내(오류 · 주소 오류 · 이미 만든 계정) 아래에 따로 */}
+            {/* 명함에서 읽은 이메일의 헷갈리는 글자 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
             {showConfusable && <ConfusableEmail email={trimmed} />}
           </div>
 

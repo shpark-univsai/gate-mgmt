@@ -406,11 +406,23 @@ export function hasConfusable(text: string): boolean {
   return CONFUSABLE_RE.test(text);
 }
 
-/** 강조해 보여 줄 조각 — 헷갈리는 글자는 한 글자씩 따로(confusable = true) */
+/**
+ * 이메일 @ 앞(로컬 부분)에 헷갈리는 글자가 있는지. 도메인(.com · .io · gmail …)은 보지 않아요 —
+ * 거의 모든 주소에 o · i 가 있어 안내가 늘 뜨고, 도메인은 회사 · 메일 서비스 이름이라 틀려도 알아보기 쉬워요.
+ */
+export function emailHasConfusable(email: string): boolean {
+  const at = email.lastIndexOf("@");
+  return hasConfusable(at === -1 ? email : email.slice(0, at));
+}
+
+/** 강조해 보여 줄 조각 — 로컬 부분(@ 앞)의 헷갈리는 글자만 한 글자씩 따로(confusable = true) */
 export function confusableParts(text: string): { text: string; confusable: boolean }[] {
   const parts: { text: string; confusable: boolean }[] = [];
+  const at = text.lastIndexOf("@");
+  let i = 0;
   for (const ch of text) {
-    const confusable = CONFUSABLE_RE.test(ch);
+    const confusable = (at === -1 || i < at) && CONFUSABLE_RE.test(ch);
+    i += ch.length;
     const last = parts[parts.length - 1];
     if (!confusable && last && !last.confusable) last.text += ch;
     else parts.push({ text: ch, confusable });

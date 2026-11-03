@@ -113,21 +113,24 @@ export function createCardReader() {
 
   /**
    * 명함 사진에서 읽은 글자(줄바꿈 포함)와 비교용 줄인 사진(data URL, 만들지 못하면 null).
-   * 읽기 도구를 받지 못했거나 읽다가 실패하면 예외를 던져요.
+   * 읽기 도구를 받지 못했거나 읽다가 실패하면 text 가 null 이에요 — 그래도 이번 사진(preview)은 돌려줘요(앞 명함 사진이 남지 않게).
    */
-  async function read(photo: Blob): Promise<{ text: string; preview: string | null }> {
+  async function read(photo: Blob): Promise<{ text: string | null; preview: string | null }> {
     const { canvas, preview } = await prepare(photo);
     try {
       const w = await ready();
       try {
         const { data } = await withTimeout(w.recognize(canvas ?? photo), READ_TIMEOUT_MS);
         return { text: data.text, preview };
-      } catch (e) {
+      } catch {
         // 읽다가 멈춘 일꾼은 다시 쓰지 않아요
         if (worker) closeLater(worker);
         worker = null;
-        throw e;
+        return { text: null, preview };
       }
+    } catch {
+      // 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과)
+      return { text: null, preview };
     } finally {
       // 그림판 메모리도 바로 비워요
       if (canvas) canvas.width = canvas.height = 0;
