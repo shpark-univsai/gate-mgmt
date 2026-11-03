@@ -398,3 +398,22 @@ export function unlink(links: ScanLinks, field: ScanField): ScanLinks {
   delete next[field];
   return next;
 }
+
+/** 명함 글자 읽기에서 서로 헷갈리기 쉬운 글자(0 · O · o, 1 · l · I · i) */
+const CONFUSABLE_RE = /[0Oo1lIi]/;
+
+export function hasConfusable(text: string): boolean {
+  return CONFUSABLE_RE.test(text);
+}
+
+/** 강조해 보여 줄 조각 — 헷갈리는 글자는 한 글자씩 따로(confusable = true) */
+export function confusableParts(text: string): { text: string; confusable: boolean }[] {
+  const parts: { text: string; confusable: boolean }[] = [];
+  for (const ch of text) {
+    const confusable = CONFUSABLE_RE.test(ch);
+    const last = parts[parts.length - 1];
+    if (!confusable && last && !last.confusable) last.text += ch;
+    else parts.push({ text: ch, confusable });
+  }
+  return parts;
+}
