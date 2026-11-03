@@ -23,3 +23,6 @@ npm-debug.log*
 
 # Next 빌드가 만드는 타입 선언 — 커밋하지 않는다
 next-env.d.ts
+
+# 명함 읽기 도구(UG-431) — scripts/copy-ocr-assets.mjs 가 node_modules 에서 복사한다(dev · build 전 자동). 커밋하지 않는다
+/public/ocr/

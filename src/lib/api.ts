@@ -51,6 +51,9 @@ export type Account = {
   mailFailureReason?: MailFailureReason;
   /** 같은 주소로 3번 연속 주소 오류 — 서버가 다시 보내기를 막았어요(발급 취소만 가능) */
   resendBlocked?: boolean;
+  /** 고객 이름 · 연락처(명함 · 발급 창, UG-431). 이 기능 전에 만든 기록이거나 비워 두었으면 없어요. */
+  name?: string;
+  phone?: string;
 };
 
 export type AccountQuery = { keyword?: string; status?: AccountStatus | "all"; page?: number; size?: number };
@@ -65,7 +68,31 @@ export type CreateAccountInput = {
   company: string;
   email: string;
   language: MailLanguage;
+  /** 고객 이름(UG-431). 화면은 새로 만들 때 꼭 받지만 서버는 비어도 받아요(고치는 재발송 · 옛 기록). 최대 40자 */
+  name?: string;
+  /** 고객 연락처(UG-431, 선택). 숫자 · 공백 · + · - · ( · ) 만, 최대 30자 */
+  phone?: string;
 };
+
+/**
+ * 「CSV 내려받기」 한 줄(UG-431). 목록과 같은 조건 · 같은 순서(최신순)의 기록 전부.
+ * 동의는 Y · N, 발급 취소한 기록이거나 기록이 없으면 null. createdAt 은 UTC(한국 시각 변환은 화면이 해요).
+ */
+export type ExportRow = {
+  company: string;
+  name: string | null;
+  email: string;
+  phone: string | null;
+  language: MailLanguage;
+  status: AccountStatus;
+  firstLoginConsent: "Y" | "N" | null;
+  marketingConsent: "Y" | "N" | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+/** too_many = 조건에 맞는 기록이 10,000건을 넘어 서버가 거절함(MGMT-107 — 검색어 · 상태로 좁혀 다시) / failed = 서버 · 네트워크 문제 */
+export type ExportResult = { ok: true; rows: ExportRow[] } | { ok: false; reason: "too_many" | "failed" };
 
 /**
  * 이메일 칸을 벗어날 때 하는 미리 조회. 보내기 전에 상태를 보여 주려고 써요.
@@ -155,10 +182,12 @@ export function logout() {
   if (refreshToken) revokeRefreshToken(refreshToken);
 }
 
-type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt" | "mailFailureReason"> & {
+type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone"> & {
   cancelledBy: string | null;
   cancelledAt: string | null;
   mailFailureReason?: MailFailureReason | null;
+  name?: string | null;
+  phone?: string | null;
 };
 
 const MAIL_FAILURE_REASONS: readonly string[] = ["temporary", "address", "unknown"] satisfies MailFailureReason[];
@@ -177,6 +206,8 @@ const toAccount = (a: AccountDto): Account => ({
   ...(a.resendBlocked ? { resendBlocked: true } : {}),
   ...(a.cancelledBy ? { cancelledBy: a.cancelledBy } : {}),
   ...(a.cancelledAt ? { cancelledAt: a.cancelledAt } : {}),
+  ...(a.name ? { name: a.name } : {}),
+  ...(a.phone ? { phone: a.phone } : {}),
 });
 
 /** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로, 한 페이지씩(page 는 1부터) 보여 줘요. */
@@ -188,6 +219,23 @@ export async function listAccounts(query: AccountQuery = {}): Promise<AccountPag
   params.set("size", String(query.size ?? 20));
   const data = await authed<{ content: AccountDto[]; totalElements: number }>("GET", `${MGMT}/accounts?${params}`);
   return { items: data.content.map(toAccount), total: data.totalElements };
+}
+
+/**
+ * 「CSV 내려받기」 — 지금 목록에 걸린 조건(검색어 · 상태) 그대로 전부(페이지 없음). 파일은 화면이 만들어요(accounts-csv.ts).
+ * 고객 이름 · 연락처가 담긴 파일이라 서버가 누가 몇 건을 내보냈는지 기록해 둬요.
+ */
+export async function exportAccounts(query: Pick<AccountQuery, "keyword" | "status"> = {}): Promise<ExportResult> {
+  const params = new URLSearchParams();
+  if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
+  params.set("status", query.status ?? "all");
+  try {
+    const data = await authed<{ rows: ExportRow[]; total: number }>("GET", `${MGMT}/accounts/export?${params}`);
+    return { ok: true, rows: data.rows };
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-107") return { ok: false, reason: "too_many" };
+    return { ok: false, reason: "failed" };
+  }
 }
 
 export function getSummary(): Promise<AccountSummary> {
