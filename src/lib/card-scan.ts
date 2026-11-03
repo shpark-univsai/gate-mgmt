@@ -111,37 +111,69 @@ const isMeaningful = (line: string) => {
   return meaningful >= 2 && meaningful * 2 >= line.replace(/\s/g, "").length;
 };
 
-// 깨진 줄 판별(isGarbled)용. 줄에 섞여도 되는 기호 — 그 밖의 기호($ % * = ? ! [ ] { } < > 등)는 잘못 읽은 표시로 봐요.
+// 깨진 줄 판별(isGarbled)용. 줄에 섞여도 되는 기호 — 그 밖의 기호($ % * = ? ! ^ [ ] { } < > 등)는 잘못 읽은 표시로 봐요.
 const ALLOWED_SYMBOL_RE = /[.,()&'’\-/+#@:;~·"“”㈜®™©]/u;
+const isOddSymbol = (ch: string) => !/[\p{L}\p{N}\s]/u.test(ch) && !ALLOWED_SYMBOL_RE.test(ch);
 // 짧은 토막으로 세지 않는 소문자 낱말(이름 · 회사명 · 주소에 흔한 전치사 · 관사)
 const SHORT_WORDS = new Set("of de la le da du di et at in on to by".split(" "));
+// 명함에 흔한 대문자 두 글자 낱말(부서 · 직함 · 분야 · 나라 · 회사 약칭) — 「대문자 2글자 토막」으로 세지 않아요(기획 16861)
+const CAPS_WORDS = new Set(
+  (
+    "AI AR VR XR MR HR GA QA QC CS CX UX UI IT IR PR PM PO PD MD GM VP BD BI SI CI TF SW HW IP OS DB ML DL DT DX AX " +
+    "EV TV PC HQ RA SE TL II US UK EU KR JP CN LA NY SF " +
+    "LG SK KT GS LS CJ HD KB NH"
+  ).split(" "),
+);
+
+/** 낱말 앞뒤의 기호를 뗀 알맹이 */
+const coreOf = (token: string) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 
 /**
- * 낱말이 의미 없는 짧은 토막인지 — 소문자로 시작하는 1~2글자 로마자만(대문자 약어 AI · HR, 「Ji」 같은 이름 음절은 아님).
- * 한글 한 글자는 세지 않아요 — 「R&D 및 AI 팀」 · 「B 동 3 층」 · 「Kim 김」처럼 정상 줄에 흔해요.
+ * 낱말이 의미 없는 짧은 토막인지(기획 16846 · 16861). 정상 줄에 흔한 짧은 낱말(한글 한 글자 「및」 · 「동」, 「Ji」 같은 이름 음절,
+ * AI · HR 같은 약어, 숫자)은 세지 않아요.
+ * - 소문자로 시작하는 1~2글자 로마자(「ud」 「dg」 「ha」)
+ * - 숫자가 섞인 짧은 한글 조각(「이아7」) — 한글 1~3글자 뒤에 숫자. 「4층」 「101호」처럼 숫자가 앞이면 주소라 세지 않고, 「제2」도 빼요
+ * - 이상한 기호($ % ^ …)만 있는 낱말(「^^」 「%」)
+ * - 대문자 2글자(「TH」) — 줄 첫 낱말이 아니고, 줄에 소문자 로마자가 있을 때만(caps). 「LG 전자」 「LEE JI AN」 「JH Park」은 그대로 둬요.
  */
-function isFragment(token: string): boolean {
-  const core = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-  if (!core || /\d/.test(core)) return false;
-  return /^[A-Za-z]{1,2}$/.test(core) && !/^[A-Z][a-z]?$|^[A-Z]{2}$/.test(core) && !SHORT_WORDS.has(core);
+function isFragment(token: string, caps: boolean): boolean {
+  const core = coreOf(token);
+  if (!core) return [...token].some(isOddSymbol);
+  if (/^(?!제)[가-힣]{1,3}\d{1,3}$/.test(core)) return true;
+  if (/\d/.test(core)) return false;
+  if (caps && /^[A-Z]{2}$/.test(core)) return !CAPS_WORDS.has(core);
+  return /^[a-z][A-Za-z]?$/.test(core) && !SHORT_WORDS.has(core.toLowerCase());
+}
+
+/** 토막이 아닌 「뜻이 있는」 낱말인지 — 한글 2글자 이상, 로마자 · 숫자 3글자 이상, 알려진 약어 */
+function isSubstantial(token: string): boolean {
+  const core = coreOf(token);
+  return /^[가-힣]{2,}$/.test(core) || [...core].length >= 3 || CAPS_WORDS.has(core);
 }
 
 /**
- * 글자 읽기가 무늬 · 로고를 잘못 읽어 깨진 줄인지(예: 「SRT $e ud an 헤르 PIE AR」) — 칩에서 빼요.
- * 정상 줄(이름 · 회사명 · 주소 · 직함)이 빠지지 않게 보수적으로: 짧은 토막(isFragment)이 2개 넘게 있어야 하고,
- * - 토막이 낱말의 절반을 넘거나,
- * - 토막이 낱말의 1/3 이상이면서 이상한 기호가 섞였거나 한 줄에 한글 · 로마자가 뒤섞였을 때만 깨졌다고 봐요.
+ * 글자 읽기가 무늬 · 로고를 잘못 읽어 깨진 줄인지(예: 「SRT $e ud an 헤르 PIE AR」 「은 이아7 났」 「Sau TH」) — 칩에서 빼요.
+ * 정상 줄(이름 · 회사명 · 주소 · 직함 · 부서)이 빠지는 쪽이 더 나빠서, 짧은 토막(isFragment)이 있는 줄만 봐요.
+ * - 공백 빼고 2글자 이하(「ud」 「를 0」) — 한글 2글자(「김민」 같은 이름)만 남겨요. 「HR」 「AI」 홀로도 빠져요(이름 · 회사명 칸에 쓸 일이 없어요).
+ * - 토막이 낱말의 절반 이상(「Tx dg」 「Sau TH」 「ud an」)
+ * - 토막이 하나뿐이어도 나머지가 모두 뜻 없는 짧은 낱말(「은 이아7 났」)
+ * - 토막이 2개 이상 · 낱말의 1/3 이상이면서 이상한 기호가 섞였거나 한 줄에 한글 · 로마자가 뒤섞였을 때
  * 메일 · 전화 줄은 보지 않아요(모양이 정해져 있어 따로 뽑아요).
  */
 export function isGarbled(line: string): boolean {
   if (extractEmail(line) || phoneHits(line).length > 0) return false;
+  const compact = line.replace(/\s/g, "");
+  if ([...compact].length <= 2) return !/^[가-힣]{2}$/.test(compact);
   const tokens = line.split(" ").filter(Boolean);
-  const fragments = tokens.filter(isFragment).length;
-  if (fragments < 2) return false;
-  if (fragments * 2 > tokens.length) return true;
-  const oddSymbol = [...line].some((ch) => !/[\p{L}\p{N}\s]/u.test(ch) && !ALLOWED_SYMBOL_RE.test(ch));
+  const caps = /[a-z]/.test(line);
+  const isFrag = tokens.map((t, i) => isFragment(t, caps && i > 0));
+  const fragments = isFrag.filter(Boolean).length;
+  if (fragments === 0) return false;
+  if (fragments * 2 >= tokens.length) return true;
+  if (!tokens.some((t, i) => !isFrag[i] && isSubstantial(t))) return true;
+  const oddSymbol = [...line].some(isOddSymbol);
   const mixedScript = /[가-힣]/.test(line) && /[A-Za-z]/.test(line);
-  return fragments * 3 >= tokens.length && (oddSymbol || mixedScript);
+  return fragments >= 2 && fragments * 3 >= tokens.length && (oddSymbol || mixedScript);
 }
 
 /**

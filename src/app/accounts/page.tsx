@@ -25,7 +25,7 @@ import {
 import { useStaff } from "@/lib/session";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader } from "@/lib/card-ocr";
-import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
+import { CARD_PHOTO_TEXT, clearCardDraft, loadCardDraft, purgeLegacyCardPhotos, saveCardDraft, type CardDraft } from "@/lib/card-photo";
 import {
   confusableParts,
   emailDomain,
@@ -265,6 +265,12 @@ export default function AccountsPage() {
   useEffect(() => {
     purgeLegacyCardPhotos();
   }, []);
+
+  // 작성하던 명함(UG-431 기획 16861) — 페이지를 열 때 찍은 지 24시간이 지났거나 다른 직원 것이면 지워요(읽기만 하고 버려요)
+  const staffEmail = staff?.email;
+  useEffect(() => {
+    if (staffEmail) void loadCardDraft(staffEmail);
+  }, [staffEmail]);
 
   /** 지금 조건 그대로 목록 · 요약을 다시 불러와요. */
   const reload = useCallback(() => setVersion((v) => v + 1), []);
@@ -724,6 +730,7 @@ export default function AccountsPage() {
 
       {creating && (
         <CreateDialog
+          staffEmail={staff.email}
           onClose={() => {
             setCreating(false);
             reload();
@@ -1071,6 +1078,7 @@ function useCancelNow(onCancelled: () => void) {
  * UG-431: 고객 이름(필수) · 연락처(선택) 칸과 「명함 찍어서 채우기」(N1~N4 · 칩 N3b). 명함 사진은 기기 안에서만 읽어요(card-ocr.ts).
  */
 function CreateDialog({
+  staffEmail,
   onClose,
   onCreated,
   onMailFailed,
@@ -1078,6 +1086,8 @@ function CreateDialog({
   onResendMailFailed,
   onCancelled,
 }: {
+  /** 지금 로그인한 직원 — 작성하던 명함을 이 직원 것만 보여 줘요 */
+  staffEmail: string;
   onClose: () => void;
   onCreated: (a: Account) => void;
   /** 계정은 만들었지만 메일은 못 보냄 — 창은 닫지 않고 결과를 보여 줘요(목록만 새로 고침) */
@@ -1135,10 +1145,71 @@ function CreateDialog({
   const [scanFailed, setScanFailed] = useState(false);
   // 명함에서 메일 주소를 찾지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요.
   const [emailMissing, setEmailMissing] = useState(false);
-  // 비교용 명함 사진(줄인 JPEG data URL) — 이 창의 상태(메모리)에만 둬요. 서버 · 기기에 저장하지 않아요(기획 16841).
-  // 계정을 만들면 바로 지우고, 주소 오류로 고치는 동안(fix)에는 남겨 두며, 창을 닫으면(이 창이 사라지면) 함께 사라져요.
+  // 비교용 명함 사진(줄인 JPEG data URL). 서버로 보내지 않아요. 창을 닫아도 「작성하던 명함」으로 이 기기에 남겨요(card-photo.ts, 기획 16861).
+  // 계정을 만들면 바로 지우고, 주소 오류로 고치는 동안(fix — 이미 만든 계정)에는 이 창 메모리에만 남겨 비교해요.
   const [photo, setPhoto] = useState<string | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState(false);
+  // 이 창에서 찍었거나 이어서 만드는 명함의 찍은 시각 — 있으면 창의 명함 · 칸을 작성하던 명함으로 남겨요(없으면 남기지 않아요)
+  const [takenAt, setTakenAt] = useState<number | null>(null);
+  // 창을 열 때 찾은 작성하던 명함 — 창 맨 위에 [이어서 만들기] [지우기]를 물어요
+  const [draft, setDraft] = useState<CardDraft | null>(null);
+  // 찾는 사이 새 명함을 찍었으면 묻지 않아요(새 명함이 앞 것을 바꿨어요)
+  const tookNewCard = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    void loadCardDraft(staffEmail).then((d) => {
+      if (alive && d && !tookNewCard.current) setDraft(d);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [staffEmail]);
+  // 명함 · 칸 · 메일 언어가 바뀔 때마다 작성하던 명함으로 남겨요. 고치는 중(fix) · 결과 화면은 이미 만든 계정이라 남기지 않아요.
+  useEffect(() => {
+    if (takenAt === null || fix || mailFailure || (!photo && !scan)) return;
+    saveCardDraft({ owner: staffEmail, takenAt, photo, scan, values: { company, name, email, phone }, language });
+  }, [staffEmail, takenAt, fix, mailFailure, photo, scan, company, name, email, phone, language]);
+
+  /**
+   * 이 창의 명함을 다 썼어요(계정을 만들어 메일을 보냄 · 결과 화면) — 사진을 바로 지우고 작성하던 명함에서도 지워요.
+   * keepPhoto = 주소를 고치는 동안(fix) 비교하려고 사진만 창 메모리에 남겨요(이미 만든 계정이라 작성하던 명함은 아니에요).
+   * 창을 열 때 물은 명함을 두고 직접 입력해 만든 경우(takenAt 없음)는 그 명함을 지우지 않아요 — 다음에 열 때 다시 물어요.
+   */
+  function forgetCard(keepPhoto = false) {
+    if (!keepPhoto) setPhoto(null);
+    if (takenAt !== null) void clearCardDraft();
+    setTakenAt(null);
+  }
+
+  /** [이어서 만들기] — 사진 · 칩 · 네 칸 · 메일 언어를 되살려요. 찍은 시각도 그대로(24시간은 처음 찍은 때부터). */
+  function resumeDraft() {
+    if (!draft || sending || scanning) return;
+    setPhoto(draft.photo);
+    setScan(draft.scan);
+    setCompany(draft.values.company);
+    setName(draft.values.name);
+    setEmail(draft.values.email);
+    setPhone(draft.values.phone);
+    langBeforePending.current = null;
+    setLanguage(draft.language);
+    setCompanyError("");
+    setNameError("");
+    setEmailError("");
+    setPhoneError("");
+    setFormError("");
+    setScanFailed(false);
+    setEmailMissing(false);
+    setResetOpen(false);
+    cursor.current = null;
+    setTakenAt(draft.takenAt);
+    setDraft(null);
+  }
+
+  /** [지우기] — 작성하던 명함을 지우고 빈 창 그대로 */
+  function discardDraft() {
+    void clearCardDraft();
+    setDraft(null);
+  }
   // 커서가 있는 칸(칩 규칙 3). 칩을 누르면 칸에서 초점이 빠질 수 있어서(아이패드) 방금 빠진 칸도 커서로 봐요.
   const cursor = useRef<{ field: ScanField; blurredAt: number | null } | null>(null);
 
@@ -1284,7 +1355,7 @@ function CreateDialog({
     await cancelIssue(wrong.id).catch(() => undefined);
     setSending(false);
     if (res.mailSent) {
-      setPhoto(null); // 고쳐 재발송이 끝났어요 — 명함 사진은 바로 지워요(16841)
+      forgetCard(); // 고쳐 재발송이 끝났어요 — 명함 사진은 바로 지워요(16841)
       return onCreated(res.account);
     }
     if (res.mailFailureReason === "address") {
@@ -1293,7 +1364,7 @@ function CreateDialog({
       return onMailFailed(res.account);
     }
     setFix(null);
-    setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 사진은 지워요
+    forgetCard(); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 사진은 지워요
     setMailFailure({ account: res.account, reason: res.mailFailureReason });
     return onMailFailed(res.account);
   }
@@ -1348,12 +1419,17 @@ function CreateDialog({
     if (state.status === "pending") {
       const res = await resendGuide(state.id, language);
       setSending(false);
-      if (res.ok) return onResent();
+      if (res.ok) {
+        forgetCard(); // 이미 만든 계정에 안내 메일을 다시 보냈어요 — 이 명함도 다 썼어요
+        return onResent();
+      }
       if (isMailFailure(res.reason)) {
         // 주소 오류 · 막힘은 이 창에서 주소를 고쳐 재발송(C2), 그 밖의 실패는 목록의 다시 보내기 창과 같은 결과를 보여 줘요.
-        if (offersCancel(res.reason)) setFix(pendingTarget(state));
-        else {
-          setPhoto(null);
+        if (offersCancel(res.reason)) {
+          forgetCard(true);
+          setFix(pendingTarget(state));
+        } else {
+          forgetCard();
           setMailFailure({ account: pendingTarget(state), reason: res.reason });
         }
         return onResendMailFailed();
@@ -1366,13 +1442,16 @@ function CreateDialog({
     setSending(false);
     if (res.ok) {
       if (res.mailSent) {
-        setPhoto(null); // 계정을 만들었어요 — 명함 사진은 바로 지워요(16841)
+        forgetCard(); // 계정을 만들었어요 — 명함 사진은 바로 지워요(16841)
         return onCreated(res.account);
       }
-      // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2) — 고치는 동안 명함 사진은 남겨 비교해요
-      if (res.mailFailureReason === "address") setFix(res.account);
-      else {
-        setPhoto(null); // 고칠 주소가 없는 실패(결과 화면) — 사진은 지워요
+      // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2) — 고치는 동안 명함 사진은 창 메모리에 남겨 비교해요.
+      // 계정은 이미 만들어졌으니 작성하던 명함에서는 지워요(창을 닫으면 사진도 사라져요).
+      if (res.mailFailureReason === "address") {
+        forgetCard(true);
+        setFix(res.account);
+      } else {
+        forgetCard(); // 고칠 주소가 없는 실패(결과 화면) — 사진은 지워요
         setMailFailure({ account: res.account, reason: res.mailFailureReason });
       }
       return onMailFailed(res.account);
@@ -1484,6 +1563,12 @@ function CreateDialog({
     // 보내는 중이거나 주소를 고치는 중(fix)에 늦게 온 사진은 받지 않아요 — 고치는 동안 보던 사진을 지우거나,
     // 결과 화면 뒤에 사진이 메모리에 남지 않게
     if (sending || fix || fixRef.current) return;
+    const at = new Date().getTime(); // 찍은 시각(24시간 기준)
+    // 새 명함이 앞 명함을 바꿔요 — 창을 열 때 물은 명함 · 이 창에서 남기던 명함 모두 지워요
+    tookNewCard.current = true;
+    setDraft(null);
+    setTakenAt(null);
+    void clearCardDraft();
     // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
@@ -1499,8 +1584,9 @@ function CreateDialog({
     }
     // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
     if (fixRef.current) return;
-    // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교)
+    // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교). 이제부터 작성하던 명함으로 남겨요.
     setPhoto(preview);
+    setTakenAt(at);
     const result = text === null ? null : scanCard(text);
     if (!result || result.chips.length === 0) return setScanFailed(true);
     setScan({ chips: result.chips, links: result.links });
@@ -1530,8 +1616,27 @@ function CreateDialog({
   return (
     <Dialog title="Gate 계정 만들기" onClose={onClose} closable={!sending} wide>
       <form className="dialog-form" onSubmit={onSubmit} noValidate>
-        {/* 찍은 명함(칩 위) — 주소를 고치는 동안(fix)에도 보여요. 누르면 크게. 메모리에만 있어요 */}
-        {photo && <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />}
+        {/* 창을 열 때 찾은 작성하던 명함(기획 16861) — 창 맨 위에서 이어서 만들지 물어요 */}
+        {draft && !fix && (
+          <div className="draft-notice" role="status">
+            <p className="t-body-200-b">{CARD_PHOTO_TEXT.draftFound}</p>
+            <div className="draft-notice-actions">
+              <button type="button" className="btn btn-dark btn-sm" onClick={resumeDraft} disabled={scanning || sending}>
+                {CARD_PHOTO_TEXT.draftResume}
+              </button>
+              <button type="button" className="btn btn-outline btn-sm" onClick={discardDraft} disabled={scanning || sending}>
+                {CARD_PHOTO_TEXT.draftDiscard}
+              </button>
+            </div>
+          </div>
+        )}
+        {/* 찍은 명함(칩 위) — 주소를 고치는 동안(fix)에도 보여요. 누르면 크게 */}
+        {photo && (
+          <div className="card-photo">
+            <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />
+            {!fix && <p className="help">{CARD_PHOTO_TEXT.photoNote}</p>}
+          </div>
+        )}
         {/* 명함 찍어서 채우기(N1~N4) — 주소를 고치는 중(fix)에는 다른 명함을 읽을 일이 없어 숨겨요 */}
         {!fix && (
           <div className="scan">

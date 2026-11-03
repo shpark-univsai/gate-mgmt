@@ -4,6 +4,7 @@
 // 권한 검사는 서버가 합니다.
 import { useSyncExternalStore } from "react";
 import type { Staff } from "./api";
+import { dropCardDrafts } from "./card-photo";
 
 const KEY = "gate-mgmt.staff";
 const TOKEN_KEY = "gate-mgmt.tokens";
@@ -22,6 +23,8 @@ export type LoginReason = "expired" | "forbidden" | "password";
 
 export function saveStaff(staff: Staff) {
   takenReason = undefined; // 다음에 로그인 화면에 올 때 지난 안내가 남지 않게
+  // 새로 로그인하면 앞 로그인의 「작성하던 명함」은 남기지 않아요(로그아웃 때 지우지 못했을 때 대비, UG-431 기획 16861)
+  dropCardDrafts();
   try {
     localStorage.setItem(KEY, JSON.stringify(staff));
   } catch {}
@@ -42,9 +45,13 @@ export function getTokens(): Tokens | null {
   }
 }
 
-/** 로그인 상태(직원 정보 · 토큰)를 지워요. 서버 세션 종료는 api.ts 의 logout 이 함께 해요. */
+/**
+ * 로그인 상태(직원 정보 · 토큰)를 지워요. 서버 세션 종료는 api.ts 의 logout 이 함께 해요.
+ * 직접 로그아웃 · 로그인 만료 · 권한 없어짐(http.ts sessionEnded) 모두 여기를 지나요 — 작성하던 명함(UG-431)도 함께 지워요.
+ */
 export function clearSession() {
   takenReason = undefined;
+  dropCardDrafts();
   try {
     localStorage.removeItem(KEY);
     localStorage.removeItem(TOKEN_KEY);
