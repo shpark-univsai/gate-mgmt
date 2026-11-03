@@ -186,7 +186,7 @@ p {
 .scan-chip.is-filled { background: var(--gray-200); border-color: transparent; color: var(--gray-900); font-weight: 700; }
 .scan-chip:disabled { cursor: default; }
 
-/* ── 명함 사진(기기에만 보관) · 헷갈리는 글자 ── */
+/* ── 명함 사진(발급 창 메모리에만) · 헷갈리는 글자 ── */
 .card-thumb { align-self: flex-start; display: block; width: 96px; height: 60px; padding: 0; border: 1px solid var(--gray-200); border-radius: var(--radius-control); overflow: hidden; background: var(--gray-50); cursor: zoom-in; }
 .card-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .photo-viewer {
@@ -597,9 +597,6 @@ p {
     cursor: pointer;
   }
   .link-action--muted { font-weight: 400; color: var(--gray-500); }
-  /* 카드 「명함」: 보이는 크기는 글자 그대로, 누르는 영역만 44 이상(위로는 4px 만 — 위 줄 「재발송」 영역과 겹치지 않게) */
-  .link-action.card-photo-link { position: relative; padding: 0; margin: 0; }
-  .card-photo-link::after { content: ""; position: absolute; inset: -4px -12px -20px; }
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
   .pagination.is-single { display: none; } /* 한 페이지뿐이면 휴대폰은 번호 줄을 감춰요 */

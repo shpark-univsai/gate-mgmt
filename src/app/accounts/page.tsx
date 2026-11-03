@@ -25,7 +25,7 @@ import {
 import { useStaff } from "@/lib/session";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader } from "@/lib/card-ocr";
-import { CARD_PHOTO_TEXT, deleteCardPhoto, loadCardPhoto, saveCardPhoto, syncCardPhotos } from "@/lib/card-photo";
+import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
 import { confusableParts, emailHasConfusable, isFilled, scanCard, tapChip, unlink, type Chip, type ScanField, type ScanLinks } from "@/lib/card-scan";
 
 const COMPANY_MAX = 40;
@@ -50,7 +50,7 @@ const phoneErrorOf = (v: string) =>
 /** 만들기 요청의 이름 · 연락처 — 빈 값은 보내지 않아요 */
 const personInput = (name: string, phone: string) => ({ ...(name ? { name } : {}), ...(phone ? { phone } : {}) });
 
-// 안내 문구는 명함 사진 보관 기간과 함께 card-photo.ts 한 곳에(가안)
+// 안내 문구는 명함 사진 문구와 함께 card-photo.ts 한 곳에
 const SCAN_HELP = CARD_PHOTO_TEXT.scanHelp;
 const SCAN_READING = "명함을 읽고 있습니다…";
 const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있으니 고객과 함께 확인해 주세요.";
@@ -237,9 +237,6 @@ export default function AccountsPage() {
   const [cancelTarget, setCancelTarget] = useState<Account | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
-  // 이 기기에 명함 사진이 있는 발급 번호(「명함」 버튼) · 크게 보는 사진
-  const [photoIds, setPhotoIds] = useState<Set<string>>(() => new Set());
-  const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // 내려받기 실패 안내는 그때의 조건(applied)에만 붙여요 — 검색 조건을 바꾸면 저절로 사라져요.
   const [exportError, setExportError] = useState<{ for: typeof applied; text: string } | null>(null);
@@ -248,6 +245,11 @@ export default function AccountsPage() {
   useEffect(() => {
     if (staff === null) router.replace("/login");
   }, [staff, router]);
+
+  // 예전 판(7일 기기 보관)이 남긴 명함 사진 저장소 정리 — UG-431 기획 16841, 지워도 되는 때는 card-photo.ts 참고
+  useEffect(() => {
+    purgeLegacyCardPhotos();
+  }, []);
 
   /** 지금 조건 그대로 목록 · 요약을 다시 불러와요. */
   const reload = useCallback(() => setVersion((v) => v + 1), []);
@@ -271,8 +273,6 @@ export default function AccountsPage() {
         }
         setRows(list.items);
         setTotal(list.total);
-        // 기한이 지난 사진 · 고객이 로그인한(사용 중) 계정의 사진을 지우고, 남은 사진이 있는 줄을 알아 둬요
-        void syncCardPhotos(list.items).then((ids) => alive && setPhotoIds(ids));
         setLoadError(false);
         setLoaded(true);
       })
@@ -349,17 +349,6 @@ export default function AccountsPage() {
       return setExportError({ for: query, text: EXPORT_FAILED });
     }
     setToast({ title: "CSV 파일을 내려받았습니다", detail: `계정 ${res.rows.length}개` });
-  }
-
-  /** 목록 줄의 「명함」 — 그사이 기한이 지나 지워졌으면 버튼만 거둬요. */
-  async function openRowPhoto(id: string) {
-    const src = await loadCardPhoto(id);
-    if (src) return setViewingPhoto(src);
-    setPhotoIds((ids) => {
-      const next = new Set(ids);
-      next.delete(id);
-      return next;
-    });
   }
 
   function onReset() {
@@ -448,7 +437,6 @@ export default function AccountsPage() {
           email={staff.email}
           onLogout={() => {
             logout();
-            // 로그아웃 때 이 기기의 명함 사진도 지울지는 기획 답(16840) 대기 — 정해지면 여기서 void clearCardPhotos()
             router.replace("/login");
           }}
         />
@@ -608,13 +596,7 @@ export default function AccountsPage() {
                     ) : a.status === "cancelled" ? (
                       <span className="cancel-note">{cancelNote(a)}</span>
                     ) : (
-                      !photoIds.has(a.id) && <span className="dash">—</span>
-                    )}
-                    {/* 이 기기에 명함 사진이 있는 줄만(보관 기간 안) */}
-                    {photoIds.has(a.id) && (
-                      <button type="button" className="btn btn-outline btn-sm" onClick={() => void openRowPhoto(a.id)}>
-                        {CARD_PHOTO_TEXT.listButton}
-                      </button>
+                      <span className="dash">—</span>
                     )}
                   </span>
                 </span>
@@ -661,11 +643,6 @@ export default function AccountsPage() {
                     ? cancelNote(a)
                     : `${languageShort(a.language)} · ${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
                 </span>
-                {photoIds.has(a.id) && (
-                  <button type="button" className="link-action link-action--muted card-photo-link" onClick={() => void openRowPhoto(a.id)}>
-                    {CARD_PHOTO_TEXT.listButton}
-                  </button>
-                )}
               </div>
             </li>
           ))}
@@ -752,20 +729,8 @@ export default function AccountsPage() {
       {cancelTarget && <CancelDialog account={cancelTarget} onClose={closeCancel} onCancelled={afterCancel} />}
 
       {toast && <Toast title={toast.title} detail={toast.detail} onDone={clearToast} />}
-
-      {viewingPhoto && <CardPhotoViewer src={viewingPhoto} onClose={() => setViewingPhoto(null)} />}
     </>
   );
-}
-
-/**
- * 발급 취소 — 이 기기에서 취소했으면(이미 취소된 경우 포함) 그 계정의 명함 사진도 지워요.
- * 목록의 발급 취소 창 · 실패 창의 바로 취소 · 주소 고쳐 재발송 뒤 정리가 모두 이걸 써요.
- */
-async function cancelAndForget(accountId: string) {
-  const res = await cancelIssue(accountId);
-  if (res.ok || res.reason === "not_found") await deleteCardPhoto(accountId);
-  return res;
 }
 
 /** 찍은 명함 작은 사진 — 누르면 크게 봐요 */
@@ -1045,7 +1010,7 @@ function useCancelNow(onCancelled: () => void) {
   async function cancelNow(account: Account) {
     setCancelling(true);
     setCancelError("");
-    const res = await cancelAndForget(account.id);
+    const res = await cancelIssue(account.id);
     setCancelling(false);
     if (res.ok) return onCancelled();
     setCancelError(res.reason);
@@ -1128,20 +1093,10 @@ function CreateDialog({
   const [scanFailed, setScanFailed] = useState(false);
   // 명함에서 메일 주소를 찾지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요.
   const [emailMissing, setEmailMissing] = useState(false);
-  // 비교용 명함 사진(줄인 JPEG data URL). 만들기가 성공하면 이 기기에 발급 번호로 둬요(card-photo.ts).
+  // 비교용 명함 사진(줄인 JPEG data URL) — 이 창의 상태(메모리)에만 둬요. 서버 · 기기에 저장하지 않아요(기획 16841).
+  // 계정을 만들면 바로 지우고, 주소 오류로 고치는 동안(fix)에는 남겨 두며, 창을 닫으면(이 창이 사라지면) 함께 사라져요.
   const [photo, setPhoto] = useState<string | null>(null);
-  // 고치는 계정의 사진이 이 기기에 있으면(앞서 이 기기에서 만든 계정) — 주소를 고치는 동안 보여 줘요
-  const [storedPhoto, setStoredPhoto] = useState<{ id: string; src: string } | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState(false);
-  const fixId = fix?.id;
-  useEffect(() => {
-    if (!fixId) return;
-    let alive = true;
-    void loadCardPhoto(fixId).then((src) => alive && setStoredPhoto(src ? { id: fixId, src } : null));
-    return () => {
-      alive = false;
-    };
-  }, [fixId]);
   // 커서가 있는 칸(칩 규칙 3). 칩을 누르면 칸에서 초점이 빠질 수 있어서(아이패드) 방금 빠진 칸도 커서로 봐요.
   const cursor = useRef<{ field: ScanField; blurredAt: number | null } | null>(null);
 
@@ -1278,19 +1233,20 @@ function CreateDialog({
       }
       return setFormError("계정을 만들지 못했습니다. 다시 시도해 주세요.");
     }
-    // 명함 사진은 새 발급 번호로 옮겨요(옛 번호의 사진은 아래 발급 취소 때 지워져요)
-    const keep = photo ?? (storedPhoto?.id === wrong.id ? storedPhoto.src : null);
-    if (keep) await saveCardPhoto(res.account.id, keep);
     // 잘못된 주소의 계정은 메일이 아무에게도 가지 않았어요 — 확인 없이 정리해요. 실패해도 목록에 「이메일 주소 오류」로 남아 직접 취소할 수 있어요.
-    await cancelAndForget(wrong.id).catch(() => undefined);
+    await cancelIssue(wrong.id).catch(() => undefined);
     setSending(false);
-    if (res.mailSent) return onCreated(res.account);
+    if (res.mailSent) {
+      setPhoto(null); // 고쳐 재발송이 끝났어요 — 명함 사진은 바로 지워요(16841)
+      return onCreated(res.account);
+    }
     if (res.mailFailureReason === "address") {
-      // 고친 주소도 받지 않음 — 새 계정을 고치는 대상으로 바꿔 같은 창에 남아요
+      // 고친 주소도 받지 않음 — 새 계정을 고치는 대상으로 바꿔 같은 창에 남아요(사진도 남겨 다시 비교)
       setFix(res.account);
       return onMailFailed(res.account);
     }
     setFix(null);
+    setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 사진은 지워요
     setMailFailure({ account: res.account, reason: res.mailFailureReason });
     return onMailFailed(res.account);
   }
@@ -1349,7 +1305,10 @@ function CreateDialog({
       if (isMailFailure(res.reason)) {
         // 주소 오류 · 막힘은 이 창에서 주소를 고쳐 재발송(C2), 그 밖의 실패는 목록의 다시 보내기 창과 같은 결과를 보여 줘요.
         if (offersCancel(res.reason)) setFix(pendingTarget(state));
-        else setMailFailure({ account: pendingTarget(state), reason: res.reason });
+        else {
+          setPhoto(null);
+          setMailFailure({ account: pendingTarget(state), reason: res.reason });
+        }
         return onResendMailFailed();
       }
       setFormError(resendErrorText(res.reason));
@@ -1357,14 +1316,18 @@ function CreateDialog({
       return;
     }
     const res = await createAccount(input);
-    // 만들어졌으면(메일 결과와 상관없이) 명함 사진을 이 기기에 발급 번호로 둬요 — 저장이 안 돼도 발급은 그대로
-    if (res.ok && photo) await saveCardPhoto(res.account.id, photo);
     setSending(false);
     if (res.ok) {
-      if (res.mailSent) return onCreated(res.account);
-      // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2)
+      if (res.mailSent) {
+        setPhoto(null); // 계정을 만들었어요 — 명함 사진은 바로 지워요(16841)
+        return onCreated(res.account);
+      }
+      // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2) — 고치는 동안 명함 사진은 남겨 비교해요
       if (res.mailFailureReason === "address") setFix(res.account);
-      else setMailFailure({ account: res.account, reason: res.mailFailureReason });
+      else {
+        setPhoto(null); // 고칠 주소가 없는 실패(결과 화면) — 사진은 지워요
+        setMailFailure({ account: res.account, reason: res.mailFailureReason });
+      }
       return onMailFailed(res.account);
     }
     if (res.reason === "duplicate" || res.reason === "in_use") {
@@ -1467,7 +1430,10 @@ function CreateDialog({
     const file = input.files?.[0];
     input.value = ""; // 입력 칸이 사진을 붙잡고 있지 않게(같은 사진을 다시 골라도 다시 읽어요)
     if (!file) return;
-    // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 다른 사람 사진이 이 발급에 저장되지 않게
+    // 보내는 중이거나 주소를 고치는 중(fix)에 늦게 온 사진은 받지 않아요 — 고치는 동안 보던 사진을 지우거나,
+    // 결과 화면 뒤에 사진이 메모리에 남지 않게
+    if (sending || fix || fixRef.current) return;
+    // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
     setScanFailed(false);
@@ -1498,8 +1464,6 @@ function CreateDialog({
     if (!result.values.email) emailRef.current?.focus();
   }
 
-  // 보여 줄 명함 사진: 이번에 찍은 것, 없으면 고치는 계정의 것(이 기기에 있으면)
-  const shownPhoto = photo ?? (fix && storedPhoto?.id === fix.id ? storedPhoto.src : null);
   // 명함(칩)에서 들어온 이메일에 헷갈리는 글자가 있으면 다시 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   // @ 앞(로컬 부분)에 있을 때만 — 도메인까지 보면 거의 모든 주소에 떠요
   const showConfusable = scan?.links.email !== undefined && emailHasConfusable(trimmed);
@@ -1515,8 +1479,8 @@ function CreateDialog({
   return (
     <Dialog title="Gate 계정 만들기" onClose={onClose} closable={!sending} wide>
       <form className="dialog-form" onSubmit={onSubmit} noValidate>
-        {/* 찍은 명함(칩 위) — 주소를 고치는 동안(fix)에도 보여요. 누르면 크게 */}
-        {shownPhoto && <CardPhotoThumb src={shownPhoto} onOpen={() => setViewingPhoto(true)} />}
+        {/* 찍은 명함(칩 위) — 주소를 고치는 동안(fix)에도 보여요. 누르면 크게. 메모리에만 있어요 */}
+        {photo && <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />}
         {/* 명함 찍어서 채우기(N1~N4) — 주소를 고치는 중(fix)에는 다른 명함을 읽을 일이 없어 숨겨요 */}
         {!fix && (
           <div className="scan">
@@ -1528,7 +1492,7 @@ function CreateDialog({
                     type="button"
                     className="btn btn-outline btn-sm"
                     onClick={() => fileRef.current?.click()}
-                    disabled={scanning}
+                    disabled={scanning || sending}
                     aria-busy={scanning || undefined}
                   >
                     {scanning ? SCAN_READING : "명함 다시 찍기"}
@@ -1564,7 +1528,7 @@ function CreateDialog({
                   type="button"
                   className="btn btn-outline scan-button"
                   onClick={() => fileRef.current?.click()}
-                  disabled={scanning}
+                  disabled={scanning || sending}
                   aria-busy={scanning || undefined}
                 >
                   {scanning ? SCAN_READING : "명함 찍어서 채우기"}
@@ -1839,7 +1803,7 @@ function CreateDialog({
         {/* 아이패드 · 휴대폰은 카메라가 바로 열려요(capture). 폼 끝에 둬요 — 창이 열릴 때 초점이 회사명 칸에 가게(Dialog 는 첫 input 에 초점) */}
         <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onPhoto} />
       </form>
-      {viewingPhoto && shownPhoto && <CardPhotoViewer src={shownPhoto} onClose={() => setViewingPhoto(false)} />}
+      {viewingPhoto && photo && <CardPhotoViewer src={photo} onClose={() => setViewingPhoto(false)} />}
     </Dialog>
   );
 }
@@ -1953,7 +1917,7 @@ function CancelDialog({
   async function cancel() {
     setSending(true);
     setError("");
-    const res = await cancelAndForget(account.id);
+    const res = await cancelIssue(account.id);
     setSending(false);
     if (res.ok) return onCancelled();
     setError(res.reason);
