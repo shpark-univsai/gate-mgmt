@@ -48,6 +48,8 @@ function failureText(c: Closure): string {
   switch (c.failureCode) {
     case "auth_protected":
       return `${where} 계정 서버가 이 계정을 지울 수 없다고 했습니다(관리자 · 상위 권한). 플랫폼 팀에 알려 주세요.`;
+    case "auth_last_owner":
+      return `${where} 이 회사의 마지막 관리자 계정이라 계정 서버가 지울 수 없다고 했습니다. 플랫폼 팀에 알려 주세요.`;
     case "actor_rejected":
       return `${where} 실행한 직원 계정을 지금 쓸 수 없습니다. 다른 직원이 다시 시도해 주세요.`;
     case "auth_not_configured":

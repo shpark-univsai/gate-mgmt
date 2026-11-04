@@ -16,10 +16,12 @@ export type Staff = {
 /**
  * pending = 영업이 만들었고 고객이 아직 첫 로그인 전 / in_use = 고객이 직접 가입했거나 로그인한 적 있음
  * cancelled = 발급 취소. 계정 · 데모 프로젝트는 지웠고, 발급 기록(이 줄)만 남겨요.
+ * closing = 해지 중(UG-443 기획 16908). 계정 해지가 진행 중이에요(처리 중 · 계정 서버 대기 · 실패) — 다시 보내기 · 발급 취소를
+ *   서버가 막아요(MGMT-121). 해지를 철회하면 원래 상태(statusBeforeClosing)로 돌아가요.
  * closed = 해지됨(UG-443). 고객 요청으로 「계정 해지」가 끝나 계정과 데이터를 파기했어요. 고객 정보는 발급 취소처럼 비워요.
  *   cancelledBy · cancelledAt 은 해지를 실행한 직원 · 파기 완료 시각이에요. 해지가 끝날 때까지는 원래 상태 그대로 보여요.
  */
-export type AccountStatus = "pending" | "in_use" | "cancelled" | "closed";
+export type AccountStatus = "pending" | "in_use" | "closing" | "cancelled" | "closed";
 
 /**
  * 안내 메일을 보내지 못한 까닭(서버가 메일 서버 응답으로 판정).
@@ -56,6 +58,8 @@ export type Account = {
   /** 고객 이름 · 연락처(명함 · 발급 창, UG-431). 이 기능 전에 만든 기록이거나 비워 두었으면 없어요. */
   name?: string;
   phone?: string;
+  /** 해지 중(closing)일 때 원래 상태 — 그 줄의 동작을 꺼 둔 채 보여 줘요 */
+  statusBeforeClosing?: "pending" | "in_use";
 };
 
 export type AccountQuery = { keyword?: string; status?: AccountStatus | "all"; page?: number; size?: number };
@@ -65,7 +69,16 @@ export type AccountPage = { items: Account[]; total: number };
 
 /** 요약 카드. 검색어 · 상태 필터와 무관한 전체 기준(서버가 셈) */
 // closed = 해지됨(UG-443) — cancelled 에는 들어가지 않아요. 예전 서버는 주지 않아요(없으면 「—」).
-export type AccountSummary = { total: number; pending: number; inUse: number; cancelled: number; closed?: number; thisMonth: number };
+// closing = 해지 중(UG-443 기획 16908) — pending · inUse 에 들어가지 않아요. 예전 서버는 주지 않아요.
+export type AccountSummary = {
+  total: number;
+  pending: number;
+  inUse: number;
+  closing?: number;
+  cancelled: number;
+  closed?: number;
+  thisMonth: number;
+};
 
 export type CreateAccountInput = {
   company: string;
@@ -120,7 +133,9 @@ export type EmailCheck =
       company?: string;
       mailFailureReason?: MailFailureReason;
     }
-  | { status: "in_use" };
+  | { status: "in_use" }
+  // 해지 중인 계정(UG-443 기획 16908) — 다시 보내지도 새로 만들지도 않아요
+  | { status: "closing" };
 
 export type CreateAccountResult =
   | { ok: true; account: Account; mailSent: true }
@@ -133,14 +148,16 @@ export type CreateAccountResult =
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨 / failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
 // temporary · address · unknown = 메일을 보내지 못한 까닭 / blocked = 주소 오류가 3번 이어져 서버가 다시 보내기를 막음
-export type ResendFailure = "in_use" | "not_found" | "failed" | MailFailureReason | "blocked";
+// closing = 해지 처리 중인 계정(MGMT-121, UG-443)
+export type ResendFailure = "in_use" | "not_found" | "closing" | "failed" | MailFailureReason | "blocked";
 export type ResendResult = { ok: true; requestedAt: string } | { ok: false; reason: ResendFailure };
 
 /**
  * 발급 취소. in_use = 누르는 사이 고객이 로그인해서 취소하지 않음(서버가 누를 때 다시 판정)
  * not_found = 다른 직원이 먼저 취소함
  */
-export type CancelResult = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "failed" };
+export type CancelFailure = "in_use" | "not_found" | "closing" | "failed";
+export type CancelResult = { ok: true } | { ok: false; reason: CancelFailure };
 
 /**
  * invalid = 이메일 · 비밀번호가 맞지 않음 / forbidden = 백오피스를 쓸 수 없는 계정 / failed = 서버 · 네트워크 문제
@@ -194,7 +211,8 @@ export function logout() {
   if (refreshToken) revokeRefreshToken(refreshToken);
 }
 
-type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone"> & {
+type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing"> & {
+  statusBeforeClosing?: "pending" | "in_use" | null;
   cancelledBy: string | null;
   cancelledAt: string | null;
   mailFailureReason?: MailFailureReason | null;
@@ -220,6 +238,7 @@ const toAccount = (a: AccountDto): Account => ({
   ...(a.cancelledAt ? { cancelledAt: a.cancelledAt } : {}),
   ...(a.name ? { name: a.name } : {}),
   ...(a.phone ? { phone: a.phone } : {}),
+  ...(a.statusBeforeClosing ? { statusBeforeClosing: a.statusBeforeClosing } : {}),
 });
 
 /** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로, 한 페이지씩(page 는 1부터) 보여 줘요. */
@@ -256,7 +275,7 @@ export function getSummary(): Promise<AccountSummary> {
 
 export async function checkEmail(email: string): Promise<EmailCheck> {
   const data = await authed<{
-    status: "new" | "pending" | "in_use";
+    status: "new" | "pending" | "in_use" | "closing";
     id?: string;
     createdBy?: string;
     createdAt?: string;
@@ -277,6 +296,7 @@ export async function checkEmail(email: string): Promise<EmailCheck> {
       ...(isMailFailureReason(data.mailFailureReason) ? { mailFailureReason: data.mailFailureReason } : {}),
     };
   }
+  if (data.status === "closing") return { status: "closing" };
   return data.status === "in_use" ? { status: "in_use" } : { status: "new" };
 }
 
@@ -317,6 +337,7 @@ export async function resendGuide(id: string, language: MailLanguage): Promise<R
     if (data.reason === "blocked" || isMailFailureReason(data.reason)) return { ok: false, reason: data.reason };
     return { ok: false, reason: "failed" };
   } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-121") return { ok: false, reason: "closing" };
     if (e instanceof ApiError && e.code === "MGMT-102") return { ok: false, reason: "in_use" };
     if (e instanceof ApiError && e.code === "MGMT-101") return { ok: false, reason: "not_found" };
     return { ok: false, reason: "failed" };
@@ -333,6 +354,7 @@ export async function cancelIssue(accountId: string): Promise<CancelResult> {
     await authed("DELETE", `${MGMT}/accounts/${encodeURIComponent(accountId)}`);
     return { ok: true };
   } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-121") return { ok: false, reason: "closing" };
     if (e instanceof ApiError && e.code === "MGMT-102") return { ok: false, reason: "in_use" };
     if (e instanceof ApiError && e.code === "MGMT-101") return { ok: false, reason: "not_found" };
     return { ok: false, reason: "failed" };
