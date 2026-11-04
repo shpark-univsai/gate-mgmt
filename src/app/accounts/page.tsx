@@ -782,7 +782,11 @@ export default function AccountsPage() {
                 <span role="cell">{handle(a.createdBy)}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
-                  <span className="row-actions">
+                  {/* 해지 중(UG-443 기획 16908)이면 동작을 꺼 둬요 — 꺼진 버튼은 마우스를 못 받아 툴팁은 감싼 칸에 */}
+                  <span
+                    className={`row-actions${a.status === "closing" ? " is-closing" : ""}`}
+                    title={a.status === "closing" ? CLOSING_TIP : undefined}
+                  >
                     {a.status === "pending" ? (
                       <>
                         {canResend(a) && (
@@ -795,23 +799,21 @@ export default function AccountsPage() {
                         </button>
                       </>
                     ) : a.status === "closing" ? (
-                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요(UG-443 기획 16908) — 꺼진 버튼은 마우스를 못 받아 툴팁은 감싼 칸에
-                      <span className="row-actions is-closing" title={CLOSING_TIP}>
-                        {a.statusBeforeClosing === "pending" ? (
-                          <>
-                            {a.resendBlocked || a.mailFailureReason === "address" ? null : (
-                              <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`안내 메일 다시 보내기 — ${CLOSING_TIP}`}>
-                                안내 메일 다시 보내기
-                              </button>
-                            )}
-                            <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`발급 취소 — ${CLOSING_TIP}`}>
-                              발급 취소
+                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요 — 원래 첫 로그인 전이던 줄만 버튼이 있었어요
+                      a.statusBeforeClosing === "pending" ? (
+                        <>
+                          {a.resendBlocked || a.mailFailureReason === "address" ? null : (
+                            <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`안내 메일 다시 보내기 — ${CLOSING_TIP}`}>
+                              안내 메일 다시 보내기
                             </button>
-                          </>
-                        ) : (
-                          <span className="dash">—</span>
-                        )}
-                      </span>
+                          )}
+                          <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`발급 취소 — ${CLOSING_TIP}`}>
+                            발급 취소
+                          </button>
+                        </>
+                      ) : (
+                        <span className="dash">—</span>
+                      )
                     ) : isGone(a) ? (
                       <span className="cancel-note">{cancelNote(a)}</span>
                     ) : (
@@ -1636,6 +1638,8 @@ function CreateDialog({
       }
       setFormError(resendErrorText(res.reason));
       if (res.reason === "in_use" || res.reason === "not_found") setCheck(null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
+      // 그사이 해지가 시작됐어요(UG-443) — 이 이메일을 해지 중으로 바꿔 보내기 버튼을 꺼요
+      if (res.reason === "closing") setCheck({ email: key, result: { status: "closing" } });
       return;
     }
     const res = await createAccount({ ...input, ...draftIdInput() });
