@@ -31,13 +31,16 @@ export function AppHeader({ current, email, onLogout }: { current: MenuKey; emai
           ))}
         </nav>
       </div>
-      <ProfileMenu email={email} onLogout={onLogout} />
+      <ProfileMenu current={current} email={email} onLogout={onLogout} />
     </header>
   );
 }
 
-/** 오른쪽 위 프로필. 누르면 로그아웃이 있는 작은 메뉴가 열려요(휴대폰은 이메일도 메뉴 안에). */
-function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
+/**
+ * 오른쪽 위 프로필. 누르면 로그아웃이 있는 작은 메뉴가 열려요.
+ * 휴대폰은 이메일과 화면 이동(계정 발급 · 계정 해지)도 메뉴 안에 — 위쪽 메뉴가 숨어서예요.
+ */
+function ProfileMenu({ current, email, onLogout }: { current: MenuKey; email: string; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -68,6 +71,20 @@ function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void 
       {open && (
         <div className="profile-menu" role="menu">
           <p className="profile-menu-email">{email}</p>
+          <nav className="profile-menu-nav" aria-label="메뉴">
+            {MENU.map((m) => (
+              <Link
+                key={m.key}
+                role="menuitem"
+                className={`profile-menu-item${m.key === current ? " is-active" : ""}`}
+                href={m.href}
+                aria-current={m.key === current ? "page" : undefined}
+                onClick={() => setOpen(false)}
+              >
+                {m.label}
+              </Link>
+            ))}
+          </nav>
           <button type="button" role="menuitem" className="profile-menu-item" onClick={onLogout}>
             로그아웃
           </button>

@@ -475,8 +475,11 @@ export async function deleteCardDraft(id: string): Promise<boolean> {
 // 고객이 support@univs.ai 로 탈퇴를 요청하면 직원이 실행해요(약관 제27조). 순서: 로그인 막기 → 프로젝트 · 데이터 파기(되살리기 없음)
 // → 계정 삭제 → 처리 기록. 서버가 단계마다 기록을 남기고 요청 밖에서 이어 가요 — 실행하면 바로 「처리 중」 줄이 생겨요.
 
-/** processing = 처리 중(주황) / failed = 멈춤(빨강 · [다시 시도]) / completed = 파기 완료(회색) */
-export type ClosureStatus = "processing" | "failed" | "completed";
+/**
+ * processing = 처리 중(주황) / failed = 멈춤(빨강 · [다시 시도]) / completed = 파기 완료(회색)
+ * withdrawn = 철회됨(회색) — 아무것도 지우기 전에 직원이 거둠. 같은 계정을 나중에 다시 해지할 수 있어요.
+ */
+export type ClosureStatus = "processing" | "failed" | "completed" | "withdrawn";
 
 /** 지금(또는 멈춘) 단계 — suspend 로그인 막기 · gate_purge 데이터 파기 · auth_delete 계정 삭제 · record 처리 기록 */
 export type ClosureStep = "suspend" | "gate_purge" | "auth_delete" | "record";
@@ -502,6 +505,11 @@ export type Closure = {
   /** 파기 완료 시각 = 약관 「처리를 마친 날」 기준 */
   completedAt: string | null;
   retryCount: number;
+  /** 지금 철회할 수 있어요 — 아직 아무것도 지우지 않았어요(로그인 막기 전 · 계정 서버 대기 또는 실패) */
+  withdrawable: boolean;
+  withdrawnAt: string | null;
+  /** 철회한 직원 이메일 */
+  withdrawnBy: string | null;
 };
 
 export type ClosureQuery = { keyword?: string; status?: ClosureStatus | "all"; page?: number; size?: number };
@@ -551,13 +559,10 @@ export async function listClosures(query: ClosureQuery = {}): Promise<{ items: C
   return { items: data.content, total: data.totalElements };
 }
 
-/** 탈퇴를 요청한 이메일로 계정을 찾아요(읽기만 해요). */
+/** 탈퇴를 요청한 이메일로 계정을 찾아요(읽기만 해요). 이메일은 주소가 아니라 본문으로 보내요 — 서버 접근 기록에 남지 않게. */
 export async function findClosureTarget(email: string): Promise<FindClosureTargetResult> {
   try {
-    const data = await authed<{ found: boolean } & Partial<ClosureTarget>>(
-      "GET",
-      `${CLOSURES}/target?email=${encodeURIComponent(email)}`,
-    );
+    const data = await authed<{ found: boolean } & Partial<ClosureTarget>>("POST", `${CLOSURES}/target`, { email });
     if (!data.found || !data.accountId || !data.email) return { ok: false, reason: "not_found" };
     return {
       ok: true,
@@ -598,6 +603,20 @@ export async function retryClosure(id: string): Promise<RetryClosureResult> {
     return { ok: true, closure: await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/retry`) };
   } catch (e) {
     if (e instanceof ApiError && (e.code === "MGMT-117" || e.code === "MGMT-105")) return { ok: false, reason: "not_retryable" };
+    if (e instanceof ApiError && e.code === "MGMT-115") return { ok: false, reason: "not_found" };
+    return { ok: false, reason: "failed" };
+  }
+}
+
+/** not_withdrawable = 그사이 로그인 막기가 시작됐거나 끝남(MGMT-120 · 105) / not_found = 기록 없음 / failed = 서버 · 네트워크 문제 */
+export type WithdrawClosureResult = { ok: true; closure: Closure } | { ok: false; reason: "not_withdrawable" | "not_found" | "failed" };
+
+/** [철회] — 아직 아무것도 지우지 않은 해지만 돼요. 로그인 막기가 된 뒤에는 서버가 거절해요. */
+export async function withdrawClosure(id: string): Promise<WithdrawClosureResult> {
+  try {
+    return { ok: true, closure: await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/withdraw`) };
+  } catch (e) {
+    if (e instanceof ApiError && (e.code === "MGMT-120" || e.code === "MGMT-105")) return { ok: false, reason: "not_withdrawable" };
     if (e instanceof ApiError && e.code === "MGMT-115") return { ok: false, reason: "not_found" };
     return { ok: false, reason: "failed" };
   }

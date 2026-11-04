@@ -15,6 +15,7 @@ import {
   logout,
   retryClosure,
   startClosure,
+  withdrawClosure,
   type Closure,
   type ClosureStatus,
   type ClosureStep,
@@ -25,7 +26,7 @@ import { fmtDate, fmtFull, handle, kstToday, pageItems } from "@/lib/format";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // 문구 대조표(기획 16871 · Figma)에 있는 것은 그대로, 없는 것은 우리가 지었어요(보고서 「우리가 정한 것」).
-const STATUS_LABEL: Record<ClosureStatus, string> = { processing: "처리 중", failed: "실패", completed: "파기 완료" };
+const STATUS_LABEL: Record<ClosureStatus, string> = { processing: "처리 중", failed: "실패", completed: "파기 완료", withdrawn: "철회됨" };
 const STEP_LABEL: Record<ClosureStep, string> = {
   suspend: "로그인 막기",
   gate_purge: "프로젝트 · 데이터 파기",
@@ -77,10 +78,15 @@ function ClosureStatusBadge({ closure }: { closure: Closure }) {
 
 /** 파기 완료한 기록은 서버가 이메일 · 회사명을 비우고 도메인만 남겨요 */
 const emailText = (c: Closure) => c.email ?? c.emailDomain;
-/** 처리 일시 = 파기 완료 시각(약관 기준). 끝나기 전에는 실행 시각을 흐리게 */
+/** 처리 일시 = 파기 완료 시각(약관 기준). 철회했으면 철회 시각, 끝나기 전에는 실행 시각을 흐리게 */
+const processedAtText = (c: Closure) =>
+  c.completedAt
+    ? fmtFull(c.completedAt)
+    : c.status === "withdrawn" && c.withdrawnAt
+      ? `${fmtFull(c.withdrawnAt)} 철회`
+      : `${fmtFull(c.requestedAt)} 실행`;
 function processedAt(c: Closure) {
-  if (c.completedAt) return fmtFull(c.completedAt);
-  return <span className="help">{fmtFull(c.requestedAt)} 실행</span>;
+  return c.completedAt ? processedAtText(c) : <span className="help">{processedAtText(c)}</span>;
 }
 
 type ToastState = { title: string; detail: string; tone?: "error" } | null;
@@ -101,6 +107,7 @@ export default function ClosuresPage() {
   const [version, setVersion] = useState(0);
   const [opening, setOpening] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [withdrawTarget, setWithdrawTarget] = useState<Closure | null>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -136,8 +143,9 @@ export default function ClosuresPage() {
     };
   }, [staff, applied, page, pageSize, version]);
 
-  // 처리 중인 줄이 보이면 조금씩 다시 받아요(파기 완료 · 실패로 바뀌는 것을 보여 주려고)
-  const hasProcessing = rows.some((r) => r.status === "processing");
+  // 처리 중인 줄이 보이면 조금씩 다시 받아요(파기 완료 · 실패로 바뀌는 것을 보여 주려고).
+  // 계정 서버 대기만 남았으면 멈춰요 — 그 줄은 계정 서버 기능이 켜질 때까지 바뀌지 않아요.
+  const hasProcessing = rows.some((r) => r.status === "processing" && !r.authWaiting);
   useEffect(() => {
     if (!hasProcessing) return;
     const t = setInterval(reload, POLL_MS);
@@ -275,6 +283,7 @@ export default function ClosuresPage() {
               { value: "processing", label: STATUS_LABEL.processing },
               { value: "failed", label: STATUS_LABEL.failed },
               { value: "completed", label: STATUS_LABEL.completed },
+              { value: "withdrawn", label: STATUS_LABEL.withdrawn },
             ]}
           />
           <button type="submit" className="btn btn-outline btn-sm">
@@ -285,7 +294,7 @@ export default function ClosuresPage() {
           </button>
           {/* 휴대폰: 상태 칩 — PC 는 위 선택 상자 */}
           <div className="status-chips" role="group" aria-label="상태">
-            {(["all", "processing", "failed", "completed"] as const).map((v) => (
+            {(["all", "processing", "failed", "completed", "withdrawn"] as const).map((v) => (
               <button
                 key={v}
                 type="button"
@@ -338,7 +347,7 @@ export default function ClosuresPage() {
                 <span role="cell">{processedAt(c)}</span>
                 <span role="cell">
                   <span className="row-actions">
-                    {c.status === "failed" ? (
+                    {c.status === "failed" && (
                       <button
                         type="button"
                         className="btn btn-outline btn-sm"
@@ -349,9 +358,14 @@ export default function ClosuresPage() {
                       >
                         {retrying === c.id ? "다시 시도하는 중…" : "다시 시도"}
                       </button>
-                    ) : c.status === "processing" && c.authWaiting ? (
-                      <span className="cancel-note">계정 서버 대기</span>
-                    ) : (
+                    )}
+                    {c.status === "processing" && c.authWaiting && <span className="cancel-note">계정 서버 대기</span>}
+                    {c.withdrawable && (
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => setWithdrawTarget(c)} disabled={retrying !== null}>
+                        철회
+                      </button>
+                    )}
+                    {c.status !== "failed" && !(c.status === "processing" && c.authWaiting) && !c.withdrawable && (
                       <span className="dash">—</span>
                     )}
                   </span>
@@ -369,7 +383,10 @@ export default function ClosuresPage() {
             </li>
           )}
           {rows.map((c) => (
-            <li key={c.id} className={`card-row${c.id === freshId ? " is-new" : ""}${c.status === "completed" ? " is-cancelled" : ""}`}>
+            <li
+              key={c.id}
+              className={`card-row${c.id === freshId ? " is-new" : ""}${c.status === "completed" || c.status === "withdrawn" ? " is-cancelled" : ""}`}
+            >
               <div className="card-line">
                 <strong className="card-company">{c.company ?? <span className="dash">—</span>}</strong>
                 <span className="card-status">
@@ -378,16 +395,21 @@ export default function ClosuresPage() {
               </div>
               <div className="card-line">
                 <span className="card-email">{emailText(c)}</span>
-                {c.status === "failed" && (
+                {c.status === "failed" ? (
                   <button type="button" className="link-action" onClick={() => retry(c)} disabled={retrying !== null}>
                     {retrying === c.id ? "다시 시도하는 중…" : "다시 시도"}
                   </button>
+                ) : (
+                  c.withdrawable && (
+                    <button type="button" className="link-action" onClick={() => setWithdrawTarget(c)}>
+                      철회
+                    </button>
+                  )
                 )}
               </div>
               <div className="card-line">
                 <span className="card-meta">
-                  {`프로젝트 ${c.projectCount}개 · ${handle(c.processedBy)} · `}
-                  {c.completedAt ? fmtFull(c.completedAt) : `${fmtFull(c.requestedAt)} 실행`}
+                  {`프로젝트 ${c.projectCount}개 · ${handle(c.processedBy)} · ${processedAtText(c)}`}
                 </span>
               </div>
             </li>
@@ -455,6 +477,21 @@ export default function ClosuresPage() {
         />
       )}
 
+      {withdrawTarget && (
+        <WithdrawDialog
+          closure={withdrawTarget}
+          onClose={() => {
+            setWithdrawTarget(null);
+            reload();
+          }}
+          onWithdrawn={() => {
+            setWithdrawTarget(null);
+            reload();
+            setToast({ title: "해지를 철회했습니다", detail: "아무것도 지우지 않았습니다" });
+          }}
+        />
+      )}
+
       {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
     </>
   );
@@ -473,6 +510,8 @@ function CloseAccountDialog({ onClose, onStarted }: { onClose: () => void; onSta
   const [confirm, setConfirm] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  // 빠르게 두 번 눌러도(Enter + 클릭) 한 번만 보내요 — sending 상태는 다음 그리기까지 늦어요
+  const sendingRef = useRef(false);
   const today = kstToday();
   const oldest = (() => {
     const d = new Date(`${today}T00:00:00Z`);
@@ -507,10 +546,12 @@ function CloseAccountDialog({ onClose, onStarted }: { onClose: () => void; onSta
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!target || !confirmed || !dateValid) return;
+    if (!target || !confirmed || !dateValid || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setSendError("");
     const res = await startClosure({ email: target.email, confirmEmail: confirm.trim(), requestedOn });
+    sendingRef.current = false;
     setSending(false);
     if (res.ok) return onStarted(res.closure);
     setSendError(
@@ -657,6 +698,59 @@ function CloseAccountDialog({ onClose, onStarted }: { onClose: () => void; onSta
           </button>
         </div>
       </form>
+    </Dialog>
+  );
+}
+
+/** [철회] 확인 창 — 아직 아무것도 지우지 않은 해지만(서버가 다시 판정해요). 처음 초점은 「취소」. */
+function WithdrawDialog({ closure, onClose, onWithdrawn }: { closure: Closure; onClose: () => void; onWithdrawn: () => void }) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<"" | "not_withdrawable" | "not_found" | "failed">("");
+  const sendingRef = useRef(false);
+
+  async function withdraw() {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    setError("");
+    const res = await withdrawClosure(closure.id);
+    sendingRef.current = false;
+    setSending(false);
+    if (res.ok) return onWithdrawn();
+    setError(res.reason);
+  }
+
+  const gone = error === "not_withdrawable" || error === "not_found";
+  return (
+    <Dialog title="해지 철회" onClose={onClose} closable={!sending}>
+      <div className="summary">
+        <div className="summary-target">
+          {closure.company && <strong>{closure.company}</strong>}
+          <span>{emailText(closure)}</span>
+        </div>
+      </div>
+      <p>해지를 철회할까요? 아직 지운 데이터는 없습니다.</p>
+      {error && (
+        <p className="error" role="alert">
+          {gone ? "이미 로그인 막기가 시작됐거나 끝나 철회할 수 없습니다. 목록을 새로 불러옵니다." : "철회하지 못했습니다. 다시 시도해 주세요."}
+        </p>
+      )}
+      <div className="dialog-actions">
+        {gone ? (
+          <button type="button" className="btn btn-outline" onClick={onClose} autoFocus>
+            닫기
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending} data-autofocus>
+              취소
+            </button>
+            <button type="button" className="btn btn-danger-outline" onClick={withdraw} disabled={sending} aria-busy={sending || undefined}>
+              {sending ? "철회하는 중…" : "철회"}
+            </button>
+          </>
+        )}
+      </div>
     </Dialog>
   );
 }
