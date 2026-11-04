@@ -185,7 +185,7 @@ const draftTitle = (d: CardDraft) => d.company || d.name || "";
 // 창은 이미 닫혔으므로 목록 위 알림으로(기존 완료 알림과 같은 자리 · 모양, 아이콘만 오류)
 const DRAFT_SAVE_FAILED = "작성 중인 명함을 저장하지 못했습니다";
 const DRAFTS_LOAD_FAILED = "작성 중인 명함을 불러오지 못했습니다.";
-const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다." };
+const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" };
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 const LOAD_FAILED = "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
@@ -510,7 +510,7 @@ export default function AccountsPage() {
     if (modalOpenRef.current) return;
     setToast(
       res.reason === "not_found"
-        ? { tone: "error", title: "작성 중인 명함이 없습니다", detail: "계정을 만들었거나 다른 직원이 지웠습니다" }
+        ? { tone: "error", title: "작성 중인 명함이 없습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" }
         : { tone: "error", title: "작성 중인 명함을 열지 못했습니다", detail: "잠시 후 다시 시도해 주세요" },
     );
   }
