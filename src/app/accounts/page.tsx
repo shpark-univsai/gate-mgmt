@@ -24,6 +24,7 @@ import {
   type Account,
   type AccountStatus,
   type AccountSummary,
+  type CancelFailure,
   type CardDraft,
   type CardDraftDetail,
   type CardDraftInput,
@@ -89,7 +90,16 @@ const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어")
 /** 휴대폰 카드용 짧은 표기 */
 const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
 // closed = 계정 해지(UG-443)가 끝나 정리된 기록 — 기획 16871 「해지됨」
-const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소", closed: "해지됨" };
+// closing = 해지 중(UG-443 기획 16908) — 계정 해지가 끝나기 전. 그동안 다시 보내기 · 발급 취소를 막아요
+const STATUS_LABEL: Record<AccountStatus, string> = {
+  pending: "첫 로그인 전",
+  in_use: "사용 중",
+  closing: "해지 중",
+  cancelled: "발급 취소",
+  closed: "해지됨",
+};
+/** 해지 중인 줄의 동작 안내(툴팁) */
+const CLOSING_TIP = "해지 처리 중인 계정입니다";
 /** 발급 취소 · 해지됨 — 계정이 없어진 기록(고객 정보를 비웠어요). 목록 줄 · 카드가 흐리게 · 누가 · 언제만 보여요. */
 const isGone = (a: Account) => a.status === "cancelled" || a.status === "closed";
 
@@ -207,7 +217,9 @@ const resendErrorText = (reason: ResendFailure) =>
       ? "고객이 이미 로그인해서 다시 보낼 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
       : reason === "not_found"
         ? "발급이 취소된 계정입니다. 목록을 새로 고쳐 주세요."
-        : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.";
+        : reason === "closing"
+          ? "해지 처리 중인 계정이라 다시 보낼 수 없습니다."
+          : "안내 메일을 보내지 못했습니다. 다시 시도해 주세요.";
 
 /** 주소 오류(막힌 경우 포함)면 실패 창에서 바로 발급 취소로 이어 줘요. */
 const offersCancel = (reason: MailFailureReason | "blocked") => reason === "address" || reason === "blocked";
@@ -656,6 +668,7 @@ export default function AccountsPage() {
               { value: "all", label: "상태 전체" },
               { value: "pending", label: "첫 로그인 전" },
               { value: "in_use", label: "사용 중" },
+              { value: "closing", label: "해지 중" },
               { value: "cancelled", label: "발급 취소" },
               { value: "closed", label: "해지됨" },
             ]}
@@ -680,6 +693,7 @@ export default function AccountsPage() {
                 ["all", "전체", metrics?.total],
                 ["pending", "첫 로그인 전", metrics?.pending],
                 ["in_use", "사용 중", metrics?.inUse],
+                ["closing", "해지 중", metrics?.closing],
                 ["cancelled", "발급 취소", metrics?.cancelled],
                 ["closed", "해지됨", metrics?.closed],
               ] as const
@@ -780,6 +794,24 @@ export default function AccountsPage() {
                           발급 취소
                         </button>
                       </>
+                    ) : a.status === "closing" ? (
+                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요(UG-443 기획 16908) — 꺼진 버튼은 마우스를 못 받아 툴팁은 감싼 칸에
+                      <span className="row-actions is-closing" title={CLOSING_TIP}>
+                        {a.statusBeforeClosing === "pending" ? (
+                          <>
+                            {a.resendBlocked || a.mailFailureReason === "address" ? null : (
+                              <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`안내 메일 다시 보내기 — ${CLOSING_TIP}`}>
+                                안내 메일 다시 보내기
+                              </button>
+                            )}
+                            <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`발급 취소 — ${CLOSING_TIP}`}>
+                              발급 취소
+                            </button>
+                          </>
+                        ) : (
+                          <span className="dash">—</span>
+                        )}
+                      </span>
                     ) : isGone(a) ? (
                       <span className="cancel-note">{cancelNote(a)}</span>
                     ) : (
@@ -1205,7 +1237,7 @@ function MailFailureResult({
         <button ref={closeRef} type="button" className="btn btn-outline" onClick={onClose} disabled={cancelling}>
           닫기
         </button>
-        {offersCancel(reason) && cancelError !== "in_use" && cancelError !== "not_found" && (
+        {offersCancel(reason) && cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
           <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(account)} disabled={cancelling} aria-busy={cancelling || undefined}>
             {cancelling ? "취소하는 중…" : "발급 취소"}
           </button>
@@ -1215,8 +1247,10 @@ function MailFailureResult({
   );
 }
 
-const cancelErrorText = (reason: "in_use" | "not_found" | "failed") =>
-  reason === "in_use"
+const cancelErrorText = (reason: CancelFailure) =>
+  reason === "closing"
+    ? "해지 처리 중인 계정이라 발급을 취소할 수 없습니다."
+    : reason === "in_use"
     ? "고객이 이미 로그인해서 취소할 수 없습니다. 목록에서 「사용 중」으로 바뀝니다."
     : reason === "not_found"
       ? "이미 발급 취소된 계정입니다. 목록에서 「발급 취소」로 바뀝니다."
@@ -1228,7 +1262,7 @@ const cancelErrorText = (reason: "in_use" | "not_found" | "failed") =>
  */
 function useCancelNow(onCancelled: () => void) {
   const [cancelling, setCancelling] = useState(false);
-  const [cancelError, setCancelError] = useState<"" | "in_use" | "not_found" | "failed">("");
+  const [cancelError, setCancelError] = useState<"" | CancelFailure>("");
   async function cancelNow(account: Account) {
     setCancelling(true);
     setCancelError("");
@@ -1385,6 +1419,8 @@ function CreateDialog({
   const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
+  // 해지 중인 계정(UG-443 기획 16908) — 사용 중처럼 막되 까닭을 다르게
+  const closing = current?.status === "closing";
   // 마지막 발송이 주소 오류였거나(3번 막힘 포함) 다시 보내기를 막은 계정 — 다시 보내기 대신 발급 취소를 안내해요(목록과 같은 규칙).
   // 이 창에서 만들거나 보내다 실패한 게 아니라 조회로 알게 된 경우라, 고쳐 재발송(fix)으로 넘기지 않아요 — 다른 이메일을 치면 새로 만들기예요.
   const blocked = !!pending && (pending.resendBlocked === true || pending.mailFailureReason === "address");
@@ -1576,7 +1612,7 @@ function CreateDialog({
     if (pError) return phoneRef.current?.focus();
     if (!state) return emailRef.current?.focus(); // 조회 실패 — 칸 아래 안내
 
-    if (state.status === "in_use") return;
+    if (state.status === "in_use" || state.status === "closing") return;
     // 막힌 계정 · 주소 오류 기록은 다시 보내지 않아요 — 창에 「닫기」 · 「발급 취소」만 있어요(Enter 로 제출해도 그대로).
     // 화면의 blocked 와 같은 규칙: 조회로 알게 된 주소 오류 기록에 다시 보내 고치는 모드로 들어가지 않게(16687)
     if (state.status === "pending" && (state.resendBlocked || state.mailFailureReason === "address")) return;
@@ -1931,7 +1967,7 @@ function CreateDialog({
                 </p>
               )}
             </div>
-            <div className={`input-box${emailError || inUse || fixSame || fixTaken ? " is-error" : ""}`}>
+            <div className={`input-box${emailError || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
               <input
                 ref={emailRef}
                 id="email"
@@ -1949,7 +1985,7 @@ function CreateDialog({
                   onFieldBlur("email", e.timeStamp);
                   void runCheck();
                 }}
-                aria-invalid={!!emailError || inUse || fixSame || fixTaken}
+                aria-invalid={!!emailError || inUse || closing || fixSame || fixTaken}
                 aria-describedby="email-note"
               />
             </div>
@@ -1963,6 +1999,8 @@ function CreateDialog({
                 <Sentences text={FIX_ADDRESS_TEXT} />
               ) : fixTaken ? (
                 <p className="error">이미 만든 계정의 이메일입니다. 다른 주소를 입력해 주세요.</p>
+              ) : closing ? (
+                <p className="error">{CLOSING_TIP}. 해지가 끝나거나 철회될 때까지 보낼 수 없습니다.</p>
               ) : fix && !inUse ? null : inUse ? (
                 // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성
                 <p className="error">이미 사용 중인 이메일입니다.</p>
@@ -2021,7 +2059,7 @@ function CreateDialog({
         </div>
 
         {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중 · 발급 취소만 남은 기록이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
-        {!fix && !inUse && !blocked && (
+        {!fix && !inUse && !closing && !blocked && (
         <div className="field">
           <span id="language-label" className="t-body-200-b">
             메일 언어
@@ -2069,13 +2107,13 @@ function CreateDialog({
               닫기
             </button>
             {fixSame ? (
-              cancelError !== "in_use" && cancelError !== "not_found" && (
+              cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
                 <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling} aria-busy={cancelling || undefined}>
                   {cancelling ? "취소하는 중…" : "발급 취소"}
                 </button>
               )
             ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || fixTaken || sending || scanning} aria-busy={sending || checking || undefined}>
+              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -2086,7 +2124,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={close} disabled={cancelling}>
               닫기
             </button>
-            {cancelError !== "in_use" && cancelError !== "not_found" && (
+            {cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
               <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(pendingTarget(pending))} disabled={cancelling} aria-busy={cancelling || undefined}>
                 {cancelling ? "취소하는 중…" : "발급 취소"}
               </button>
@@ -2097,7 +2135,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={close} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || sending || scanning} aria-busy={sending || checking || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || closing || sending || scanning} aria-busy={sending || checking || undefined}>
               {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
             </button>
           </div>
@@ -2214,7 +2252,7 @@ function CancelDialog({
   onCancelled: () => void;
 }) {
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<"" | "in_use" | "not_found" | "failed">("");
+  const [error, setError] = useState<"" | CancelFailure>("");
 
   async function cancel() {
     setSending(true);
@@ -2257,7 +2295,7 @@ function CancelDialog({
         </p>
       )}
       <div className="dialog-actions">
-        {error === "in_use" || error === "not_found" ? (
+        {error === "in_use" || error === "not_found" || error === "closing" ? (
           <button type="button" className="btn btn-outline" onClick={onClose} autoFocus>
             닫기
           </button>
