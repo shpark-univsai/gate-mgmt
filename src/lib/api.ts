@@ -16,8 +16,10 @@ export type Staff = {
 /**
  * pending = 영업이 만들었고 고객이 아직 첫 로그인 전 / in_use = 고객이 직접 가입했거나 로그인한 적 있음
  * cancelled = 발급 취소. 계정 · 데모 프로젝트는 지웠고, 발급 기록(이 줄)만 남겨요.
+ * closed = 해지됨(UG-443). 고객 요청으로 「계정 해지」가 끝나 계정과 데이터를 파기했어요. 고객 정보는 발급 취소처럼 비워요.
+ *   cancelledBy · cancelledAt 은 해지를 실행한 직원 · 파기 완료 시각이에요. 해지가 끝날 때까지는 원래 상태 그대로 보여요.
  */
-export type AccountStatus = "pending" | "in_use" | "cancelled";
+export type AccountStatus = "pending" | "in_use" | "cancelled" | "closed";
 
 /**
  * 안내 메일을 보내지 못한 까닭(서버가 메일 서버 응답으로 판정).
@@ -62,7 +64,8 @@ export type AccountQuery = { keyword?: string; status?: AccountStatus | "all"; p
 export type AccountPage = { items: Account[]; total: number };
 
 /** 요약 카드. 검색어 · 상태 필터와 무관한 전체 기준(서버가 셈) */
-export type AccountSummary = { total: number; pending: number; inUse: number; cancelled: number; thisMonth: number };
+// closed = 해지됨(UG-443) — cancelled 에는 들어가지 않아요. 예전 서버는 주지 않아요(없으면 「—」).
+export type AccountSummary = { total: number; pending: number; inUse: number; cancelled: number; closed?: number; thisMonth: number };
 
 export type CreateAccountInput = {
   company: string;
@@ -465,5 +468,156 @@ export async function deleteCardDraft(id: string): Promise<boolean> {
     return true;
   } catch (e) {
     return isDraftNotFound(e);
+  }
+}
+
+// ───────────────────────── 계정 해지 (UG-443) ─────────────────────────
+// 고객이 support@univs.ai 로 탈퇴를 요청하면 직원이 실행해요(약관 제27조). 순서: 로그인 막기 → 프로젝트 · 데이터 파기(되살리기 없음)
+// → 계정 삭제 → 처리 기록. 서버가 단계마다 기록을 남기고 요청 밖에서 이어 가요 — 실행하면 바로 「처리 중」 줄이 생겨요.
+
+/**
+ * processing = 처리 중(주황) / failed = 멈춤(빨강 · [다시 시도]) / completed = 파기 완료(회색)
+ * withdrawn = 철회됨(회색) — 아무것도 지우기 전에 직원이 거둠. 같은 계정을 나중에 다시 해지할 수 있어요.
+ */
+export type ClosureStatus = "processing" | "failed" | "completed" | "withdrawn";
+
+/** 지금(또는 멈춘) 단계 — suspend 로그인 막기 · gate_purge 데이터 파기 · auth_delete 계정 삭제 · record 처리 기록 */
+export type ClosureStep = "suspend" | "gate_purge" | "auth_delete" | "record";
+
+/** 처리 기록 한 줄. 파기 완료한 기록은 고객 이메일 · 회사명을 서버가 비우고 도메인(@example.com)만 남겨요. */
+export type Closure = {
+  id: string;
+  company: string | null;
+  email: string | null;
+  emailDomain: string;
+  projectCount: number;
+  status: ClosureStatus;
+  /** 계정 서버의 정지 · 삭제 기능을 기다리는 중 — 상태는 처리 중으로 보여요 */
+  authWaiting: boolean;
+  step: ClosureStep;
+  /** 멈춘 까닭(failed 일 때만) */
+  failureCode: string | null;
+  /** 고객이 탈퇴를 요청한 날(yyyy-MM-dd, 한국 날짜) */
+  requestedOn: string;
+  /** 실행한 직원 이메일(처리자) */
+  processedBy: string;
+  requestedAt: string;
+  /** 파기 완료 시각 = 약관 「처리를 마친 날」 기준 */
+  completedAt: string | null;
+  retryCount: number;
+  /** 지금 철회할 수 있어요 — 아직 아무것도 지우지 않았어요(로그인 막기 전 · 계정 서버 대기 또는 실패) */
+  withdrawable: boolean;
+  withdrawnAt: string | null;
+  /** 철회한 직원 이메일 */
+  withdrawnBy: string | null;
+};
+
+export type ClosureQuery = { keyword?: string; status?: ClosureStatus | "all"; page?: number; size?: number };
+
+/** 계정 찾기(T2 → T3). 지워지는 것: 프로젝트(되살리기 기간 안인 삭제 프로젝트 포함) · 등록(얼굴 · 손바닥 각각) · 인증 기록 */
+export type ClosureTarget = {
+  accountId: string;
+  email: string;
+  company: string | null;
+  signupType: "sales" | "direct";
+  /** 가입일 — 영업 발급 계정만 알아요(직접 가입은 없음) */
+  signedUpAt: string | null;
+  projects: number;
+  registrations: number;
+  authRecords: number;
+  /** 이미 실행한 해지 — 있으면 다시 실행할 수 없어요 */
+  closure: Closure | null;
+};
+
+/**
+ * not_found = 이 이메일로 가입한 계정이 없음(대소문자까지 같아야 해요) / staff = 백오피스 직원 계정이라 해지할 수 없음(MGMT-119)
+ * failed = 서버 · 네트워크 문제
+ */
+export type FindClosureTargetResult = { ok: true; target: ClosureTarget } | { ok: false; reason: "not_found" | "staff" | "failed" };
+
+/**
+ * exists = 그사이 다른 직원이 같은 계정을 해지함(MGMT-116) / not_found = 그사이 계정이 없어짐(MGMT-118) / staff = 직원 계정(MGMT-119)
+ * invalid = 확인 이메일 · 요청일을 서버가 받지 않음(PJ-101) / failed = 서버 · 네트워크 문제
+ */
+export type StartClosureResult =
+  | { ok: true; closure: Closure }
+  | { ok: false; reason: "exists" | "not_found" | "staff" | "invalid" | "failed" };
+
+/** not_retryable = 이미 다른 직원이 다시 시도했거나 끝남(MGMT-117 · 105) / not_found = 기록 없음 / failed = 서버 · 네트워크 문제 */
+export type RetryClosureResult = { ok: true; closure: Closure } | { ok: false; reason: "not_retryable" | "not_found" | "failed" };
+
+const CLOSURES = `${MGMT}/closures`;
+
+/** 처리 기록 목록 — 최근 실행이 맨 위. 검색어는 계정 이메일 · 회사명(파기 완료한 기록은 이메일 도메인으로만 걸려요). */
+export async function listClosures(query: ClosureQuery = {}): Promise<{ items: Closure[]; total: number }> {
+  const params = new URLSearchParams();
+  if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
+  params.set("status", query.status ?? "all");
+  params.set("page", String(query.page ?? 1));
+  params.set("size", String(query.size ?? 20));
+  const data = await authed<{ content: Closure[]; totalElements: number }>("GET", `${CLOSURES}?${params}`);
+  return { items: data.content, total: data.totalElements };
+}
+
+/** 탈퇴를 요청한 이메일로 계정을 찾아요(읽기만 해요). 이메일은 주소가 아니라 본문으로 보내요 — 서버 접근 기록에 남지 않게. */
+export async function findClosureTarget(email: string): Promise<FindClosureTargetResult> {
+  try {
+    const data = await authed<{ found: boolean } & Partial<ClosureTarget>>("POST", `${CLOSURES}/target`, { email });
+    if (!data.found || !data.accountId || !data.email) return { ok: false, reason: "not_found" };
+    return {
+      ok: true,
+      target: {
+        accountId: data.accountId,
+        email: data.email,
+        company: data.company ?? null,
+        signupType: data.signupType === "sales" ? "sales" : "direct",
+        signedUpAt: data.signedUpAt ?? null,
+        projects: data.projects ?? 0,
+        registrations: data.registrations ?? 0,
+        authRecords: data.authRecords ?? 0,
+        closure: data.closure ?? null,
+      },
+    };
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-119") return { ok: false, reason: "staff" };
+    return { ok: false, reason: "failed" };
+  }
+}
+
+/** [계정 해지] — 서버도 확인 이메일 · 요청일 · 계정을 다시 확인해요. 실행하면 바로 돌아오고 처리는 서버가 이어 가요. */
+export async function startClosure(input: { email: string; confirmEmail: string; requestedOn: string }): Promise<StartClosureResult> {
+  try {
+    return { ok: true, closure: await authed<Closure>("POST", CLOSURES, input) };
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "MGMT-116") return { ok: false, reason: "exists" };
+    if (e instanceof ApiError && e.code === "MGMT-118") return { ok: false, reason: "not_found" };
+    if (e instanceof ApiError && e.code === "MGMT-119") return { ok: false, reason: "staff" };
+    if (e instanceof ApiError && e.code === "PJ-101") return { ok: false, reason: "invalid" };
+    return { ok: false, reason: "failed" };
+  }
+}
+
+/** [다시 시도] — 멈춘 단계부터 이어서 해요. */
+export async function retryClosure(id: string): Promise<RetryClosureResult> {
+  try {
+    return { ok: true, closure: await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/retry`) };
+  } catch (e) {
+    if (e instanceof ApiError && (e.code === "MGMT-117" || e.code === "MGMT-105")) return { ok: false, reason: "not_retryable" };
+    if (e instanceof ApiError && e.code === "MGMT-115") return { ok: false, reason: "not_found" };
+    return { ok: false, reason: "failed" };
+  }
+}
+
+/** not_withdrawable = 그사이 로그인 막기가 시작됐거나 끝남(MGMT-120 · 105) / not_found = 기록 없음 / failed = 서버 · 네트워크 문제 */
+export type WithdrawClosureResult = { ok: true; closure: Closure } | { ok: false; reason: "not_withdrawable" | "not_found" | "failed" };
+
+/** [철회] — 아직 아무것도 지우지 않은 해지만 돼요. 로그인 막기가 된 뒤에는 서버가 거절해요. */
+export async function withdrawClosure(id: string): Promise<WithdrawClosureResult> {
+  try {
+    return { ok: true, closure: await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/withdraw`) };
+  } catch (e) {
+    if (e instanceof ApiError && (e.code === "MGMT-120" || e.code === "MGMT-105")) return { ok: false, reason: "not_withdrawable" };
+    if (e instanceof ApiError && e.code === "MGMT-115") return { ok: false, reason: "not_found" };
+    return { ok: false, reason: "failed" };
   }
 }
