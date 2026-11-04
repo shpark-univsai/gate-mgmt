@@ -510,7 +510,7 @@ export default function AccountsPage() {
     if (modalOpenRef.current) return;
     setToast(
       res.reason === "not_found"
-        ? { tone: "error", title: "작성 중인 명함이 없습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" }
+        ? { tone: "error", title: "작성 중인 명함이 이미 지워졌습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" }
         : { tone: "error", title: "작성 중인 명함을 열지 못했습니다", detail: "잠시 후 다시 시도해 주세요" },
     );
   }
