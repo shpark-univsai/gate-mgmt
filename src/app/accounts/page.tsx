@@ -180,10 +180,12 @@ type DraftKeep = { id: string | null; input: CardDraftInput; remove?: false } | 
 
 /** 「작성 중」 상태 글자(목록 줄 · 휴대폰 카드) */
 const DRAFT_LABEL = "작성 중";
+/** 「작성 중」 줄의 회사명 칸(목록 줄 · 휴대폰 카드 제목) — 회사명이 비면 이름, 둘 다 없으면 ""(「—」). PC 목록에 이름 열이 없어 알아볼 값이 이것뿐이에요(UG-431 기획 16888) */
+const draftTitle = (d: CardDraft) => d.company || d.name || "";
 // 창은 이미 닫혔으므로 목록 위 알림으로(기존 완료 알림과 같은 자리 · 모양, 아이콘만 오류)
 const DRAFT_SAVE_FAILED = "작성 중인 명함을 저장하지 못했습니다";
 const DRAFTS_LOAD_FAILED = "작성 중인 명함을 불러오지 못했습니다.";
-const DRAFT_GONE = { title: "작성 중인 명함이 없어 남기지 않았습니다", detail: "계정을 만들었거나 다른 직원이 지웠습니다" };
+const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" };
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 const LOAD_FAILED = "목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
@@ -508,7 +510,7 @@ export default function AccountsPage() {
     if (modalOpenRef.current) return;
     setToast(
       res.reason === "not_found"
-        ? { tone: "error", title: "작성 중인 명함이 없습니다", detail: "계정을 만들었거나 다른 직원이 지웠습니다" }
+        ? { tone: "error", title: "작성 중인 명함이 없습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" }
         : { tone: "error", title: "작성 중인 명함을 열지 못했습니다", detail: "잠시 후 다시 시도해 주세요" },
     );
   }
@@ -757,7 +759,7 @@ export default function AccountsPage() {
           {/* 「작성 중」 명함(UG-431 기획 16864) — 첫 페이지 맨 위. 못 채운 칸 · 메일 언어는 「—」, 명함 사진은 넣지 않아요 */}
           {drafts.map((d) => (
             <div key={`draft-${d.id}`} className={`tr${freshId === `draft:${d.id}` ? " is-new" : ""}`} role="row">
-              <span role="cell">{d.company ? <Highlight text={d.company} query={applied.keyword} /> : <span className="dash">—</span>}</span>
+              <span role="cell">{draftTitle(d) ? <Highlight text={draftTitle(d)} query={applied.keyword} /> : <span className="dash">—</span>}</span>
               <span role="cell">{d.email ? <Highlight text={d.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
               <span role="cell">{d.language ? languageName(d.language) : <span className="dash">—</span>}</span>
               <span role="cell">
@@ -844,7 +846,7 @@ export default function AccountsPage() {
             <li key={`draft-${d.id}`} className={`card-row${freshId === `draft:${d.id}` ? " is-new" : ""}`}>
               <div className="card-line">
                 <strong className="card-company">
-                  {d.company ? <Highlight text={d.company} query={applied.keyword} /> : <span className="dash">—</span>}
+                  {draftTitle(d) ? <Highlight text={draftTitle(d)} query={applied.keyword} /> : <span className="dash">—</span>}
                 </strong>
                 <span className="card-status">
                   <DraftStatus />
