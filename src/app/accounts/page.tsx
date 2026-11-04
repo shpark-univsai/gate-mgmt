@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Brand, Dialog, PopupSelect, Toast } from "@/components/ui";
+import { Dialog, PopupSelect, Toast } from "@/components/ui";
+import { AppHeader } from "@/components/app-header";
+import { fmtFull, fmtShort, handle, kstParts, pageItems } from "@/lib/format";
 import { FlagKR, FlagUS } from "@/components/flags";
 import { IcArrowDown, IcArrowLeft, IcArrowRight, IcCamera, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
 import {
@@ -86,7 +88,10 @@ const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactEl
 const languageName = (l: MailLanguage) => (l === "en" ? "English" : "한국어");
 /** 휴대폰 카드용 짧은 표기 */
 const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
-const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소" };
+// closed = 계정 해지(UG-443)가 끝나 정리된 기록 — 기획 16871 「해지됨」
+const STATUS_LABEL: Record<AccountStatus, string> = { pending: "첫 로그인 전", in_use: "사용 중", cancelled: "발급 취소", closed: "해지됨" };
+/** 발급 취소 · 해지됨 — 계정이 없어진 기록(고객 정보를 비웠어요). 목록 줄 · 카드가 흐리게 · 누가 · 언제만 보여요. */
+const isGone = (a: Account) => a.status === "cancelled" || a.status === "closed";
 
 /** 검색어와 맞은 글자에 바탕색 — 대소문자 구분 없이, 여러 번 나오면 모두. */
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -118,53 +123,17 @@ function noResultText({ keyword, status }: { keyword: string; status: AccountSta
   return status === "all" ? "검색 결과가 없습니다." : `「${STATUS_LABEL[status]}」 계정이 없습니다.`;
 }
 
-function kstParts(iso: string) {
-  const parts = new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(iso));
-  const p = (t: string) => parts.find((x) => x.type === t)?.value ?? "";
-  return { y: p("year"), m: p("month"), d: p("day"), h: p("hour"), min: p("minute") };
-}
-const fmtFull = (iso: string) => {
-  const t = kstParts(iso);
-  return `${t.y}.${t.m}.${t.d} ${t.h}:${t.min}`;
-};
-const fmtShort = (iso: string) => {
-  const t = kstParts(iso);
-  return `${t.m}.${t.d} ${t.h}:${t.min}`;
-};
-/** 직원은 이름 대신 회사 이메일로 구분해요. 목록 · 안내에는 @ 앞부분만. */
-const handle = (email: string) => email.split("@")[0];
 const fmtMonthDay = (iso: string) => {
   const t = kstParts(iso);
   return `${t.m}.${t.d}`;
 };
 
-/** 발급 취소 줄: 누가 · 언제 취소했는지 */
-// 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」. 취소한 직원이 없으면(시스템 정리) 그 칸은 빼요.
+/** 발급 취소 · 해지됨 줄: 누가 · 언제 취소(해지)했는지 */
+// 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」(해지됨은 「해지」 — 해지를 실행한 직원 · 파기 완료 시각). 직원이 없으면(시스템 정리) 그 칸은 빼요.
 const cancelNote = (a: Account) =>
-  ["취소", a.cancelledBy ? handle(a.cancelledBy) : "", a.cancelledAt ? fmtShort(a.cancelledAt) : ""].filter(Boolean).join(" · ");
-
-/** 페이지 번호: 7개가 넘으면 처음 · 끝 · 지금 앞뒤만 보이고 사이는 「…」 */
-function pageItems(current: number, count: number): (number | "gap")[] {
-  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
-  const keep = new Set([1, count, current - 1, current, current + 1]);
-  if (current <= 4) [2, 3, 4, 5].forEach((n) => keep.add(n));
-  if (current >= count - 3) [count - 4, count - 3, count - 2, count - 1].forEach((n) => keep.add(n));
-  const nums = [...keep].filter((n) => n >= 1 && n <= count).sort((a, b) => a - b);
-  const out: (number | "gap")[] = [];
-  nums.forEach((n, i) => {
-    if (i > 0 && n - nums[i - 1] > 1) out.push("gap");
-    out.push(n);
-  });
-  return out;
-}
+  [a.status === "closed" ? "해지" : "취소", a.cancelledBy ? handle(a.cancelledBy) : "", a.cancelledAt ? fmtShort(a.cancelledAt) : ""]
+    .filter(Boolean)
+    .join(" · ");
 
 /** 상태 글자(메일 실패 까닭 포함) — 목록 줄과 확인 창이 같은 말을 써요. */
 const statusText = (a: Account) =>
@@ -600,23 +569,14 @@ export default function AccountsPage() {
 
   return (
     <>
-      <header className="app-nav">
-        <div className="app-nav-left">
-          <Brand />
-          <nav className="app-menu" aria-label="메뉴">
-            <a className="app-menu-item is-active" href="/accounts" aria-current="page">
-              계정 발급
-            </a>
-          </nav>
-        </div>
-        <ProfileMenu
-          email={staff.email}
-          onLogout={() => {
-            logout();
-            router.replace("/login");
-          }}
-        />
-      </header>
+      <AppHeader
+        current="accounts"
+        email={staff.email}
+        onLogout={() => {
+          logout();
+          router.replace("/login");
+        }}
+      />
 
       <div className="breadcrumb">
         <span>BACKOFFICE</span>
@@ -697,6 +657,7 @@ export default function AccountsPage() {
               { value: "pending", label: "첫 로그인 전" },
               { value: "in_use", label: "사용 중" },
               { value: "cancelled", label: "발급 취소" },
+              { value: "closed", label: "해지됨" },
             ]}
           />
           {/* 검정은 위쪽 「계정 만들기」 하나만 — 검색은 초기화와 같은 테두리 버튼(Enter 로도 검색) */}
@@ -720,6 +681,7 @@ export default function AccountsPage() {
                 ["pending", "첫 로그인 전", metrics?.pending],
                 ["in_use", "사용 중", metrics?.inUse],
                 ["cancelled", "발급 취소", metrics?.cancelled],
+                ["closed", "해지됨", metrics?.closed],
               ] as const
             ).map(([v, label, n]) => (
               <button
@@ -818,7 +780,7 @@ export default function AccountsPage() {
                           발급 취소
                         </button>
                       </>
-                    ) : a.status === "cancelled" ? (
+                    ) : isGone(a) ? (
                       <span className="cancel-note">{cancelNote(a)}</span>
                     ) : (
                       <span className="dash">—</span>
@@ -876,7 +838,7 @@ export default function AccountsPage() {
             </li>
           ))}
           {visible.map((a) => (
-            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${a.status === "cancelled" ? " is-cancelled" : ""}`}>
+            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${isGone(a) ? " is-cancelled" : ""}`}>
               <div className="card-line">
                 <strong className="card-company"><Highlight text={a.company} query={applied.keyword} /></strong>
                 <span className="card-status">
@@ -897,7 +859,7 @@ export default function AccountsPage() {
               <div className="card-line">
                 <span className="card-meta">
                   {/* 발급 취소 카드: 메일 언어 · 만든 정보 대신 누가 · 언제 취소했는지만 */}
-                  {a.status === "cancelled"
+                  {isGone(a)
                     ? cancelNote(a)
                     : `${languageShort(a.language)} · ${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
                 </span>
@@ -1144,47 +1106,6 @@ function CardMore({ label, onSelect, disabled = false }: { label: string; onSele
             }}
           >
             {label}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 오른쪽 위 프로필. 누르면 로그아웃이 있는 작은 메뉴가 열려요(휴대폰은 이메일도 메뉴 안에). */
-function ProfileMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div className="profile" ref={ref}>
-      <button type="button" className="profile-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span className="avatar" aria-hidden="true">
-          {email.slice(0, 1).toUpperCase()}
-        </span>
-        <span className="identity-name">{email}</span>
-      </button>
-      {open && (
-        <div className="profile-menu" role="menu">
-          <p className="profile-menu-email">{email}</p>
-          <button type="button" role="menuitem" className="profile-menu-item" onClick={onLogout}>
-            로그아웃
           </button>
         </div>
       )}

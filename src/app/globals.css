@@ -106,6 +106,8 @@ p {
 .btn-outline { background: var(--gray-0); color: var(--gray-700); border-color: var(--gray-300); }
 /* 빨강은 되돌릴 수 없는 실행 버튼 한 곳에만(목록의 「발급 취소」는 회색) */
 .btn-danger-outline { background: var(--gray-0); color: var(--danger-400); border-color: var(--danger-400); }
+.btn-danger { background: var(--danger-400); color: var(--gray-0); } /* 되돌릴 수 없는 실행(계정 해지, UG-443) */
+.btn-danger:disabled:not([aria-busy]) { background: var(--gray-100); color: var(--gray-500); }
 .btn:disabled { cursor: default; }
 .btn-dark:disabled:not([aria-busy]) { background: var(--gray-100); color: var(--gray-500); }
 
@@ -430,6 +432,15 @@ p {
 .status--pending .status-dot { background: var(--status-wait); }
 .status--cancelled { color: var(--gray-500); }
 .status--cancelled .status-dot { background: var(--gray-400); }
+/* 해지됨(UG-443) — 발급 취소와 같이 흐리게 */
+.status--closed { color: var(--gray-500); }
+.status--closed .status-dot { background: var(--gray-400); }
+/* 계정 해지 처리 기록(UG-443 기획 16871): 처리 중(주황) → 파기 완료(회색) / 실패(빨강) */
+.status--processing .status-dot { background: var(--status-wait); }
+.status--completed { color: var(--gray-500); }
+.status--completed .status-dot { background: var(--gray-400); }
+.status--failed { color: var(--danger-400); }
+.status--failed .status-dot { background: var(--danger-400); }
 /* 「작성 중」 명함(UG-431 기획 16864) — 회색 점, 글자는 다른 상태와 같은 색(발급 취소처럼 흐리지 않게) */
 .status--draft .status-dot { background: var(--gray-400); }
 /* 안내 메일을 보내지 못한 첫 로그인 전 계정(일시적 발송 오류 · 이메일 주소 오류 · 메일 발송 실패) */
@@ -498,6 +509,16 @@ p {
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .summary { display: flex; flex-direction: column; gap: 16px; }
+/* 계정 해지 확인 창(T3) — 찾은 계정 · 지워지는 것을 회색 상자에, 되돌릴 수 없다는 안내를 빨간 상자에 */
+.closure-summary { padding: 16px; background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: var(--radius-control); }
+.closure-warning {
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--danger-400);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--danger-400) 6%, var(--gray-0));
+  color: var(--danger-400);
+}
 .summary-target { display: flex; flex-direction: column; gap: 2px; }
 .summary-target strong { font-size: 14px; line-height: 20px; }
 .summary-target span { color: var(--gray-500); }
