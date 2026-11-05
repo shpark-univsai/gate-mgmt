@@ -633,6 +633,12 @@ export default function AccountsPage() {
           <Metric label="첫 로그인 전" value={metrics?.pending} sub="고객이 아직 로그인하지 않음" />
           <Metric label="사용 중" value={metrics?.inUse} sub="고객이 콘솔에 로그인함" />
           <Metric label="발급 취소" value={metrics?.cancelled} sub="계정 · 데모 프로젝트 삭제됨" />
+          {/* 해지(UG-450) = 해지 중 + 해지됨 — 전체에는 들어가는데 카드가 없었어요. 예전 서버라 둘 중 하나라도 없으면 「—」 */}
+          <Metric
+            label="해지"
+            value={metrics?.closing !== undefined && metrics.closed !== undefined ? metrics.closing + metrics.closed : undefined}
+            sub="계정 · 프로젝트 데이터 파기"
+          />
         </section>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
