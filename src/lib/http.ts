@@ -8,12 +8,16 @@ declare global {
   }
 }
 
-/** 서버가 거절한 요청. status = HTTP 상태(네트워크 오류는 0), code = 서버 오류 코드(예: MGMT-102) */
+/**
+ * 서버가 거절한 요청. status = HTTP 상태(네트워크 오류는 0), code = 서버 오류 코드(예: MGMT-102)
+ * retryAfterSeconds = 잠시 뒤 다시 할 수 있는 거절(비밀번호 재설정 메일 5분 제한 MGMT-122, UG-421)에서 서버가 알려 준 남은 초
+ */
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly code?: string,
     message?: string,
+    readonly retryAfterSeconds?: number,
   ) {
     super(message ?? `HTTP ${status}`);
   }
@@ -22,8 +26,19 @@ export class ApiError extends Error {
 type Envelope<T> = {
   success: boolean;
   data: T;
-  errors: { code: string; type: string; message: string } | null;
+  errors: { code: string; type: string; message: string; retryAfterSeconds?: number | null } | null;
 };
+
+/**
+ * 남은 초 — 봉투의 errors.retryAfterSeconds 먼저, 없으면 Retry-After 헤더(초).
+ * 게이트웨이가 다른 주소라 브라우저가 헤더를 못 읽을 수 있어서(CORS) 서버가 봉투에도 실어 줘요.
+ */
+function retryAfterOf(res: Response, envelope: Envelope<unknown> | null): number | undefined {
+  const fromBody = envelope?.errors?.retryAfterSeconds;
+  if (typeof fromBody === "number" && fromBody > 0) return fromBody;
+  const header = Number(res.headers.get("Retry-After"));
+  return Number.isFinite(header) && header > 0 ? header : undefined;
+}
 
 function apiOrigin(): string {
   const origin = typeof window !== "undefined" ? window.__APP_CONFIG__?.apiOrigin : undefined;
@@ -54,7 +69,7 @@ export async function send<T>(method: string, path: string, init: RequestInit, t
     // 게이트웨이 · 프록시가 봉투 없이 답한 경우(502 등)
   }
   if (!res.ok || !envelope?.success) {
-    throw new ApiError(res.status, envelope?.errors?.code, envelope?.errors?.message);
+    throw new ApiError(res.status, envelope?.errors?.code, envelope?.errors?.message, retryAfterOf(res, envelope));
   }
   return envelope.data;
 }
