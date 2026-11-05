@@ -136,7 +136,9 @@ export type EmailCheck =
       company?: string;
       mailFailureReason?: MailFailureReason;
     }
-  | { status: "in_use" }
+  // 이미 쓰는 계정 — 새로 만들지 않아요. 직원이 비밀번호 재설정 메일을 대신 보낼 수 있어요(UG-421).
+  // language = 그 계정을 백오피스에서 발급했을 때 고른 메일 언어(재설정 메일도 이 언어로 가요). 발급 기록이 없는 계정(직접 가입 등)이면 없어요.
+  | { status: "in_use"; language?: MailLanguage }
   // 해지 중인 계정(UG-443 기획 16908) — 다시 보내지도 새로 만들지도 않아요
   | { status: "closing" };
 
@@ -305,7 +307,62 @@ export async function checkEmail(email: string): Promise<EmailCheck> {
     };
   }
   if (data.status === "closing") return { status: "closing" };
-  return data.status === "in_use" ? { status: "in_use" } : { status: "new" };
+  if (data.status === "in_use") return isMailLanguage(data.language) ? { status: "in_use", language: data.language } : { status: "in_use" };
+  return { status: "new" };
+}
+
+const isMailLanguage = (v: unknown): v is MailLanguage => v === "en" || v === "ko";
+
+/**
+ * 비밀번호 재설정 메일을 대신 보낼 때(UG-421) 못 보낸 까닭.
+ * cooldown = 같은 계정에 5분 안에 이미 보냄(고객이 직접 요청한 것 포함, MGMT-122) / mail_disabled = 메일 발송이 꺼져 있음(MGMT-123)
+ * not_found = 그사이 계정이 없어짐(MGMT-124) / closing = 해지 처리 중(MGMT-121) / protected = 직원보다 권한이 높은 계정(MGMT-103)
+ * actor = 본인 계정이거나 쓸 수 없는 직원 계정(MGMT-104) / invalid = 서버가 이메일 형식 등 입력을 받지 않음(PJ-101)
+ * failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
+ */
+export type PasswordResetFailure = "cooldown" | "mail_disabled" | "not_found" | "closing" | "protected" | "actor" | "invalid" | "failed";
+export type PasswordResetResult =
+  // invitationPending = 초대를 아직 수락하지 않은 계정이라 링크 대신 「초대 메일을 확인하세요」 안내가 갔어요(그래도 성공)
+  // expiresAt = 링크가 끝나는 시각(24시간 · 한 번만), 초대 안내면 null
+  | { ok: true; mailLanguage: MailLanguage; invitationPending: boolean; expiresAt: string | null }
+  // retryAfterSeconds = cooldown 일 때 서버가 알려 준 남은 초(모르면 없음 — 화면은 「5분」)
+  | { ok: false; reason: PasswordResetFailure; retryAfterSeconds?: number };
+
+const PASSWORD_RESET_FAILURE: Record<string, PasswordResetFailure> = {
+  "MGMT-123": "mail_disabled",
+  "MGMT-124": "not_found",
+  "MGMT-121": "closing",
+  "MGMT-103": "protected",
+  "MGMT-104": "actor",
+  "PJ-101": "invalid",
+};
+
+/**
+ * 사용 중 계정에 비밀번호 재설정 메일을 대신 보내요(UG-421). 로그인 화면의 「비밀번호 재설정」과 같은 메일 · 같은 링크예요.
+ * 새 비밀번호는 고객이 링크에서 직접 정해요. 메일 언어는 그 계정을 발급할 때 고른 언어이고, 발급 기록이 없으면 language(만들기 창에서 고른 언어)예요.
+ * 누가 · 언제 보냈는지 서버가 기록해 둬요.
+ */
+export async function sendPasswordResetLink(email: string, language: MailLanguage): Promise<PasswordResetResult> {
+  try {
+    const data = await authed<{ mailLanguage: MailLanguage; invitationPending: boolean; expiresAt?: string | null }>(
+      "POST",
+      `${MGMT}/accounts/password-reset-link`,
+      { email, language },
+    );
+    return {
+      ok: true,
+      mailLanguage: isMailLanguage(data.mailLanguage) ? data.mailLanguage : language,
+      invitationPending: data.invitationPending === true,
+      expiresAt: data.expiresAt ?? null,
+    };
+  } catch (e) {
+    if (!(e instanceof ApiError)) return { ok: false, reason: "failed" };
+    if (e.code === "MGMT-122") {
+      return { ok: false, reason: "cooldown", ...(e.retryAfterSeconds ? { retryAfterSeconds: e.retryAfterSeconds } : {}) };
+    }
+    const reason = (e.code && PASSWORD_RESET_FAILURE[e.code]) || "failed";
+    return { ok: false, reason };
+  }
 }
 
 /** 계정 만들기 — 서버가 계정 · 데모 프로젝트를 만들고 안내 메일을 보내요. 만든 직원은 서버가 로그인 정보로 정해요. */

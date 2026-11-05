@@ -6,7 +6,7 @@ import { Dialog, PopupSelect, Toast } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { fmtFull, fmtShort, handle, kstParts, pageItems } from "@/lib/format";
 import { FlagKR, FlagUS } from "@/components/flags";
-import { IcArrowDown, IcArrowLeft, IcArrowRight, IcCamera, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
+import { IcArrowLeft, IcArrowRight, IcCamera, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
 import {
   cancelIssue,
   checkEmail,
@@ -20,6 +20,7 @@ import {
   logout,
   resendGuide,
   saveCardDraft,
+  sendPasswordResetLink,
   CARD_DRAFT_MAX,
   type Account,
   type AccountStatus,
@@ -32,6 +33,8 @@ import {
   type EmailCheck,
   type MailFailureReason,
   type MailLanguage,
+  type PasswordResetFailure,
+  type PasswordResetResult,
   type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
@@ -588,6 +591,20 @@ export default function AccountsPage() {
 
   const clearToast = useCallback(() => setToast(null), []);
 
+  /** 계정 만들기 창에서 비밀번호 재설정 메일을 대신 보냈어요(UG-421 D2 · MD2) — 창을 닫고 완료 알림 */
+  const afterResetSent = useCallback(
+    (result: Extract<PasswordResetResult, { ok: true }>) => {
+      setCreating(null);
+      reload();
+      setToast({
+        title: "비밀번호 재설정 메일을 보냈습니다.",
+        // 초대를 아직 수락하지 않은 계정은 서버가 링크 대신 초대 메일 확인 안내를 보내요
+        detail: result.invitationPending ? "초대를 수락하지 않은 계정이라 초대 메일 확인 안내를 보냈습니다" : "링크는 24시간 동안 한 번만 쓸 수 있습니다",
+      });
+    },
+    [reload],
+  );
+
   const afterCancel = useCallback(() => {
     setCancelTarget(null);
     reload();
@@ -1033,6 +1050,7 @@ export default function AccountsPage() {
           onResent={() => afterSend({ kind: "resent" })}
           onResendMailFailed={reload}
           onCancelled={cancelledFromFailure}
+          onResetSent={afterResetSent}
         />
       )}
 
@@ -1389,6 +1407,7 @@ function CreateDialog({
   onResent,
   onResendMailFailed,
   onCancelled,
+  onResetSent,
 }: {
   draft: CardDraftDetail | null;
   /** 이어서 만든 명함을 다 씀(이미 만든 계정에 안내 메일을 다시 보냄) — 목록이 뒤에서 지워요 */
@@ -1403,6 +1422,8 @@ function CreateDialog({
   onResendMailFailed: () => void;
   /** 실패 · 막힘에서 바로 발급 취소함 */
   onCancelled: () => void;
+  /** 사용 중 계정에 비밀번호 재설정 메일을 대신 보냄(UG-421) — 창을 닫고 알림 */
+  onResetSent: (result: Extract<PasswordResetResult, { ok: true }>) => void;
 }) {
   const [company, setCompany] = useState(draft?.draft.company ?? "");
   const [name, setName] = useState(draft?.draft.name ?? "");
@@ -1438,8 +1459,11 @@ function CreateDialog({
   useEffect(() => {
     fixRef.current = fix;
   }, [fix]);
-  // 사용 중 이메일일 때 「고객이 비밀번호를 잊었나요?」로 펼치는 안내(D′ · MD′). 대신 보내기는 UG-421.
-  const [resetOpen, setResetOpen] = useState(false);
+  // 사용 중 이메일에서 「고객이 비밀번호를 잊었나요?」를 누르면 이 창 대신 재설정 메일 확인 창(UG-421 D2 · MD2)을 띄워요.
+  // 창을 겹치지 않고 바꿔 그려요 — 이 컴포넌트는 그대로라 [취소]로 돌아오면 입력값이 그대로예요.
+  const [resetConfirm, setResetConfirm] = useState(false);
+  // 확인 창에서 [취소]로 돌아왔는지 — 돌아오면 초점을 「고객이 비밀번호를 잊었나요?」에 둬요
+  const [resetReturned, setResetReturned] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -1509,7 +1533,8 @@ function CreateDialog({
   };
 
   const trimmed = email.trim();
-  const key = trimmed.toLowerCase();
+  // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
+  const key = trimmed;
   const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
@@ -1519,7 +1544,7 @@ function CreateDialog({
   // 이 창에서 만들거나 보내다 실패한 게 아니라 조회로 알게 된 경우라, 고쳐 재발송(fix)으로 넘기지 않아요 — 다른 이메일을 치면 새로 만들기예요.
   const blocked = !!pending && (pending.resendBlocked === true || pending.mailFailureReason === "address");
   // 고치는 중인 계정의 주소 그대로인지 — 그대로면 다시 보내도 또 실패하니 발급 취소만
-  const fixSame = !!fix && key === fix.email.toLowerCase();
+  const fixSame = !!fix && key.toLowerCase() === fix.email.toLowerCase();
   // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
   const fixTaken = !!fix && !fixSame && !!pending;
 
@@ -1571,13 +1596,13 @@ function CreateDialog({
     try {
       result = await checkEmail(trimmed);
     } catch {
-      if (emailRef.current?.value.trim().toLowerCase() === asked) setEmailError(CHECK_FAILED);
+      if (emailRef.current?.value.trim() === asked) setEmailError(CHECK_FAILED);
       return null;
     } finally {
       setChecking(false);
     }
     // 조회하는 사이 이메일을 고쳤으면 버려요.
-    if (emailRef.current?.value.trim().toLowerCase() !== asked) return null;
+    if (emailRef.current?.value.trim() !== asked) return null;
     setCheck({ email: asked, result });
     if (result.status === "pending") {
       pickPendingLanguage(result.language);
@@ -1790,7 +1815,9 @@ function CreateDialog({
     if (emailError) setEmailError("");
     if (formError) setFormError("");
     if (cancelError) resetCancelError();
-    setResetOpen(false);
+    // 이메일이 바뀌면 재설정 확인 창의 전제(그 이메일이 사용 중)가 깨져요 — 직원이 다시 누를 때까지 열지 않아요
+    setResetConfirm(false);
+    setResetReturned(false);
     if (value.trim()) setEmailMissing(false);
   }
 
@@ -1892,6 +1919,35 @@ function CreateDialog({
 
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   const scannedEmail = scan?.links.email !== undefined;
+  // 칸 아래 안내가 「이미 사용 중인 계정입니다」일 때만(다른 오류 · 해지 중 · 주소 고치는 중이 아닐 때) 재설정 메일 링크를 보여 줘요
+  const offerReset = inUse && !fix && !emailError && !closing;
+
+  // 확인 창의 전제(사용 중 이메일 · 링크를 보일 수 있는 상태)가 깨지면 닫힌 것으로 되돌려요 — 조건이 다시 맞아도 저절로 열리지 않게.
+  // 렌더 중에 바로 맞춰요(React 의 「렌더 중 상태 조정」 방식) — 깨진 상태로 한 번도 그리지 않아요.
+  if (resetConfirm && !offerReset) setResetConfirm(false);
+
+  if (resetConfirm && offerReset && current?.status === "in_use") {
+    return (
+      <ResetLinkDialog
+        email={trimmed}
+        // 발급 기록이 있으면 그때 고른 언어(고정), 없으면(직접 가입 등) 확인 창에서 고르게 해요(기본 English) — 서버는 기록 언어가 이겨요
+        issuanceLanguage={current.language ?? null}
+        onBack={(reason) => {
+          setResetConfirm(false);
+          setResetReturned(true);
+          // 그사이 계정이 없어졌거나 해지가 시작됐어요 — 칸 아래 안내를 바꿔요(없어졌으면 다시 조회해 새로 만들 수 있게)
+          if (reason === "not_found") setCheck(null);
+          if (reason === "closing") setCheck({ email: key, result: { status: "closing" } });
+        }}
+        onSent={(result) => {
+          // 이미 있는 계정에 메일을 보냈어요 — 이어서 만든 명함은 다 썼고, 명함 사진은 지워요(다시 보내기와 같게)
+          consumeDraft();
+          setPhoto(null);
+          onResetSent(result);
+        }}
+      />
+    );
+  }
 
   if (mailFailure) {
     return (
@@ -2038,31 +2094,9 @@ function CreateDialog({
 
         <div className="field-row">
           <div className="field">
-            <div className="field-top">
-              <div className="field-head">
-                <label htmlFor="email" className="t-body-200-b">
-                  고객 이메일
-                </label>
-                {/* 사용 중일 때만: 누르면 바로 아래에 안내가 펼쳐지고, 다시 누르면 접혀요 */}
-                {inUse && (
-                  <button
-                    type="button"
-                    className="field-link"
-                    aria-expanded={resetOpen}
-                    aria-controls="reset-guide"
-                    onClick={() => setResetOpen((o) => !o)}
-                  >
-                    고객이 비밀번호를 잊었나요?
-                    <IcArrowDown size={12} className={resetOpen ? "is-up" : undefined} />
-                  </button>
-                )}
-              </div>
-              {inUse && resetOpen && (
-                <p id="reset-guide" className="help field-guide">
-                  로그인 화면의 「비밀번호 재설정」을 안내해 주세요.
-                </p>
-              )}
-            </div>
+            <label htmlFor="email" className="t-body-200-b">
+              고객 이메일
+            </label>
             <div className={`input-box${emailError || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
               <input
                 ref={emailRef}
@@ -2098,8 +2132,8 @@ function CreateDialog({
               ) : closing ? (
                 <p className="error">{CLOSING_TIP}. 해지가 끝나거나 철회될 때까지 보낼 수 없습니다.</p>
               ) : fix && !inUse ? null : inUse ? (
-                // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성
-                <p className="error">이미 사용 중인 이메일입니다.</p>
+                // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성. 아래에 「고객이 비밀번호를 잊었나요?」(UG-421 D · MD)
+                <p className="error">이미 사용 중인 계정입니다.</p>
               ) : blocked && pending ? (
                 // 다시 보낼 수 없는 경우: 까닭은 아래 빨간 안내로, 실행 버튼은 「발급 취소」
                 <p className="help">
@@ -2117,6 +2151,19 @@ function CreateDialog({
                 <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
               )}
             </div>
+            {/* 사용 중 계정(UG-421 D · MD): 안내 줄 아래 밑줄 링크 — 누르면 이 창 대신 재설정 메일 확인 창(D2 · MD2).
+                주소를 고치는 중(fix)에는 새 주소를 받는 중이라 띄우지 않아요. 이메일을 고치면 사라지고 새로 만들기로 돌아가요. */}
+            {offerReset && (
+              <button
+                type="button"
+                className="field-link field-link--underline"
+                data-autofocus={resetReturned || undefined}
+                onClick={() => setResetConfirm(true)}
+                disabled={sending || scanning}
+              >
+                고객이 비밀번호를 잊었나요?
+              </button>
+            )}
             {/* 명함에서 읽은 이메일의 헷갈리는 글자 · 도메인 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
             {scannedEmail && <ScannedEmailNotes email={trimmed} />}
           </div>
@@ -2240,6 +2287,130 @@ function CreateDialog({
         <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onPhoto} />
       </form>
       {viewingPhoto && photo && <CardPhotoViewer src={photo} onClose={() => setViewingPhoto(false)} />}
+    </Dialog>
+  );
+}
+
+/** 재설정 메일을 못 보낸 까닭(UG-421 D2 · MD2). cooldown 은 서버가 알려 준 남은 시간으로(모르면 기획 고정 문구 「5분」) */
+function resetErrorText(reason: PasswordResetFailure, retryAfterSeconds?: number): string {
+  switch (reason) {
+    case "cooldown": {
+      const minutes = retryAfterSeconds ? Math.max(1, Math.ceil(retryAfterSeconds / 60)) : 5;
+      return `같은 계정에는 ${minutes}분 뒤에 다시 보낼 수 있습니다.`;
+    }
+    case "mail_disabled":
+      return "메일 발송이 꺼져 있어 보낼 수 없습니다. 플랫폼 팀에 문의해 주세요.";
+    case "not_found":
+      return "이 이메일로 가입한 계정이 없습니다. [취소]를 누르면 계정을 새로 만들 수 있습니다.";
+    case "closing":
+      return `${CLOSING_TIP}. 해지가 끝나거나 철회될 때까지 보낼 수 없습니다.`;
+    case "protected":
+      return "권한이 높은 계정이라 대신 보낼 수 없습니다. 고객에게 로그인 화면의 「비밀번호 재설정」을 안내해 주세요.";
+    case "actor":
+      return "본인 계정이거나 지금 쓸 수 없는 직원 계정이라 보낼 수 없습니다.";
+    case "invalid":
+      return "이메일 형식을 확인해 주세요.";
+    default:
+      return "메일을 보내지 못했습니다. 다시 시도해 주세요.";
+  }
+}
+
+/**
+ * 사용 중 계정에 비밀번호 재설정 메일을 대신 보낼지 묻는 창(UG-421 D2 · 휴대폰 MD2). 계정 만들기 창 대신 떠요(겹치지 않아요).
+ * [취소] · Esc · 바깥 누르기 = 계정 만들기 창으로 돌아가요(입력값 그대로). [보내기] 성공 = 창을 닫고 알림.
+ * 5분 안에 이미 보낸 계정(cooldown) · 서버 문제는 창을 열어 둔 채 까닭을 보여 줘요 — 다시 누를 수 있어요.
+ * 더 보낼 수 없는 까닭(계정 없음 · 해지 중 · 권한 · 메일 꺼짐)이면 [보내기]를 감추고 [취소]만 남겨요.
+ */
+function ResetLinkDialog({
+  email,
+  issuanceLanguage,
+  onBack,
+  onSent,
+}: {
+  email: string;
+  /**
+   * 그 계정을 발급할 때 고른 메일 언어 — 있으면 고정으로 보여 줘요. 발급 기록이 없는 계정(직접 가입 등)이면 null 이고,
+   * 이 창에서 고르게 해요(기본 English) — 사용 중 이메일이면 만들기 창의 언어 줄이 숨겨져 고를 데가 없었어요.
+   */
+  issuanceLanguage: MailLanguage | null;
+  /** reason = 마지막으로 못 보낸 까닭(있으면) — 계정 만들기 창이 칸 아래 안내를 맞춰요 */
+  onBack: (reason: PasswordResetFailure | null) => void;
+  onSent: (result: Extract<PasswordResetResult, { ok: true }>) => void;
+}) {
+  const [sending, setSending] = useState(false);
+  const [picked, setPicked] = useState<MailLanguage>("en");
+  const language = issuanceLanguage ?? picked;
+  const [failure, setFailure] = useState<{ reason: PasswordResetFailure; retryAfterSeconds?: number } | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // 다시 눌러도 같은 결과인 까닭 — [보내기]를 감춰요
+  const final = !!failure && failure.reason !== "cooldown" && failure.reason !== "failed";
+
+  useEffect(() => {
+    if (final) cancelRef.current?.focus();
+  }, [final]);
+
+  const back = () => onBack(failure?.reason ?? null);
+
+  async function send() {
+    if (sending) return;
+    setSending(true);
+    setFailure(null);
+    const res = await sendPasswordResetLink(email, language);
+    setSending(false);
+    if (res.ok) return onSent(res);
+    setFailure({ reason: res.reason, retryAfterSeconds: res.retryAfterSeconds });
+  }
+
+  return (
+    <Dialog title="비밀번호 재설정 메일을 보내시겠습니까?" onClose={back} closable={!sending}>
+      <div className="summary">
+        <dl className="summary-rows">
+          <div>
+            <dt>이메일 주소</dt>
+            <dd className="summary-email">{email}</dd>
+          </div>
+          <div>
+            <dt id="reset-language-label">메일 언어</dt>
+            <dd>
+              {issuanceLanguage ? (
+                `${languageName(issuanceLanguage)} (계정 발급 때 고른 언어)`
+              ) : (
+                <div className="segmented" role="radiogroup" aria-labelledby="reset-language-label">
+                  {LANGUAGES.map(({ value, label, Flag }) => (
+                    <button key={value} type="button" role="radio" aria-checked={picked === value} onClick={() => setPicked(value)} disabled={sending}>
+                      <Flag />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>새 비밀번호</dt>
+            <dd>고객이 메일의 링크에서 직접 정함</dd>
+          </div>
+          <div>
+            <dt>링크</dt>
+            <dd>24시간 · 한 번만 쓸 수 있음</dd>
+          </div>
+        </dl>
+      </div>
+      {failure && (
+        <p className="error" role="alert">
+          {resetErrorText(failure.reason, failure.retryAfterSeconds)}
+        </p>
+      )}
+      <div className="dialog-actions">
+        <button ref={cancelRef} type="button" className="btn btn-outline" onClick={back} disabled={sending}>
+          취소
+        </button>
+        {!final && (
+          <button type="button" className="btn btn-dark" onClick={send} disabled={sending} aria-busy={sending || undefined}>
+            {sending ? "보내는 중…" : "보내기"}
+          </button>
+        )}
+      </div>
     </Dialog>
   );
 }
