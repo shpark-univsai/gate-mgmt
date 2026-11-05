@@ -423,10 +423,11 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .table { border: 1px solid var(--gray-200); border-bottom: 0; overflow-x: auto; } /* 창이 좁으면(태블릿 · 창 나누기) 표 안에서 옆으로 밀어 봐요 */
 .tr {
   display: grid;
-  /* 칸 폭은 표 전체에 비율로 나눠요(Figma 1392 기준 200 · 280 · 130 · 150 · 160 · 180 · 260). 관리 칸 최소 폭은 버튼 두 개가 한 줄에 들어가는 폭. */
+  /* 칸 폭은 표 전체에 비율로 나눠요(Figma 1392 기준 200 · 280 · 130 · 150 · 160 · 180 · 260). 관리 칸 최소 폭은 버튼 두 개가 한 줄에 들어가는 폭.
+     상태 칸은 처리 기록(「● 발급 취소 11.05 14:51 · khj」, UG-450 기획 16965)이 한 줄에 들어가게 150 → 220(최소 100 → 210) — 이메일 280 → 240 · 관리 260 → 230 에서 덜었어요. */
   grid-template-columns:
-    minmax(120px, 200fr) minmax(180px, 280fr) minmax(80px, 130fr) minmax(100px, 150fr)
-    minmax(90px, 160fr) minmax(120px, 180fr) minmax(230px, 260fr);
+    minmax(120px, 200fr) minmax(180px, 240fr) minmax(80px, 130fr) minmax(210px, 220fr)
+    minmax(90px, 160fr) minmax(120px, 180fr) minmax(230px, 230fr);
   align-items: center;
   min-height: 64px;
   min-width: min-content;
@@ -472,6 +473,12 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 /* 안내 메일을 보내지 못한 첫 로그인 전 계정(일시적 발송 오류 · 이메일 주소 오류 · 메일 발송 실패) */
 .status--mail-failed { color: var(--danger-400); }
 .status--mail-failed .status-dot { background: var(--danger-400); }
+/* 발급 취소 · 해지됨 줄(UG-450 기획 16965): 배지 오른쪽 8px 에 처리 기록 한 줄 — 줄 높이가 늘지 않게 줄바꿈 없이, 직원 이름이 길면 말줄임(전체는 툴팁) */
+.status-with-record { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; white-space: nowrap; }
+.status-with-record .status { flex: none; }
+.gone-record { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; font-weight: 400; color: var(--gray-400); }
+/* 고객 정보를 비운 줄의 회사명 칸 — 「—」 대신 「삭제됨」 */
+.gone-company { font-size: 14px; line-height: 20px; font-weight: 400; color: var(--gray-400); }
 .cancel-note { color: var(--gray-500); overflow-wrap: anywhere; } /* 취소한 직원 이메일이 길면 줄을 바꿔요(표 밖으로 넘치지 않게) */
 
 .cards { display: none; }

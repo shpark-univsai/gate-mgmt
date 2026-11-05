@@ -141,12 +141,32 @@ const fmtMonthDay = (iso: string) => {
   return `${t.m}.${t.d}`;
 };
 
-/** 발급 취소 · 해지됨 줄: 누가 · 언제 취소(해지)했는지 */
-// 「EN · 만든 사람 · 날짜」와 같은 모양, 언어 자리에 「취소」(해지됨은 「해지」 — 해지를 실행한 직원 · 파기 완료 시각). 직원이 없으면(시스템 정리) 그 칸은 빼요.
-const cancelNote = (a: Account) =>
-  [a.status === "closed" ? "해지" : "취소", a.cancelledBy ? handle(a.cancelledBy) : "", a.cancelledAt ? fmtShort(a.cancelledAt) : ""]
-    .filter(Boolean)
-    .join(" · ");
+/**
+ * 발급 취소 · 해지됨 줄의 처리 기록 — 상태 배지 오른쪽에 「11.05 14:51 · khj」(UG-450 기획 16965).
+ * 해지됨은 해지를 실행한 직원 · 파기 완료 시각. 직원이 없으면(시스템 정리) 시각만, 둘 다 없으면 "".
+ */
+const goneRecord = (a: Account) =>
+  [a.cancelledAt ? fmtShort(a.cancelledAt) : "", handle(a.cancelledBy)].filter(Boolean).join(" · ");
+
+/** 상태 배지 + (발급 취소 · 해지됨이면) 처리 기록 — PC 목록 줄 · 휴대폰 카드가 같이 써요 */
+function StatusWithRecord({ account }: { account: Account }) {
+  const record = isGone(account) ? goneRecord(account) : "";
+  if (!record) return <Status account={account} />;
+  return (
+    <span className="status-with-record">
+      <Status account={account} />
+      <span className="gone-record" title={record}>
+        {record}
+      </span>
+    </span>
+  );
+}
+
+/** 회사명 칸 — 발급 취소 · 해지됨이라 회사명이 비워졌으면 「삭제됨」, 값이 남은 예전 줄은 그대로(UG-450 기획 16965) */
+function CompanyCell({ account, query }: { account: Account; query: string }) {
+  if (account.company) return <Highlight text={account.company} query={query} />;
+  return isGone(account) ? <span className="gone-company">삭제됨</span> : <span className="dash">—</span>;
+}
 
 /** 상태 글자(메일 실패 까닭 포함) — 목록 줄과 확인 창이 같은 말을 써요. */
 const statusText = (a: Account) =>
@@ -816,11 +836,13 @@ export default function AccountsPage() {
           ) : (
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
-                <span role="cell">{a.company ? <Highlight text={a.company} query={applied.keyword} /> : <span className="dash">—</span>}</span>
+                <span role="cell">
+                  <CompanyCell account={a} query={applied.keyword} />
+                </span>
                 <span role="cell">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
                 <span role="cell">{languageName(a.language)}</span>
                 <span role="cell">
-                  <Status account={a} />
+                  <StatusWithRecord account={a} />
                 </span>
                 <span role="cell">{a.createdBy ? handle(a.createdBy) : <span className="dash">—</span>}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
@@ -857,9 +879,8 @@ export default function AccountsPage() {
                       ) : (
                         <span className="dash">—</span>
                       )
-                    ) : isGone(a) ? (
-                      <span className="cancel-note">{cancelNote(a)}</span>
                     ) : (
+                      // 버튼이 없는 줄(사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
                       <span className="dash">—</span>
                     )}
                   </span>
@@ -917,9 +938,11 @@ export default function AccountsPage() {
           {visible.map((a) => (
             <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${isGone(a) ? " is-cancelled" : ""}`}>
               <div className="card-line">
-                <strong className="card-company">{a.company ? <Highlight text={a.company} query={applied.keyword} /> : <span className="dash">—</span>}</strong>
+                <strong className="card-company">
+                  <CompanyCell account={a} query={applied.keyword} />
+                </strong>
                 <span className="card-status">
-                  <Status account={a} />
+                  <StatusWithRecord account={a} />
                   {/* 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
                   {a.status === "pending" && <CardMore label="발급 취소" onSelect={() => setCancelTarget(a)} />}
                 </span>
@@ -933,14 +956,12 @@ export default function AccountsPage() {
                   </button>
                 )}
               </div>
-              <div className="card-line">
-                <span className="card-meta">
-                  {/* 발급 취소 카드: 메일 언어 · 만든 정보 대신 누가 · 언제 취소했는지만 */}
-                  {isGone(a)
-                    ? cancelNote(a)
-                    : `${languageShort(a.language)} · ${handle(a.createdBy) || "—"} · ${fmtShort(a.createdAt)}`}
-                </span>
-              </div>
+              {/* 발급 취소 · 해지됨 카드는 처리 기록을 상태 옆으로 옮겨(UG-450 기획 16965) 이 줄이 없어요 — 전처럼 메일 언어 · 만든 정보는 보이지 않아요 */}
+              {!isGone(a) && (
+                <div className="card-line">
+                  <span className="card-meta">{`${languageShort(a.language)} · ${handle(a.createdBy) || "—"} · ${fmtShort(a.createdAt)}`}</span>
+                </div>
+              )}
             </li>
           ))}
         </ul>
