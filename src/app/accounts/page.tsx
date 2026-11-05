@@ -765,7 +765,7 @@ export default function AccountsPage() {
             ref={chipsRef}
             className={`status-chips${chipsMore ? " has-more" : ""}`}
             role="group"
-            aria-label="상태"
+            aria-label="상태 필터"
             onScroll={updateChipsMore}
           >
             {(

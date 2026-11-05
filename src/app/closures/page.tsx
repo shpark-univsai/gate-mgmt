@@ -93,6 +93,12 @@ function ClosureEmail({ closure, tip = false }: { closure: Closure; tip?: boolea
     </span>
   );
 }
+/** 회사명 — 파기 완료 · 철회해 서버가 비운 기록은 「삭제됨」(13 · Neutral/400, UG-450 16983), 그 밖에 비어 있으면 「—」 */
+function ClosureCompany({ closure, card = false }: { closure: Closure; card?: boolean }) {
+  if (closure.company) return <>{closure.company}</>;
+  if (closure.status === "completed" || closure.status === "withdrawn") return <span className="gone-company">삭제됨</span>;
+  return <span className={card ? "dash dash-sm" : "dash"}>—</span>;
+}
 /** 처리 일시 = 파기 완료 시각(약관 기준). 철회했으면 철회 시각, 끝나기 전에는 실행 시각을 흐리게 */
 const processedAtText = (c: Closure) =>
   c.completedAt
@@ -308,7 +314,7 @@ export default function ClosuresPage() {
             초기화
           </button>
           {/* 휴대폰: 상태 칩 — PC 는 위 선택 상자 */}
-          <div className="status-chips" role="group" aria-label="상태">
+          <div className="status-chips" role="group" aria-label="상태 필터">
             {(["all", "processing", "failed", "completed", "withdrawn"] as const).map((v) => (
               <button
                 key={v}
@@ -350,7 +356,7 @@ export default function ClosuresPage() {
           ) : (
             rows.map((c) => (
               <div key={c.id} className={`tr${c.id === freshId ? " is-new" : ""}`} role="row">
-                <span role="cell">{c.company ?? <span className="dash">—</span>}</span>
+                <span role="cell"><ClosureCompany closure={c} /></span>
                 <span role="cell">
                   <ClosureEmail closure={c} tip />
                 </span>
@@ -403,7 +409,7 @@ export default function ClosuresPage() {
               className={`card-row${c.id === freshId ? " is-new" : ""}${c.status === "completed" || c.status === "withdrawn" ? " is-cancelled" : ""}`}
             >
               <div className="card-line">
-                <strong className="card-company">{c.company ?? <span className="dash">—</span>}</strong>
+                <strong className="card-company"><ClosureCompany closure={c} card /></strong>
                 <span className="card-status">
                   <ClosureStatusBadge closure={c} />
                 </span>

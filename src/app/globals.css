@@ -357,7 +357,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
   cursor: pointer;
 }
 .metric + .metric { margin-left: -1px; }
-.metric.is-on { z-index: 2; background: var(--gray-50); border-color: var(--gray-500); box-shadow: inset 0 0 0 1px var(--gray-500); }
+.metric.is-on { z-index: 2; background: #f8f9fb; /* 디자인 시스템 Neutral/50 (UG-450 16983) — --gray-50(#f8fafc)과 다름 */ border-color: var(--gray-500); box-shadow: inset 0 0 0 1px var(--gray-500); }
 /* 키보드 초점 — 선택(안쪽 회색 선)과 갈리게 바깥 2px 띄운 진한 선. 마우스로 누를 때는 보이지 않아요 */
 .metric:focus { outline: 0; }
 .metric:focus-visible { z-index: 3; outline: 2px solid var(--gray-900); outline-offset: 2px; }
@@ -473,12 +473,12 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 /* 발급 취소 · 해지됨 줄(UG-450 기획 16965): 배지 오른쪽 8px 에 처리 기록 한 줄 — 줄 높이가 늘지 않게 줄바꿈 없이, 직원 이름이 길면 말줄임(전체는 툴팁) */
 .status-with-record { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; white-space: nowrap; }
 /* 휴대폰 카드: 처리 기록이 붙은 상태만 줄어들 수 있게 — 그래야 긴 직원 이름이 말줄임된다(반박 리뷰). 다른 카드의 상태 칸은 그대로 */
-.card-status:has(.status-with-record) { flex: 0 1 auto; min-width: 0; }
+.card-status:has(.status-with-record) { flex: 0 100 auto; min-width: 0; } /* 회사명보다 먼저 줄어들어 긴 처리자 이름이 말줄임된다(UG-450 16983) */
 .card-status .status-with-record { min-width: 0; }
 .status-with-record .status { flex: none; }
 .gone-record { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; font-weight: 400; color: var(--gray-400); }
 /* 고객 정보를 비운 줄의 회사명 칸 — 「—」 대신 「삭제됨」 */
-.gone-company { font-size: 14px; line-height: 20px; font-weight: 400; color: var(--gray-400); }
+.gone-company { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--gray-400); white-space: nowrap; } /* 표 본문과 같은 13 (UG-450 16982) */
 .cancel-note { color: var(--gray-500); overflow-wrap: anywhere; } /* 취소한 직원 이메일이 길면 줄을 바꿔요(표 밖으로 넘치지 않게) */
 
 .cards { display: none; }
@@ -646,7 +646,9 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
   .card-email { font-size: 14px; line-height: 20px; color: var(--gray-700); overflow-wrap: anywhere; }
   .card-meta { color: var(--gray-500); }
   .card-row.is-cancelled .card-company,
-  .card-row.is-cancelled .card-email { color: var(--gray-500); } /* 발급 취소 카드는 흐리게 — 취소선은 「주소 오류」로 읽혀 쓰지 않음 */
+  .card-row.is-cancelled .card-email { color: var(--gray-500); }
+  .card-row.is-cancelled .card-company { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 「삭제됨」 · 회사명이 두 줄로 꺾이지 않게(UG-450 16983) */
+  .card-company .dash-sm { font-size: 13px; line-height: 18px; } /* 계정 해지 휴대폰 카드의 「—」 13 (UG-450 16983) */ /* 발급 취소 카드는 흐리게 — 취소선은 「주소 오류」로 읽혀 쓰지 않음 */
   .card-status { flex: none; display: inline-flex; align-items: center; gap: 2px; font-size: 14px; line-height: 20px; }
   .card-more { position: relative; display: inline-flex; }
   .card-more-button { display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; margin: -13px -14px -3px -6px; padding: 10px 0 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 40×36, 아이콘 자리는 그대로 · 아래로는 3px만 넘쳐 「재발송」과 안 겹침 */
