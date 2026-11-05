@@ -1533,7 +1533,8 @@ function CreateDialog({
   };
 
   const trimmed = email.trim();
-  const key = trimmed.toLowerCase();
+  // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
+  const key = trimmed;
   const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
@@ -1543,7 +1544,7 @@ function CreateDialog({
   // 이 창에서 만들거나 보내다 실패한 게 아니라 조회로 알게 된 경우라, 고쳐 재발송(fix)으로 넘기지 않아요 — 다른 이메일을 치면 새로 만들기예요.
   const blocked = !!pending && (pending.resendBlocked === true || pending.mailFailureReason === "address");
   // 고치는 중인 계정의 주소 그대로인지 — 그대로면 다시 보내도 또 실패하니 발급 취소만
-  const fixSame = !!fix && key === fix.email.toLowerCase();
+  const fixSame = !!fix && key.toLowerCase() === fix.email.toLowerCase();
   // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
   const fixTaken = !!fix && !fixSame && !!pending;
 
@@ -1595,13 +1596,13 @@ function CreateDialog({
     try {
       result = await checkEmail(trimmed);
     } catch {
-      if (emailRef.current?.value.trim().toLowerCase() === asked) setEmailError(CHECK_FAILED);
+      if (emailRef.current?.value.trim() === asked) setEmailError(CHECK_FAILED);
       return null;
     } finally {
       setChecking(false);
     }
     // 조회하는 사이 이메일을 고쳤으면 버려요.
-    if (emailRef.current?.value.trim().toLowerCase() !== asked) return null;
+    if (emailRef.current?.value.trim() !== asked) return null;
     setCheck({ email: asked, result });
     if (result.status === "pending") {
       pickPendingLanguage(result.language);
@@ -1814,6 +1815,8 @@ function CreateDialog({
     if (emailError) setEmailError("");
     if (formError) setFormError("");
     if (cancelError) resetCancelError();
+    // 이메일이 바뀌면 재설정 확인 창의 전제(그 이메일이 사용 중)가 깨져요 — 직원이 다시 누를 때까지 열지 않아요
+    setResetConfirm(false);
     setResetReturned(false);
     if (value.trim()) setEmailMissing(false);
   }
@@ -1919,13 +1922,16 @@ function CreateDialog({
   // 칸 아래 안내가 「이미 사용 중인 계정입니다」일 때만(다른 오류 · 해지 중 · 주소 고치는 중이 아닐 때) 재설정 메일 링크를 보여 줘요
   const offerReset = inUse && !fix && !emailError && !closing;
 
-  if (resetConfirm && inUse && current?.status === "in_use") {
+  // 확인 창의 전제(사용 중 이메일 · 링크를 보일 수 있는 상태)가 깨지면 닫힌 것으로 되돌려요 — 조건이 다시 맞아도 저절로 열리지 않게.
+  // 렌더 중에 바로 맞춰요(React 의 「렌더 중 상태 조정」 방식) — 깨진 상태로 한 번도 그리지 않아요.
+  if (resetConfirm && !offerReset) setResetConfirm(false);
+
+  if (resetConfirm && offerReset && current?.status === "in_use") {
     return (
       <ResetLinkDialog
         email={trimmed}
-        // 발급 기록이 있으면 그때 고른 언어, 없으면(직접 가입 등) 이 창에서 고른 언어 — 서버도 같은 규칙으로 보내요
-        language={current.language ?? language}
-        fromIssuance={!!current.language}
+        // 발급 기록이 있으면 그때 고른 언어(고정), 없으면(직접 가입 등) 확인 창에서 고르게 해요(기본 English) — 서버는 기록 언어가 이겨요
+        issuanceLanguage={current.language ?? null}
         onBack={(reason) => {
           setResetConfirm(false);
           setResetReturned(true);
@@ -2153,7 +2159,7 @@ function CreateDialog({
                 className="field-link field-link--underline"
                 data-autofocus={resetReturned || undefined}
                 onClick={() => setResetConfirm(true)}
-                disabled={sending}
+                disabled={sending || scanning}
               >
                 고객이 비밀번호를 잊었나요?
               </button>
@@ -2302,6 +2308,8 @@ function resetErrorText(reason: PasswordResetFailure, retryAfterSeconds?: number
       return "권한이 높은 계정이라 대신 보낼 수 없습니다. 고객에게 로그인 화면의 「비밀번호 재설정」을 안내해 주세요.";
     case "actor":
       return "본인 계정이거나 지금 쓸 수 없는 직원 계정이라 보낼 수 없습니다.";
+    case "invalid":
+      return "이메일 형식을 확인해 주세요.";
     default:
       return "메일을 보내지 못했습니다. 다시 시도해 주세요.";
   }
@@ -2315,20 +2323,23 @@ function resetErrorText(reason: PasswordResetFailure, retryAfterSeconds?: number
  */
 function ResetLinkDialog({
   email,
-  language,
-  fromIssuance,
+  issuanceLanguage,
   onBack,
   onSent,
 }: {
   email: string;
-  language: MailLanguage;
-  /** 메일 언어가 그 계정을 발급할 때 고른 언어인지(아니면 계정 만들기 창에서 고른 언어 — 발급 기록이 없는 계정) */
-  fromIssuance: boolean;
+  /**
+   * 그 계정을 발급할 때 고른 메일 언어 — 있으면 고정으로 보여 줘요. 발급 기록이 없는 계정(직접 가입 등)이면 null 이고,
+   * 이 창에서 고르게 해요(기본 English) — 사용 중 이메일이면 만들기 창의 언어 줄이 숨겨져 고를 데가 없었어요.
+   */
+  issuanceLanguage: MailLanguage | null;
   /** reason = 마지막으로 못 보낸 까닭(있으면) — 계정 만들기 창이 칸 아래 안내를 맞춰요 */
   onBack: (reason: PasswordResetFailure | null) => void;
   onSent: (result: Extract<PasswordResetResult, { ok: true }>) => void;
 }) {
   const [sending, setSending] = useState(false);
+  const [picked, setPicked] = useState<MailLanguage>("en");
+  const language = issuanceLanguage ?? picked;
   const [failure, setFailure] = useState<{ reason: PasswordResetFailure; retryAfterSeconds?: number } | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   // 다시 눌러도 같은 결과인 까닭 — [보내기]를 감춰요
@@ -2359,9 +2370,20 @@ function ResetLinkDialog({
             <dd className="summary-email">{email}</dd>
           </div>
           <div>
-            <dt>메일 언어</dt>
+            <dt id="reset-language-label">메일 언어</dt>
             <dd>
-              {languageName(language)} ({fromIssuance ? "계정 발급 때 고른 언어" : "계정 만들기 창에서 고른 언어"})
+              {issuanceLanguage ? (
+                `${languageName(issuanceLanguage)} (계정 발급 때 고른 언어)`
+              ) : (
+                <div className="segmented" role="radiogroup" aria-labelledby="reset-language-label">
+                  {LANGUAGES.map(({ value, label, Flag }) => (
+                    <button key={value} type="button" role="radio" aria-checked={picked === value} onClick={() => setPicked(value)} disabled={sending}>
+                      <Flag />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </dd>
           </div>
           <div>
