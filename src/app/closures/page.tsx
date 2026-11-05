@@ -78,8 +78,21 @@ function ClosureStatusBadge({ closure }: { closure: Closure }) {
   );
 }
 
-/** 파기 완료한 기록은 서버가 이메일 · 회사명을 비우고 도메인만 남겨요 */
-const emailText = (c: Closure) => c.email ?? c.emailDomain;
+/** 이메일을 비운 기록(파기 완료 · 철회)에 마우스를 올리면 보여요(UG-450) */
+const SCRUBBED_EMAIL_TIP = "개인정보 보호를 위해 도메인만 남겼어요";
+/**
+ * 고객 이메일. 파기 완료 · 철회한 기록은 서버가 이메일 · 회사명을 비우고 도메인(@example.com)만 남겨요 —
+ * 도메인만 덩그러니 보이면 주소로 읽혀 「…@example.com」으로 앞이 지워졌음을 보여 주고 「—」와 같은 회색으로(UG-450).
+ * tip: 마우스를 올리면 까닭(PC 목록 · 철회 창). 휴대폰 카드는 마우스가 없어 빼요.
+ */
+function ClosureEmail({ closure, tip = false }: { closure: Closure; tip?: boolean }) {
+  if (closure.email) return <span>{closure.email}</span>;
+  return (
+    <span className="dash" title={tip ? SCRUBBED_EMAIL_TIP : undefined}>
+      {`\u2026${closure.emailDomain}`}
+    </span>
+  );
+}
 /** 처리 일시 = 파기 완료 시각(약관 기준). 철회했으면 철회 시각, 끝나기 전에는 실행 시각을 흐리게 */
 const processedAtText = (c: Closure) =>
   c.completedAt
@@ -338,8 +351,8 @@ export default function ClosuresPage() {
             rows.map((c) => (
               <div key={c.id} className={`tr${c.id === freshId ? " is-new" : ""}`} role="row">
                 <span role="cell">{c.company ?? <span className="dash">—</span>}</span>
-                <span role="cell" className={c.email ? undefined : "help"}>
-                  {emailText(c)}
+                <span role="cell">
+                  <ClosureEmail closure={c} tip />
                 </span>
                 <span role="cell">{c.projectCount}개</span>
                 <span role="cell">
@@ -396,7 +409,9 @@ export default function ClosuresPage() {
                 </span>
               </div>
               <div className="card-line">
-                <span className="card-email">{emailText(c)}</span>
+                <span className="card-email">
+                  <ClosureEmail closure={c} />
+                </span>
                 {c.status === "failed" ? (
                   <button type="button" className="link-action" onClick={() => retry(c)} disabled={retrying !== null}>
                     {retrying === c.id ? "다시 시도하는 중…" : "다시 시도"}
@@ -728,7 +743,7 @@ function WithdrawDialog({ closure, onClose, onWithdrawn }: { closure: Closure; o
       <div className="summary">
         <div className="summary-target">
           {closure.company && <strong>{closure.company}</strong>}
-          <span>{emailText(closure)}</span>
+          <ClosureEmail closure={closure} tip />
         </div>
       </div>
       <p>해지를 철회할까요? 아직 지운 데이터는 없습니다.</p>

@@ -62,7 +62,9 @@ export type Account = {
   statusBeforeClosing?: "pending" | "in_use";
 };
 
-export type AccountQuery = { keyword?: string; status?: AccountStatus | "all"; page?: number; size?: number };
+/** 목록 · 내보내기 상태 거르기 — closed_all = 해지 중 + 해지됨(UG-450, 서버 mgmt 같은 값) */
+export type AccountStatusFilter = AccountStatus | "all" | "closed_all";
+export type AccountQuery = { keyword?: string; status?: AccountStatusFilter; page?: number; size?: number };
 
 /** 목록 한 페이지. total = 조건에 맞는 전체 건수 */
 export type AccountPage = { items: Account[]; total: number };
