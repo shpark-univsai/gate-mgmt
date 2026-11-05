@@ -103,10 +103,11 @@ const CLOSING_TIP = "해지 처리 중인 계정입니다";
 /** 발급 취소 · 해지됨 — 계정이 없어진 기록(고객 정보를 비웠어요). 목록 줄 · 카드가 흐리게 · 누가 · 언제만 보여요. */
 const isGone = (a: Account) => a.status === "cancelled" || a.status === "closed";
 
-/** 검색어와 맞은 글자에 바탕색 — 대소문자 구분 없이, 여러 번 나오면 모두. */
-function Highlight({ text, query }: { text: string; query: string }) {
+/** 검색어와 맞은 글자에 바탕색 — 대소문자 구분 없이, 여러 번 나오면 모두. 비어 있는 값(null 포함)은 그냥 빈 글자(UG-443 기획 16925). */
+function Highlight({ text: value, query }: { text: string | null | undefined; query: string }) {
+  const text = value ?? "";
   const q = query.trim().toLowerCase();
-  if (!q) return text;
+  if (!q || !text) return text;
   const lower = text.toLowerCase();
   const parts: React.ReactNode[] = [];
   let from = 0;
@@ -773,8 +774,8 @@ export default function AccountsPage() {
           ) : (
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
-                <span role="cell"><Highlight text={a.company} query={applied.keyword} /></span>
-                <span role="cell"><Highlight text={a.email} query={applied.keyword} /></span>
+                <span role="cell">{a.company ? <Highlight text={a.company} query={applied.keyword} /> : <span className="dash">—</span>}</span>
+                <span role="cell">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
                 <span role="cell">{languageName(a.language)}</span>
                 <span role="cell">
                   <Status account={a} />
@@ -874,7 +875,7 @@ export default function AccountsPage() {
           {visible.map((a) => (
             <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${isGone(a) ? " is-cancelled" : ""}`}>
               <div className="card-line">
-                <strong className="card-company"><Highlight text={a.company} query={applied.keyword} /></strong>
+                <strong className="card-company">{a.company ? <Highlight text={a.company} query={applied.keyword} /> : <span className="dash">—</span>}</strong>
                 <span className="card-status">
                   <Status account={a} />
                   {/* 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
@@ -882,7 +883,7 @@ export default function AccountsPage() {
                 </span>
               </div>
               <div className="card-line">
-                <span className="card-email"><Highlight text={a.email} query={applied.keyword} /></span>
+                <span className="card-email">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
                 {canResend(a) && (
                   <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
                     <IcReload size={14} />
