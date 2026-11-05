@@ -37,7 +37,8 @@ export function kstToday(now: Date = new Date()): string {
 }
 
 /** 직원은 이름 대신 회사 이메일로 구분해요. 목록 · 안내에는 @ 앞부분만. */
-export const handle = (email: string) => email.split("@")[0];
+/** 직원 이메일의 @ 앞 — 값이 없으면 빈 글자(UG-443 기획 16936: 생성자가 비어 와도 목록이 깨지지 않게) */
+export const handle = (email: string | null | undefined) => (email ? email.split("@")[0] : "");
 
 /** 페이지 번호: 7개가 넘으면 처음 · 끝 · 지금 앞뒤만 보이고 사이는 「…」 */
 export function pageItems(current: number, count: number): (number | "gap")[] {
