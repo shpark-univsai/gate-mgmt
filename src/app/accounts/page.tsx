@@ -23,6 +23,7 @@ import {
   CARD_DRAFT_MAX,
   type Account,
   type AccountStatus,
+  type AccountStatusFilter,
   type AccountSummary,
   type CancelFailure,
   type CardDraft,
@@ -121,8 +122,9 @@ function Highlight({ text: value, query }: { text: string | null | undefined; qu
 }
 
 /** 결과 없음 — 무엇으로 찾았는지 그대로 보여 줘요(검색어는 굵게). */
-function noResultText({ keyword, status }: { keyword: string; status: AccountStatus | "all" }) {
-  const where = status === "all" ? "" : `「${STATUS_LABEL[status]}」에서 `;
+function noResultText({ keyword, status }: { keyword: string; status: AccountStatusFilter }) {
+  const label = status === "closed_all" ? "해지" : status === "all" ? "" : STATUS_LABEL[status];
+  const where = status === "all" ? "" : `「${label}」에서 `;
   const k = keyword.trim();
   if (k)
     return (
@@ -131,7 +133,7 @@ function noResultText({ keyword, status }: { keyword: string; status: AccountSta
         <strong className="empty-keyword">‘{k}’</strong>에 대한 검색 결과가 없습니다.
       </>
     );
-  return status === "all" ? "검색 결과가 없습니다." : `「${STATUS_LABEL[status]}」 계정이 없습니다.`;
+  return status === "all" ? "검색 결과가 없습니다." : `「${label}」 계정이 없습니다.`;
 }
 
 const fmtMonthDay = (iso: string) => {
@@ -248,8 +250,8 @@ export default function AccountsPage() {
     const el = chipsRef.current;
     if (el) setChipsMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, []);
-  const [status, setStatus] = useState<AccountStatus | "all">("all");
-  const [applied, setApplied] = useState<{ keyword: string; status: AccountStatus | "all" }>({ keyword: "", status: "all" });
+  const [status, setStatus] = useState<AccountStatusFilter>("all");
+  const [applied, setApplied] = useState<{ keyword: string; status: AccountStatusFilter }>({ keyword: "", status: "all" });
   const [version, setVersion] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
@@ -387,7 +389,7 @@ export default function AccountsPage() {
   }
 
   // 휴대폰 상태 칩: 누르면 바로 걸러요(휴대폰엔 검색 버튼이 없어서).
-  function pickStatus(v: AccountStatus | "all") {
+  function pickStatus(v: AccountStatusFilter) {
     setStatus(v);
     setPage(1);
     setApplied({ keyword: keyword.trim(), status: v });
@@ -666,7 +668,7 @@ export default function AccountsPage() {
               </button>
             )}
           </label>
-          <PopupSelect<AccountStatus | "all">
+          <PopupSelect<AccountStatusFilter>
             className="select"
             label="상태"
             value={status}
@@ -678,6 +680,7 @@ export default function AccountsPage() {
               { value: "closing", label: "해지 중" },
               { value: "cancelled", label: "발급 취소" },
               { value: "closed", label: "해지됨" },
+              { value: "closed_all", label: "해지 (해지 중 · 해지됨)" },
             ]}
           />
           {/* 검정은 위쪽 「계정 만들기」 하나만 — 검색은 초기화와 같은 테두리 버튼(Enter 로도 검색) */}
@@ -700,9 +703,9 @@ export default function AccountsPage() {
                 ["all", "전체", metrics?.total],
                 ["pending", "첫 로그인 전", metrics?.pending],
                 ["in_use", "사용 중", metrics?.inUse],
-                ["closing", "해지 중", metrics?.closing],
                 ["cancelled", "발급 취소", metrics?.cancelled],
-                ["closed", "해지됨", metrics?.closed],
+                // 해지(UG-450) = 해지 중 + 해지됨 한 칩 — 서버 closed_all 로 둘 다 걸러요. 예전 서버라 둘 중 하나라도 없으면 숫자 없이
+                ["closed_all", "해지", metrics?.closing !== undefined && metrics?.closed !== undefined ? metrics.closing + metrics.closed : undefined],
               ] as const
             ).map(([v, label, n]) => (
               <button
