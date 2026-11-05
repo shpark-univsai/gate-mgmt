@@ -780,7 +780,7 @@ export default function AccountsPage() {
                 <span role="cell">
                   <Status account={a} />
                 </span>
-                <span role="cell">{handle(a.createdBy)}</span>
+                <span role="cell">{a.createdBy ? handle(a.createdBy) : <span className="dash">—</span>}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
                   {/* 해지 중(UG-443 기획 16908)이면 동작을 꺼 둬요 — 꺼진 버튼은 마우스를 못 받아 툴팁은 감싼 칸에 */}
@@ -896,7 +896,7 @@ export default function AccountsPage() {
                   {/* 발급 취소 카드: 메일 언어 · 만든 정보 대신 누가 · 언제 취소했는지만 */}
                   {isGone(a)
                     ? cancelNote(a)
-                    : `${languageShort(a.language)} · ${handle(a.createdBy)} · ${fmtShort(a.createdAt)}`}
+                    : `${languageShort(a.language)} · ${handle(a.createdBy) || "—"} · ${fmtShort(a.createdAt)}`}
                 </span>
               </div>
             </li>

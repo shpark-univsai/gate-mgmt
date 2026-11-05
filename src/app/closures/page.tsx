@@ -619,7 +619,7 @@ function CloseAccountDialog({ onClose, onStarted }: { onClose: () => void; onSta
     <Dialog title="계정 해지" onClose={onClose} closable={!sending}>
       <form className="dialog-form" onSubmit={submit} noValidate>
         <div className="closure-summary">
-          <dl className="summary-rows">
+          <dl className="summary-rows summary-rows--strong">
             <div>
               <dt>회사명</dt>
               <dd>{target.company ?? "—"}</dd>

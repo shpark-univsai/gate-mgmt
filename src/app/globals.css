@@ -542,6 +542,8 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .summary-rows div { display: flex; gap: 12px; }
 .summary-rows dt { width: 76px; flex: none; color: var(--gray-500); }
 .summary-rows dd { margin: 0; font-weight: 600; }
+/* 계정 해지 확인 창(T3) 「찾은 계정」 값은 Figma SUIT Bold(700) — UG-443 기획 16936 */
+.summary-rows--strong dd { font-weight: 700; }
 
 /* 메일 발송 실패 안내: 낱말 중간에서 줄이 바뀌지 않게(PC 는 한 줄, 휴대폰은 문장 끝에서) */
 .mail-failure { word-break: keep-all; text-wrap: balance; } /* 휴대폰에서 끝 한 단어만 다음 줄로 떨어지지 않게 */

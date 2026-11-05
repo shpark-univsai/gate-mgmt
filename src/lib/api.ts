@@ -213,9 +213,11 @@ export function logout() {
 }
 
 // 발급 취소 · 해지됨 기록은 서버가 고객 정보를 비워 회사명 · 이메일이 null 로 와요(UG-443 기획 16925) — 화면에는 빈 글자로 넘겨요.
-type AccountDto = Omit<Account, "company" | "email" | "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing"> & {
+type AccountDto = Omit<Account, "company" | "email" | "createdBy" | "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing"> & {
   company: string | null;
   email: string | null;
+  /** 만든 직원 이메일 — 서버는 NOT NULL 로 늘 채우지만, 비어 와도 목록이 깨지지 않게 받는다(UG-443 기획 16936) */
+  createdBy: string | null;
   statusBeforeClosing?: "pending" | "in_use" | null;
   cancelledBy: string | null;
   cancelledAt: string | null;
@@ -233,7 +235,7 @@ const toAccount = (a: AccountDto): Account => ({
   email: a.email ?? "",
   language: a.language,
   status: a.status,
-  createdBy: a.createdBy,
+  createdBy: a.createdBy ?? "",
   createdAt: a.createdAt,
   mailFailed: a.mailFailed,
   ...(isMailFailureReason(a.mailFailureReason) ? { mailFailureReason: a.mailFailureReason } : {}),
