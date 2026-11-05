@@ -79,7 +79,7 @@ function ClosureStatusBadge({ closure }: { closure: Closure }) {
 }
 
 /** 이메일을 비운 기록(파기 완료 · 철회)에 마우스를 올리면 보여요(UG-450) */
-const SCRUBBED_EMAIL_TIP = "파기되어 도메인만 남겼어요";
+const SCRUBBED_EMAIL_TIP = "개인정보 보호를 위해 도메인만 남겼어요";
 /**
  * 고객 이메일. 파기 완료 · 철회한 기록은 서버가 이메일 · 회사명을 비우고 도메인(@example.com)만 남겨요 —
  * 도메인만 덩그러니 보이면 주소로 읽혀 「…@example.com」으로 앞이 지워졌음을 보여 주고 「—」와 같은 회색으로(UG-450).
