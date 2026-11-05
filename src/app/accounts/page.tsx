@@ -396,6 +396,13 @@ export default function AccountsPage() {
     reload();
   }
 
+  // PC 요약 카드(UG-450 기획 16957): 칩과 같이 바로 걸러요. 이미 걸린 카드를 다시 누르면 목록은 그대로 — 선택 상자만 맞춰요.
+  // 선택을 푸는 길은 「전체」 카드 · [초기화]뿐이에요.
+  function pickCard(v: AccountStatusFilter) {
+    if (v === applied.status) return setStatus(v);
+    pickStatus(v);
+  }
+
   /** 「CSV 내려받기」(N5) — 검색 칸에 쳐 둔 글자가 아니라 지금 목록에 걸린 조건(applied) 그대로 전부 내려받아요. */
   async function onExport() {
     if (exporting) return;
@@ -630,18 +637,43 @@ export default function AccountsPage() {
           </div>
         </div>
 
-        <section className="overview" aria-label="요약">
-          <Metric label="전체" value={metrics?.total} sub={metrics ? `이번 달 ${metrics.thisMonth}개` : "이번 달 —"} />
-          <Metric label="첫 로그인 전" value={metrics?.pending} sub="고객이 아직 로그인하지 않음" />
-          <Metric label="사용 중" value={metrics?.inUse} sub="고객이 콘솔에 로그인함" />
-          <Metric label="발급 취소" value={metrics?.cancelled} sub="계정 · 데모 프로젝트 삭제됨" />
-          {/* 해지(UG-450) = 해지 중 + 해지됨 — 전체에는 들어가는데 카드가 없었어요. 예전 서버라 둘 중 하나라도 없으면 「—」 */}
+        {/* 요약 카드 = 상태 필터(UG-450 기획 16957) — 휴대폰 칩과 같게 누르면 바로 걸러요. 숫자는 검색 · 필터와 무관한 전체 기준 */}
+        <div className="overview" role="group" aria-label="상태 필터">
           <Metric
+            id="all"
+            label="전체"
+            value={metrics?.total}
+            sub={metrics ? `이번 달 ${metrics.thisMonth}개` : "이번 달 —"}
+            pressed={applied.status === "all"}
+            onPress={pickCard}
+          />
+          <Metric
+            id="pending"
+            label="첫 로그인 전"
+            value={metrics?.pending}
+            sub="고객이 아직 로그인하지 않음"
+            pressed={applied.status === "pending"}
+            onPress={pickCard}
+          />
+          <Metric id="in_use" label="사용 중" value={metrics?.inUse} sub="고객이 콘솔에 로그인함" pressed={applied.status === "in_use"} onPress={pickCard} />
+          <Metric
+            id="cancelled"
+            label="발급 취소"
+            value={metrics?.cancelled}
+            sub="계정 · 데모 프로젝트 삭제됨"
+            pressed={applied.status === "cancelled"}
+            onPress={pickCard}
+          />
+          {/* 해지(UG-450) = 해지 중 + 해지됨(closed_all) — 「해지 중」 · 「해지됨」 하나만 거르면 카드는 어느 것도 눌려 있지 않아요. 예전 서버라 둘 중 하나라도 없으면 「—」 */}
+          <Metric
+            id="closed_all"
             label="해지"
             value={metrics?.closing !== undefined && metrics.closed !== undefined ? metrics.closing + metrics.closed : undefined}
             sub="계정 · 프로젝트 데이터 파기"
+            pressed={applied.status === "closed_all"}
+            onPress={pickCard}
           />
-        </section>
+        </div>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
           <label className="search">
@@ -674,13 +706,14 @@ export default function AccountsPage() {
             value={status}
             onChange={setStatus}
             options={[
+              // 요약 카드와 같은 차례(UG-450 기획 16957) — 카드가 없는 「해지 중」 · 「해지됨」은 맨 뒤
               { value: "all", label: "상태 전체" },
               { value: "pending", label: "첫 로그인 전" },
               { value: "in_use", label: "사용 중" },
-              { value: "closing", label: "해지 중" },
               { value: "cancelled", label: "발급 취소" },
-              { value: "closed", label: "해지됨" },
               { value: "closed_all", label: "해지 (해지 중 · 해지됨)" },
+              { value: "closing", label: "해지 중" },
+              { value: "closed", label: "해지됨" },
             ]}
           />
           {/* 검정은 위쪽 「계정 만들기」 하나만 — 검색은 초기화와 같은 테두리 버튼(Enter 로도 검색) */}
@@ -1157,15 +1190,43 @@ function CardMore({ label, onSelect, disabled = false }: { label: string; onSele
   );
 }
 
-function Metric({ label, value, sub }: { label: string; value: number | undefined; sub: string }) {
+/**
+ * 요약 카드 겸 상태 필터 버튼(UG-450 기획 16957). 읽어 주는 이름은 짧게 「첫 로그인 전 3개」(숫자를 모르면 이름만), 설명 문장은 aria-describedby 로.
+ * 버튼 안이라 div 대신 span(블록 표시)을 써요.
+ */
+function Metric({
+  id,
+  label,
+  value,
+  sub,
+  pressed,
+  onPress,
+}: {
+  id: AccountStatusFilter;
+  label: string;
+  value: number | undefined;
+  sub: string;
+  pressed: boolean;
+  onPress: (v: AccountStatusFilter) => void;
+}) {
+  const descId = `metric-desc-${id}`;
   return (
-    <div className="metric">
+    <button
+      type="button"
+      className={`metric${pressed ? " is-on" : ""}`}
+      aria-pressed={pressed}
+      aria-label={value === undefined ? label : `${label} ${value}개`}
+      aria-describedby={descId}
+      onClick={() => onPress(id)}
+    >
       <span className="metric-label">{label}</span>
-      <div>
+      <span className="metric-body">
         <strong className="metric-value">{value ?? "—"}</strong>
-        <span className="metric-sub">{sub}</span>
-      </div>
-    </div>
+        <span className="metric-sub" id={descId}>
+          {sub}
+        </span>
+      </span>
+    </button>
   );
 }
 
