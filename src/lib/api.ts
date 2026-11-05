@@ -97,9 +97,10 @@ export type CreateAccountInput = {
  * 동의는 Y · N, 발급 취소한 기록이거나 기록이 없으면 null. createdAt 은 UTC(한국 시각 변환은 화면이 해요).
  */
 export type ExportRow = {
-  company: string;
+  /** 발급 취소 · 해지됨 기록은 비어(null) 올 수 있어요 — CSV 에는 빈 칸 */
+  company: string | null;
   name: string | null;
-  email: string;
+  email: string | null;
   phone: string | null;
   language: MailLanguage;
   status: AccountStatus;
@@ -211,7 +212,10 @@ export function logout() {
   if (refreshToken) revokeRefreshToken(refreshToken);
 }
 
-type AccountDto = Omit<Account, "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing"> & {
+// 발급 취소 · 해지됨 기록은 서버가 고객 정보를 비워 회사명 · 이메일이 null 로 와요(UG-443 기획 16925) — 화면에는 빈 글자로 넘겨요.
+type AccountDto = Omit<Account, "company" | "email" | "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing"> & {
+  company: string | null;
+  email: string | null;
   statusBeforeClosing?: "pending" | "in_use" | null;
   cancelledBy: string | null;
   cancelledAt: string | null;
@@ -225,8 +229,8 @@ const isMailFailureReason = (r: unknown): r is MailFailureReason => typeof r ===
 
 const toAccount = (a: AccountDto): Account => ({
   id: a.id,
-  company: a.company,
-  email: a.email,
+  company: a.company ?? "",
+  email: a.email ?? "",
   language: a.language,
   status: a.status,
   createdBy: a.createdBy,

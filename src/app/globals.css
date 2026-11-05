@@ -20,6 +20,9 @@
   --gray-800: #1d293b;
   --gray-900: #0e162a;
   --danger-400: #e11d1d;
+  /* 계정 해지 확인 창(T3) 경고 상자 — Figma 시안 값(UG-443 기획 16925) */
+  --danger-surface: #fff7f6;
+  --danger-text: #bf3636;
   --success-600: #16a34a;
   --overlay-dark-80: rgb(14 22 42 / 0.8);
   /* 목록 상태 점 (Figma 표의 「사용 중」 · 「첫 로그인 전」 점 색) */
@@ -525,10 +528,12 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .closure-warning {
   margin: 0;
   padding: 12px 16px;
-  border: 1px solid var(--danger-400);
-  border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--danger-400) 6%, var(--gray-0));
-  color: var(--danger-400);
+  border-radius: 8px;
+  background: var(--danger-surface);
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 700; /* 13px 굵게 = t-body-200-b 와 같은 굵기 */
 }
 .summary-target { display: flex; flex-direction: column; gap: 2px; }
 .summary-target strong { font-size: 14px; line-height: 20px; }
