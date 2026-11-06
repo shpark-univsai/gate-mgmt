@@ -67,6 +67,7 @@ import {
   chipEmailAddresses,
   confusableParts,
   emailHasConfusable,
+  isEmailLikeChip,
   isFilled,
   isSuspectChip,
   isSuspectValue,
@@ -492,6 +493,8 @@ const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다",
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 // 이메일 칸 값이 명함에서 잘렸거나 잘못 읽었을 수 있는 주소와 똑같을 때(UG-451 반박 리뷰 F2) — 고칠 때까지 보내지 않아요
 const SUSPECT_EMAIL = "명함에서 잘못 읽었을 수 있는 주소입니다. 명함과 한 글자씩 비교해 고쳐 주세요.";
+// 경고 바로 아래 버튼 — 명함과 견줘 맞는 주소면 직원이 그 값을 확인해 보내요(UG-451 기획 17030)
+const SUSPECT_CONFIRM = "명함과 같은 주소예요";
 // 보내기를 눌렀는데 이메일 확인이 네트워크 · 서버 문제(응답 없음 · 5xx · 시간 초과)로 실패 — 버튼 위에 남겨요(UG-451 기획 16991)
 const NETWORK_FAILED = "연결이 불안정해 확인하지 못했습니다. 다시 눌러 주세요.";
 // 계정 만들기 요청이 네트워크 · 서버 문제로 실패 — 서버가 만들었는지 알 수 없어요. 다시 누르면 이미 만든 계정이면 「이미 만든 계정입니다」로 보여요.
@@ -2107,6 +2110,9 @@ function CreateDialog({
   // 확인 창에서 [취소]로 돌아왔는지 — 돌아오면 초점을 「고객이 비밀번호를 잊었나요?」에 둬요
   const [resetReturned, setResetReturned] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
+  // 실행 버튼(계정 만들기 · 재발송) · 「고객이 비밀번호를 잊었나요?」 — 「명함과 같은 주소예요」를 누른 뒤 초점을 옮겨요
+  const submitRef = useRef<HTMLButtonElement>(null);
+  const resetLinkRef = useRef<HTMLButtonElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
@@ -2169,6 +2175,19 @@ function CreateDialog({
   // 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소가 모두 새 주소일 때만. 확인 전이면 wait, 있는 계정이면 existing
   // 칸 값이 잘렸을 수 있는 메일 칩의 값 · 그 칩에서 뽑은 잘린 주소와 같음 — 경고하고 보내기를 막아요(반박 리뷰 F2 · 최종 리뷰 R3, 고치면 풀려요)
   const suspectValue = !!scan && isSuspectValue(trimmed, scan.chips);
+  // 직원이 「명함과 같은 주소예요」로 확인한 칸 값(UG-451 기획 17030) — 맞는 주소인데 의심으로 막히는 경우(「Sales · kim@acme.com」 등)를 풀어요.
+  // 확인한 그 값 그대로일 때만 풀리고, 칸이 조금이라도 바뀌거나(changeEmail) 명함을 다시 찍으면 지워요. 서버 · 「작성 중」에는 남기지 않아요(이어서 열면 다시 경고)
+  const [confirmedEmail, setConfirmedEmail] = useState<string | null>(null);
+  // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때
+  const suspectBlocked = suspectValue && confirmedEmail !== email;
+  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 옮겨요(confirmSuspect)
+  const focusAfterConfirm = useRef(false);
+  useEffect(() => {
+    if (!focusAfterConfirm.current) return;
+    focusAfterConfirm.current = false;
+    const next = [submitRef.current, resetLinkRef.current].find((b) => b && b.isConnected && !b.disabled);
+    (next ?? emailRef.current)?.focus();
+  }, [confirmedEmail]);
   const emailGate = draftSaveGate({
     email: trimmed,
     checkable: EMAIL_RE.test(trimmed),
@@ -2704,7 +2723,7 @@ function CreateDialog({
 
   async function submit() {
     // 명함에서 잘못 읽었을 수 있는 주소 그대로면 보내지 않아요 — 칸 아래 경고가 이미 떠 있어요(반박 리뷰 F2)
-    if (suspectValue) return emailRef.current?.focus();
+    if (suspectBlocked) return emailRef.current?.focus();
     if (fix) return submitFix(fix);
     let eError = "";
     if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
@@ -2822,6 +2841,8 @@ function CreateDialog({
   // companyNow = 지금 회사명 칸 값(명함으로 함께 채울 때는 새 값 — 옛 기록 회사명이 명함 회사명을 덮지 않게)
   function changeEmail(value: string, companyNow: string = company) {
     setEmail(value);
+    // 칸이 바뀌면 「명함과 같은 주소예요」 확인은 풀려요 — 아직 의심 값이면 경고가 다시 떠요(UG-451 기획 17030)
+    setConfirmedEmail(null);
     // 주소 오류 기록에서 주소를 고쳐 새로 만들 때: 회사명이 비어 있으면 그 기록의 회사명을 미리 채우고,
     // 메일 언어도 그 기록의 언어로 둬요(둘 다 고칠 수 있어요)
     if (!fix && blocked && pending) {
@@ -2835,6 +2856,15 @@ function CreateDialog({
     setResetConfirm(false);
     setResetReturned(false);
     if (value.trim()) setEmailMissing(null);
+  }
+
+  /**
+   * 「명함과 같은 주소예요」(UG-451 기획 17030) — 지금 칸 값을 직원이 명함과 견줘 맞다고 확인했어요. 그 값 그대로인 동안 경고 · 막음을 풀어요.
+   * 버튼이 사라지니 초점은 실행 버튼(계정 만들기 · 재발송) → 「고객이 비밀번호를 잊었나요?」 → 이메일 칸 순으로 쓸 수 있는 곳에 둬요.
+   */
+  function confirmSuspect() {
+    setConfirmedEmail(email);
+    focusAfterConfirm.current = true;
   }
 
   /** 칸마다 값 넣기(명함 · 칩). 그 칸의 오류 안내는 지워요. */
@@ -2960,11 +2990,15 @@ function CreateDialog({
     const emailFilled = fill("email");
     // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요
     setScan({ chips: result.chips, links });
+    // 앞 명함과 견줘 한 「명함과 같은 주소예요」 확인은 새 명함에는 쓰지 않아요
+    setConfirmedEmail(null);
     cursor.current = null;
     // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
     // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 이메일 칸 아래 안내가 따로 떠요.
     // 칩이 생겼으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 위 안내와 겹치지 않게 칸 아래 안내 · 커서는 찾은 경우만.
-    const found = result.values.phone !== "" || result.chips.some((c) => c.kind === "email");
+    // 형식이 깨져 메일 칩이 되지 못한 메일 모양 글자(「lena@koh sg」 — @ 양옆에 글자)도 찾은 것으로 봐요(기획 17030) —
+    // 「명함을 읽지 못했습니다」 대신 「메일 주소를 확인하지 못했습니다」
+    const found = result.values.phone !== "" || result.chips.some(isEmailLikeChip);
     const missing = found && emailFilled && !result.values.email;
     // 메일 칩(또는 @ 가 든 줄)은 있는데 채우지 않음 = 잘렸을 수 있어 확인하지 못함, 메일 모양 글자가 하나도 없음 = 찾지 못함(UG-451 기획 17022)
     const emailLike = result.chips.some((c) => c.kind === "email" || c.text.includes("@"));
@@ -2983,7 +3017,7 @@ function CreateDialog({
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   const scannedEmail = scan?.links.email !== undefined;
   // 칸 아래 안내가 「이미 사용 중인 계정입니다」일 때만(다른 오류 · 해지 중 · 주소 고치는 중이 아닐 때) 재설정 메일 링크를 보여 줘요
-  const offerReset = inUse && !fix && !emailError && !closing && !suspectValue;
+  const offerReset = inUse && !fix && !emailError && !closing && !suspectBlocked;
 
   // 확인 창의 전제(사용 중 이메일 · 링크를 보일 수 있는 상태)가 깨지면 닫힌 것으로 되돌려요 — 조건이 다시 맞아도 저절로 열리지 않게.
   // 렌더 중에 바로 맞춰요(React 의 「렌더 중 상태 조정」 방식) — 깨진 상태로 한 번도 그리지 않아요.
@@ -3170,7 +3204,7 @@ function CreateDialog({
             <label htmlFor="email" className="t-body-200-b">
               고객 이메일
             </label>
-            <div className={`input-box${emailError || suspectValue || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
+            <div className={`input-box${emailError || suspectBlocked || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
               <input
                 ref={emailRef}
                 id="email"
@@ -3188,16 +3222,19 @@ function CreateDialog({
                   onFieldBlur("email", e.timeStamp);
                   void runCheck();
                 }}
-                aria-invalid={!!emailError || suspectValue || inUse || closing || fixSame || fixTaken}
+                aria-invalid={!!emailError || suspectBlocked || inUse || closing || fixSame || fixTaken}
                 aria-describedby="email-note"
               />
             </div>
             <div id="email-note" role="status" aria-live="polite">
-              {emailError ? (
+              {suspectBlocked ? (
+                // 잘렸을 수 있는 메일 칩 값 그대로(눌러 넣음 · 직접 침 · 붙여 넣음, 대소문자 없이) — 고치거나 「명함과 같은 주소예요」로
+                // 확인할 때까지 떠 있고 보내기를 막아요(반박 리뷰 F2 · 기획 17030). 다른 안내(확인 실패 등)보다 먼저 — 아래 확인 버튼과 짝이에요
+                <p className="error" id="email-suspect">
+                  {SUSPECT_EMAIL}
+                </p>
+              ) : emailError ? (
                 <p className="error">{emailError}</p>
-              ) : suspectValue ? (
-                // 잘렸을 수 있는 메일 칩 값 그대로(눌러 넣음 · 직접 침 · 붙여 넣음) — 고칠 때까지 떠 있고 보내기를 막아요(반박 리뷰 F2)
-                <p className="error">{SUSPECT_EMAIL}</p>
               ) : fix && cancelError ? (
                 <p className="error">{cancelErrorText(cancelError)}</p>
               ) : fixSame ? (
@@ -3231,10 +3268,23 @@ function CreateDialog({
                 <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
               )}
             </div>
+            {/* 의심 주소 경고 바로 아래(UG-451 기획 17030): 명함과 견줘 맞으면 눌러 그 값으로 보내요 — 칸을 고치면 다시 확인해야 해요 */}
+            {suspectBlocked && (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm suspect-confirm"
+                aria-describedby="email-suspect"
+                disabled={sending || scanning}
+                onClick={confirmSuspect}
+              >
+                {SUSPECT_CONFIRM}
+              </button>
+            )}
             {/* 사용 중 계정(UG-421 D · MD): 안내 줄 아래 밑줄 링크 — 누르면 이 창 대신 재설정 메일 확인 창(D2 · MD2).
                 주소를 고치는 중(fix)에는 새 주소를 받는 중이라 띄우지 않아요. 이메일을 고치면 사라지고 새로 만들기로 돌아가요. */}
             {offerReset && (
               <button
+                ref={resetLinkRef}
                 type="button"
                 className="field-link field-link--underline"
                 data-autofocus={resetReturned || undefined}
@@ -3246,7 +3296,7 @@ function CreateDialog({
             )}
             {/* 명함에서 읽은 이메일의 헷갈리는 글자 · 도메인 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
             {/* 잘렸을 수 있는 주소면 「명함과 같은지 확인」 줄은 띄우지 않아요 — 확인된 것처럼 보이지 않게(반박 리뷰 F2) */}
-            {scannedEmail && !suspectValue && <ScannedEmailNotes email={trimmed} />}
+            {scannedEmail && !suspectBlocked && <ScannedEmailNotes email={trimmed} />}
           </div>
 
           <div className="field">
@@ -3357,7 +3407,7 @@ function CreateDialog({
                 </button>
               )
             ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectValue || sending || scanning} aria-busy={sending || checking || undefined}>
+              <button ref={submitRef} type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -3379,7 +3429,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={close} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || closing || suspectValue || sending || scanning} aria-busy={sending || checking || undefined}>
+            <button ref={submitRef} type="submit" className="btn btn-dark" disabled={inUse || closing || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
               {/* 첫 로그인 전 이메일이면 목록 줄과 같은 이름 「메일 재발송」(UG-450 기획 17020) — 확인 창 제목은 그대로 */}
               {sending ? "보내는 중…" : pending ? "메일 재발송" : "계정 만들고 메일 보내기"}
             </button>

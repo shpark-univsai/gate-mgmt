@@ -713,30 +713,21 @@ export function classifyLine(line: string): { kind: ChipKind; value: string; fax
 export const isSuspectChip = (chip: Chip) => chip.kind === "email" && (chip.suspect === true || isSuspectEmail(chip.text));
 
 /**
- * 이메일 칸 값이 잘렸을 수 있는 메일 칩의 값과 똑같거나(UG-451 기획 17022 반박 리뷰 F2 — 앞뒤 공백만 떼고 대소문자 그대로)
- * 그 칩에서 뽑은 잘린 주소와 같은지(최종 리뷰 R3 — 도메인만 대소문자 없이).
+ * 이메일 칸 값이 잘렸을 수 있는 메일 칩의 값과 같거나(UG-451 기획 17022 반박 리뷰 F2) 그 칩에서 뽑은 잘린 주소와 같은지(최종 리뷰 R3).
+ * 앞뒤 공백을 떼고 주소 전체를 대소문자 없이 견줘요(기획 17030 — 「Kim@acme.com」처럼 대소문자만 바꿔 경고를 지나가지 않게).
  * 칩을 눌러 넣었든 직접 치거나 붙여 넣었든 같아요. 그런 값은 공백 없이도 형식 검사를 지나는 것이 있어(「kim@x.coM」 「kim@x.cm」 「tan@x.com-s&」)
- * 화면이 경고하고 보내기를 막아요 — 값이 하나라도 달라지면(직원이 고침) 풀려요.
+ * 화면이 경고하고 보내기를 막아요 — 글자가 하나라도 달라지거나(직원이 고침) 직원이 「명함과 같은 주소예요」로 확인하면 풀려요(화면).
  */
 export function isSuspectValue(value: string, chips: readonly Chip[]): boolean {
-  const v = value.trim();
+  const v = value.trim().toLowerCase();
   if (v === "") return false;
   return chips.some((c) => {
     if (!isSuspectChip(c)) return false;
-    if (c.value.trim() === v) return true;
-    // 의심 칩에서 뽑은 잘린 주소(「tan@x.com · sg」 → tan@x.com, 「kim@x.coM」 → kim@x.co)를 그대로 쳐도 막아요(최종 리뷰 R3) —
-    // @ 앞은 대소문자 그대로, 도메인은 대소문자 없이 견줘요
+    if (c.value.trim().toLowerCase() === v) return true;
+    // 의심 칩에서 뽑은 잘린 주소(「tan@x.com · sg」 → tan@x.com, 「kim@x.coM」 → kim@x.co)를 그대로 쳐도 막아요(최종 리뷰 R3)
     const candidate = extractEmail(c.value) || extractEmail(c.text);
-    return candidate !== "" && sameAddress(candidate, v);
+    return candidate !== "" && candidate.toLowerCase() === v;
   });
-}
-
-/** 같은 주소인지 — @ 앞(로컬 부분)은 글자 그대로, 도메인은 대소문자 없이 */
-function sameAddress(a: string, b: string): boolean {
-  const ia = a.lastIndexOf("@");
-  const ib = b.lastIndexOf("@");
-  if (ia < 0 || ib < 0) return false;
-  return a.slice(0, ia) === b.slice(0, ib) && a.slice(ia + 1).toLowerCase() === b.slice(ib + 1).toLowerCase();
 }
 
 /** 명함 칩의 메일 주소들(뽑은 주소, 겹치지 않게) — 잘렸을 수 있는 칩도 뽑은 꼬리 주소로(「daeun · jung@x.co.kr」 → jung@x.co.kr) */
@@ -745,7 +736,8 @@ export function chipEmailAddresses(chips: readonly Chip[]): string[] {
   for (const c of chips) {
     if (c.kind !== "email") continue;
     const e = extractEmail(c.value) || extractEmail(c.text);
-    if (e) out.add(e);
+    // 의심이 아닌 칩은 칸에 넣을 때처럼 소문자로(chipValueFor — 기획 17030) — 칸 주소와 같은 글자로 확인해요
+    if (e) out.add(isSuspectChip(c) ? e : e.toLowerCase());
   }
   return [...out];
 }
@@ -797,9 +789,16 @@ export function nameFromLine(line: string): string | null {
   return null;
 }
 
-/** 칩을 그 칸에 넣을 때의 글자. 메일 · 전화 칩은 뽑은 값, 이름 칸은 직함을 뗀 이름, 나머지는 읽은 줄 그대로. */
+/**
+ * 칩을 그 칸에 넣을 때의 글자. 메일 · 전화 칩은 뽑은 값, 이름 칸은 직함을 뗀 이름, 나머지는 읽은 줄 그대로.
+ * 메일 칩은 주소 전체를 소문자로(UG-451 기획 17030) — 처음 채우기(autoFill)와 칩 누르기(tapChip)가 모두 여기를 지나요.
+ * 글자 읽기의 대소문자는 믿을 수 없고(「USER1+X@EXAMPLE.COM」) 메일 배달은 실제로 대소문자를 가르지 않아요.
+ * 그런데 auth 는 이메일을 대소문자 그대로 저장 · 비교해서, 대문자로 읽힌 주소가 있는 계정 「user1+x@example.com」와 다른 계정으로 보여
+ * 같은 고객의 계정이 하나 더 생길 수 있어요 — auth 쪽(대소문자 없이 저장 · 비교)이 근본 해결이에요. 직원이 손으로 친 값은 친 그대로 둬요.
+ * 잘렸을 수 있는 칩(isSuspectChip)은 명함과 견줘 고치도록 읽은 그대로 둬요.
+ */
 export function chipValueFor(chip: Chip, field: ScanField): string {
-  if (field === "email" && chip.kind === "email") return chip.value;
+  if (field === "email" && chip.kind === "email") return isSuspectChip(chip) ? chip.value : chip.value.toLowerCase();
   if (field === "phone" && chip.kind === "phone") return chip.value;
   if (field === "name") return nameFromLine(chip.text) ?? chip.text;
   return chip.text;
@@ -843,6 +842,12 @@ export function scanCard(text: string): { chips: Chip[]; values: ScanValues; lin
   const chips = toChips(text);
   return { chips, ...autoFill(chips) };
 }
+
+/**
+ * 메일 모양 글자가 있는 칩인지(UG-451 기획 17030) — 메일 칩이거나, @ 양옆에 로마자 · 숫자가 붙은 글자(「lena@koh sg」 — 형식이 깨져 메일 칩이 되지 못함).
+ * 이런 칩이 있으면 명함을 읽은 것으로 보고 「명함을 읽지 못했습니다」 대신 「메일 주소를 확인하지 못했습니다」를 띄워요.
+ */
+export const isEmailLikeChip = (chip: Chip) => chip.kind === "email" || /[\p{L}\p{N}]@[\p{L}\p{N}]/u.test(chip.text);
 
 /** 칩이 「칸에 들어감」으로 보이는지 — 잠긴 칸(숨은 값)에 연결된 칩은 「아직 안 씀」으로 보여요 */
 export function isFilled(links: ScanLinks, chipId: number, locked: readonly ScanField[] = []): boolean {
