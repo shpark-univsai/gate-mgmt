@@ -61,7 +61,8 @@ test("UG-451 17022 · 성공한 받기는 다시 받기를 쓰지 않아요", as
 });
 
 test("UG-451 · 시간 초과 · 창 닫기 뒤나 5분 한도가 모자라면 다시 받지 않고 몫도 쓰지 않아요", async () => {
-  const budget = createRetryBudget(3);
+  // 몫이 하나뿐이어도 아래 세 경우 모두 쓰지 않아요
+  const budget = createRetryBudget(1);
   assert.deepEqual(await capture(budget, 1, { live: () => false }), { calls: 1, ok: false });
   assert.deepEqual(await capture(budget, 1, { now: () => 299_000 }), { calls: 1, ok: false });
   assert.equal(budget.spent, false);
@@ -86,4 +87,8 @@ test("UG-451 · 시간 초과 · 창 닫기 뒤나 5분 한도가 모자라면 �
     }),
   );
   assert.equal(calls, 1);
+  // 쉬는 사이 닫혀 다시 받지 않았으면 몫도 그대로예요(반박 리뷰 F5)
+  assert.equal(budget.spent, false);
+  assert.deepEqual(await capture(budget, 1), { calls: 2, ok: true });
+  assert.equal(budget.spent, true);
 });

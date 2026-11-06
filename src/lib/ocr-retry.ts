@@ -58,10 +58,10 @@ export async function loadWithRetry<T>(opts: LoadWithRetryOptions<T>): Promise<T
     return await opts.start();
   } catch (first) {
     opts.onActivity?.();
-    if (!opts.live() || now() + opts.delayMs - opts.started >= opts.maxMs) throw first;
-    if (!opts.budget.take()) throw first;
+    // 다 썼으면 쉬지 않고 바로 실패로 — 몫은 쉰 뒤 실제로 다시 받을 때만 써요(쉬는 사이 창을 닫으면 쓰지 않아요, 반박 리뷰 F5)
+    if (!opts.live() || opts.budget.spent || now() + opts.delayMs - opts.started >= opts.maxMs) throw first;
     await sleep(opts.delayMs);
-    if (!opts.live()) throw first;
+    if (!opts.live() || !opts.budget.take()) throw first;
     opts.onActivity?.();
     return opts.start();
   }

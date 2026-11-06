@@ -49,7 +49,8 @@ import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type A
 import {
   LOST_CLOCK_SKEW_MS,
   addLost,
-  draftEmailGate,
+  chipEmailsState,
+  draftSaveGate,
   forNewDraft,
   gateAtClose,
   ownDraftToDiscard,
@@ -63,9 +64,11 @@ import {
   type LostSaves,
 } from "@/lib/draft-session";
 import {
+  chipEmailAddresses,
   confusableParts,
   emailHasConfusable,
   isFilled,
+  isSuspectValue,
   scanCard,
   tapChip,
   unlink,
@@ -471,6 +474,8 @@ const DRAFTS_LOAD_FAILED = "작성 중인 명함을 불러오지 못했습니다
 const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" };
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+// 이메일 칸 값이 명함에서 잘렸거나 잘못 읽었을 수 있는 주소와 똑같을 때(UG-451 반박 리뷰 F2) — 고칠 때까지 보내지 않아요
+const SUSPECT_EMAIL = "명함에서 잘못 읽었을 수 있는 주소입니다. 명함과 한 글자씩 비교해 고쳐 주세요.";
 // 보내기를 눌렀는데 이메일 확인이 네트워크 · 서버 문제(응답 없음 · 5xx · 시간 초과)로 실패 — 버튼 위에 남겨요(UG-451 기획 16991)
 const NETWORK_FAILED = "연결이 불안정해 확인하지 못했습니다. 다시 눌러 주세요.";
 // 계정 만들기 요청이 네트워크 · 서버 문제로 실패 — 서버가 만들었는지 알 수 없어요. 다시 누르면 이미 만든 계정이면 「이미 만든 계정입니다」로 보여요.
@@ -2127,8 +2132,28 @@ function CreateDialog({
   // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
   const key = trimmed;
   const current = check && check.email === key ? check.result : null;
-  // 「작성 중」으로 남겨도 되는지 — 이메일 확인이 「새 계정」으로 끝났거나 확인할 이메일이 없을 때만(UG-451 기획 17022, draftEmailGate)
-  const emailGate = draftEmailGate(trimmed, EMAIL_RE.test(trimmed), current?.status ?? null);
+  // 이 창에서 확인한 이메일(적힌 그대로) → 결과 — 칸 이메일 · 명함 칩의 메일 주소 모두(UG-451 반박 리뷰 F3)
+  const [known, setKnown] = useState<Record<string, EmailCheck["status"]>>({});
+  const remember = (address: string, status: EmailCheck["status"] | null) =>
+    setKnown((k) => {
+      if ((k[address] ?? null) === status) return k;
+      const next = { ...k };
+      if (status === null) delete next[address];
+      else next[address] = status;
+      return next;
+    });
+  /** 칸 이메일의 확인 결과를 바꿔요(칸 아래 안내) — 확인한 이메일 기억(known)도 함께. result = null 이면 다시 확인할 것으로 */
+  function setChecked(address: string, result: EmailCheck | null) {
+    setCheck(result ? { email: address, result } : null);
+    remember(address, result?.status ?? null);
+  }
+  // 명함 칩의 메일 주소들(잘렸을 수 있는 칩은 뽑은 꼬리 주소) — 이미 있는 계정이면 이 명함은 「작성 중」으로 남기지 않아요(F3)
+  const chipEmails = scan ? chipEmailAddresses(scan.chips) : [];
+  // 「작성 중」으로 남겨도 되는지(UG-451 기획 17022 · 반박 리뷰 F3 · F4, draftSaveGate) — 칸 이메일이 「새 계정」으로 확인됐거나,
+  // 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소가 모두 새 주소일 때만. 확인 전이면 wait, 있는 계정이면 existing
+  const emailGate = draftSaveGate({ email: trimmed, checkable: EMAIL_RE.test(trimmed), fieldStatus: current?.status ?? null, chipEmails, known });
+  // 칸 값이 잘렸을 수 있는 메일 칩의 값과 똑같음 — 경고하고 보내기를 막아요(반박 리뷰 F2, 고치면 풀려요)
+  const suspectValue = !!scan && isSuspectValue(trimmed, scan.chips);
 
   /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
   function pickPendingLanguage(l: MailLanguage) {
@@ -2174,13 +2199,48 @@ function CreateDialog({
     } finally {
       setChecking(false);
     }
-    // 조회하는 사이 이메일을 고쳤으면 버려요.
+    // 확인한 결과는 기억해요(명함 칩 주소 판정에도 써요) — 조회하는 사이 이메일을 고쳤으면 칸 아래 안내에는 쓰지 않아요.
+    remember(asked, result.status);
     if (emailRef.current?.value.trim() !== asked) return null;
-    setCheck({ email: asked, result });
+    setChecked(asked, result);
     if (result.status === "pending") {
       pickPendingLanguage(result.language);
     }
     return result;
+  }
+
+  // 명함 칩 메일 주소 확인 중인 것 — 같은 주소를 두 번 묻지 않게(닫을 때는 이 결과를 같이 기다려요)
+  const chipChecks = useRef(new Map<string, Promise<EmailCheck["status"] | null>>());
+  /**
+   * 명함 칩의 메일 주소를 조용히 확인해요(UG-451 반박 리뷰 F3) — 칸에 들어가지 않은 주소(잘렸을 수 있어 채우지 않음 등)도
+   * 이미 있는 계정이면 이 명함은 「작성 중」으로 남기지 않아요. 실패한 주소는 모름으로 두고 다음 변경 · 닫을 때 다시 물어요.
+   * 결과(주소 → 상태, 실패는 빠짐)를 돌려줘요 — 닫을 때는 아직 이 그림에 없는 결과로 다시 정해요.
+   */
+  async function checkChipEmails(addresses: readonly string[]): Promise<Record<string, EmailCheck["status"]>> {
+    const out: Record<string, EmailCheck["status"]> = {};
+    await Promise.all(
+      addresses.map(async (address) => {
+        let pending = chipChecks.current.get(address);
+        if (!pending) {
+          // 칸 이메일로 확인 중이면 그 결과를 같이 기다려요
+          const field = inflight.current?.key === address ? inflight.current.result : null;
+          pending = field
+            ? field.then((r) => r?.status ?? null)
+            : checkEmail(address).then(
+                (r) => {
+                  remember(address, r.status);
+                  return r.status;
+                },
+                () => null,
+              );
+          chipChecks.current.set(address, pending);
+          void pending.finally(() => chipChecks.current.delete(address));
+        }
+        const status = await pending;
+        if (status) out[address] = status;
+      }),
+    );
+    return out;
   }
 
   /**
@@ -2237,11 +2297,23 @@ function CreateDialog({
     }
     // 다시 시도하는 동안에는 실패 안내 · 버튼(「저장하는 중…」)을 그대로 둬요
     setKeepingDraft(true);
-    // 이미 있는 계정(사용 중 · 해지 중 · 첫 로그인 전)의 이메일이면 남기지 않아요(UG-451 기획 17022) — 확인 전 · 확인 실패였으면 한 번 더 확인하고,
-    // 그래도 모르면 전처럼 남겨요(gateAtClose). 이 창의 자동 저장이 이미 남긴 명함은 지워요 — 이어서 만든 원래 명함은 그대로(ownDraftToDiscard)
+    // 이미 있는 계정(사용 중 · 해지 중 · 첫 로그인 전)의 이메일이면 — 칸이든 명함 칩이든 — 남기지 않아요(UG-451 기획 17022 · 반박 리뷰 F3).
+    // 확인 전 · 확인 실패였으면 한 번 더 확인해 다시 정하고, 그래도 모르면 전처럼 남겨요(gateAtClose).
+    // 이 창의 자동 저장이 이미 남긴 명함은 지워요 — 이어서 만든 원래 명함은 그대로(ownDraftToDiscard)
     if (!keep.remove) {
-      const rechecked = emailGate === "wait" ? await runCheck(trimmed, true) : null;
-      if (gateAtClose(emailGate, rechecked?.status ?? null) === "existing") {
+      let gate = emailGate;
+      if (gate === "wait") {
+        const field = EMAIL_RE.test(trimmed) && !current ? await runCheck(trimmed, true) : null;
+        const chips = await checkChipEmails(chipEmails.filter((address) => known[address] === undefined));
+        gate = draftSaveGate({
+          email: trimmed,
+          checkable: EMAIL_RE.test(trimmed),
+          fieldStatus: field?.status ?? current?.status ?? null,
+          chipEmails,
+          known: { ...known, ...chips },
+        });
+      }
+      if (gateAtClose(gate) === "existing") {
         keepLock.current = false;
         setKeepingDraft(false);
         consumeDraft(true);
@@ -2285,9 +2357,11 @@ function CreateDialog({
   // 남길 것은 닫을 때와 같은 draftToKeep — 주소를 고치는 중 · 결과 화면 · 보내는 중 · 계정을 만든 뒤에는 남기지 않고, 칸을 다 비우면(지울 것) 건너뛰어요.
   /**
    * 지금 남길 것과 내용 열쇠. anyEmail = 이메일 확인과 상관없이(이어서 만든 명함을 연 그대로인지 볼 때만)
-   * 이메일 확인이 「새 계정」으로 끝나기 전 · 이미 있는 계정(사용 중 · 해지 중 · 발급 기록)이면 남기지 않아요(반박 리뷰 F6 · UG-451 기획 17022 —
-   * 명함이 채운 이메일이 확인 전에 사진과 함께 먼저 남던 것). 조회할 수 없는 모양 · 빈 이메일은 그대로 남겨요(draftEmailGate).
-   * 이미 남긴 명함은 여기서 지우지 않아요 — 직원이 이메일을 고칠 수 있어요(닫을 때 정해요, close)
+   * 남겨도 되는지는 emailGate(draftSaveGate)가 open 일 때만이에요(반박 리뷰 F6 · UG-451 기획 17022 · 반박 리뷰 F3 · F4):
+   * 칸 이메일 확인이 「새 계정」으로 끝나기 전 · 이미 있는 계정이면 남기지 않고, 칸이 비었거나 형식이 아니어도 명함 칩의 메일 주소를
+   * 아직 확인하지 못했거나 그중 하나가 이미 있는 계정이면 남기지 않아요(명함을 읽은 바로 뒤 사진만 먼저 남던 것 포함).
+   * 이어서 만든 명함도 그동안은 고쳐 쓰지 않아요(PUT 없음). 막히기 전에 이미 고쳐 쓴 이어서 만든 명함은 그대로 둬요 — 직원이 목록에서 정해요.
+   * 이 창의 자동 저장이 만든 명함은 명함 칩 주소가 있는 계정으로 드러나면 바로(discardOwnDrafts), 칸 이메일만 있는 계정이면 닫을 때(close) 지워요.
    */
   function autosaveSnapshot(anyEmail = false) {
     const keep = draftToKeep();
@@ -2324,14 +2398,48 @@ function CreateDialog({
     if (posted && !out.res.ok && out.res.reason === "failed") lostRef.current = addLost(lostRef.current, out.sent);
     return result;
   }
+  /**
+   * 명함 칩의 메일 주소가 이미 있는 계정이라 이 창의 자동 저장이 남긴 명함을 바로 지워요(UG-451 반박 리뷰 F3) — 창은 그대로 쓰고,
+   * 나중에 칸 이메일이 「새 계정」으로 확인되면 새 명함으로 다시 남겨요. 이어서 만든 원래 명함은 지우지 않아요(ownDraftToDiscard).
+   * 보내는 중인 자동 저장이 끝난 뒤에 지워요(지운 뒤 그 저장이 되살리지 않게). 응답을 잃은 새 명함도 찾아 지워요.
+   */
+  async function discardOwnDrafts() {
+    const autosave = autosaveRef.current;
+    if (!autosave || autosave.stopped) return;
+    const release = await autosave.suspend();
+    try {
+      const mem = memRef.current;
+      if (mem.ended) return;
+      let id = ownDraftToDiscard(mem.id, ownIdsRef.current);
+      if (!mem.id && lostRef.current.inputs.length > 0) {
+        const found = await findLostDraft(lostRef.current, staffEmail, true);
+        if (found.kind === "found") id = found.id;
+        if (found.kind === "found" || found.kind === "none") lostRef.current = { ...lostRef.current, inputs: [] };
+      }
+      if (!id) return;
+      if (mem.id === id) {
+        mem.id = null;
+        mem.serverPhoto = null;
+      }
+      autosave.forget(); // 지운 명함의 내용 — 다시 남길 때 같은 내용이어도 새로 남겨요
+      onDraftUsed(id);
+    } finally {
+      release();
+    }
+  }
+
   // 일정표는 늘 마지막 그림의 값으로 남겨요
   const autosaveSnapshotRef = useRef(autosaveSnapshot);
   const autosaveRunRef = useRef(autosaveRun);
   const runCheckRef = useRef(runCheck);
+  const checkChipEmailsRef = useRef(checkChipEmails);
+  const discardOwnDraftsRef = useRef(discardOwnDrafts);
   useEffect(() => {
     autosaveSnapshotRef.current = autosaveSnapshot;
     autosaveRunRef.current = autosaveRun;
     runCheckRef.current = runCheck;
+    checkChipEmailsRef.current = checkChipEmails;
+    discardOwnDraftsRef.current = discardOwnDrafts;
   });
   useEffect(() => {
     const autosave = createAutosaver<AutosaveItem>({
@@ -2355,12 +2463,23 @@ function CreateDialog({
   // 칸 · 메일 언어 · 칩 연결 · 이메일 확인 결과가 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요).
   // 이메일 확인을 기다리는 중(확인 전 · 실패)이면 같은 때 확인도 다시 해요(조용히) — 확인이 끝나면(check) 다시 여기로 와 남겨요(UG-451 기획 17022).
   // 확인이 실패해도 check · 칸이 그대로라 저절로 되풀이하지 않아요 — 다음 변경 · 칸을 벗어날 때 · 닫을 때 다시 해요
+  // 명함 칩의 메일 주소 중 아직 모르는 것(확인 실패 포함)도 같은 때 다시 물어요(반박 리뷰 F3)
+  const unknownChipEmails = chipEmails.filter((address) => known[address] === undefined).join("\n");
   useEffect(() => {
     autosaveRef.current?.schedule();
     if (emailGate !== "wait" || fix || mailFailure) return;
-    const timer = setTimeout(() => void runCheckRef.current(trimmed, true), AUTOSAVE_DELAY);
+    const timer = setTimeout(() => {
+      if (EMAIL_RE.test(trimmed)) void runCheckRef.current(trimmed, true);
+      if (unknownChipEmails) void checkChipEmailsRef.current(unknownChipEmails.split("\n"));
+    }, AUTOSAVE_DELAY);
     return () => clearTimeout(timer);
-  }, [company, name, email, phone, language, languageChosen, scan, check, emailGate, trimmed, fix, mailFailure]);
+  }, [company, name, email, phone, language, languageChosen, scan, check, known, emailGate, trimmed, unknownChipEmails, fix, mailFailure]);
+  // 명함 칩의 메일 주소가 이미 있는 계정으로 드러나면(칸을 지워도 사진 · 칩에 남아요) 이 창의 자동 저장이 만든 명함을 바로 지워요(반박 리뷰 F3).
+  // 칸 이메일이 「새 계정」으로 확인되면 다시 남겨요(draftSaveGate) — 지운 뒤에는 새 명함으로
+  const chipsExisting = emailGate !== "open" && chipEmailsState(chipEmails, known) === "existing";
+  useEffect(() => {
+    if (chipsExisting) void discardOwnDraftsRef.current();
+  }, [chipsExisting]);
   // 명함 읽기가 끝나면(읽지 못해도 사진은 남아요) 바로 — 사진은 이때 한 번 올리고 다음부터는 keepPhoto
   const [scanDone, setScanDone] = useState(0);
   useEffect(() => {
@@ -2464,7 +2583,7 @@ function CreateDialog({
   async function recheck() {
     try {
       const result = await checkEmail(trimmed);
-      setCheck({ email: key, result });
+      setChecked(key, result);
       if (result.status === "pending") pickPendingLanguage(result.language);
     } catch (e) {
       if (isNetworkError(e)) setFormError(NETWORK_FAILED);
@@ -2558,6 +2677,8 @@ function CreateDialog({
   }
 
   async function submit() {
+    // 명함에서 잘못 읽었을 수 있는 주소 그대로면 보내지 않아요 — 칸 아래 경고가 이미 떠 있어요(반박 리뷰 F2)
+    if (suspectValue) return emailRef.current?.focus();
     if (fix) return submitFix(fix);
     let eError = "";
     if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
@@ -2629,9 +2750,9 @@ function CreateDialog({
         return onResendMailFailed();
       }
       setFormError(resendErrorText(res.reason));
-      if (res.reason === "in_use" || res.reason === "not_found") setCheck(null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
+      if (res.reason === "in_use" || res.reason === "not_found") setChecked(key, null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
       // 그사이 해지가 시작됐어요(UG-443) — 이 이메일을 해지 중으로 바꿔 보내기 버튼을 꺼요
-      if (res.reason === "closing") setCheck({ email: key, result: { status: "closing" } });
+      if (res.reason === "closing") setChecked(key, { status: "closing" });
       return;
     }
     const res = await createAccount({ ...input, ...(await draftIdInput()) });
@@ -2825,6 +2946,9 @@ function CreateDialog({
     if (!found) setScanFailed("read");
     // 명함이 채운 이메일은 바로 확인해요 — 이미 있는 계정이면 직원이 일찍 알고, 확인이 「새 계정」으로 끝나기 전에는 「작성 중」으로 남기지 않아요(기획 17022)
     if (emailFilled && result.values.email && EMAIL_RE.test(result.values.email)) void runCheck(result.values.email, true);
+    // 칸에 넣지 않은 칩 메일 주소(잘렸을 수 있어 채우지 않음 · 두 번째 주소)도 한 번 조용히 확인해요 — 끝나기 전에는 사진도 남기지 않아요(반박 리뷰 F3)
+    const others = chipEmailAddresses(result.chips).filter((address) => address !== result.values.email);
+    if (others.length > 0) void checkChipEmails(others);
     setScanDone((n) => n + 1); // 읽은 값 · 사진을 바로 「작성 중」에 남겨요(UG-451 기획 17009)
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
     if (missing) emailRef.current?.focus();
@@ -2833,7 +2957,7 @@ function CreateDialog({
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   const scannedEmail = scan?.links.email !== undefined;
   // 칸 아래 안내가 「이미 사용 중인 계정입니다」일 때만(다른 오류 · 해지 중 · 주소 고치는 중이 아닐 때) 재설정 메일 링크를 보여 줘요
-  const offerReset = inUse && !fix && !emailError && !closing;
+  const offerReset = inUse && !fix && !emailError && !closing && !suspectValue;
 
   // 확인 창의 전제(사용 중 이메일 · 링크를 보일 수 있는 상태)가 깨지면 닫힌 것으로 되돌려요 — 조건이 다시 맞아도 저절로 열리지 않게.
   // 렌더 중에 바로 맞춰요(React 의 「렌더 중 상태 조정」 방식) — 깨진 상태로 한 번도 그리지 않아요.
@@ -2849,8 +2973,8 @@ function CreateDialog({
           setResetConfirm(false);
           setResetReturned(true);
           // 그사이 계정이 없어졌거나 해지가 시작됐어요 — 칸 아래 안내를 바꿔요(없어졌으면 다시 조회해 새로 만들 수 있게)
-          if (reason === "not_found") setCheck(null);
-          if (reason === "closing") setCheck({ email: key, result: { status: "closing" } });
+          if (reason === "not_found") setChecked(key, null);
+          if (reason === "closing") setChecked(key, { status: "closing" });
         }}
         onSent={(result) => {
           // 이미 있는 계정에 메일을 보냈어요 — 이어서 만든 명함은 다 썼고, 명함 사진은 지워요(다시 보내기와 같게)
@@ -3020,7 +3144,7 @@ function CreateDialog({
             <label htmlFor="email" className="t-body-200-b">
               고객 이메일
             </label>
-            <div className={`input-box${emailError || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
+            <div className={`input-box${emailError || suspectValue || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
               <input
                 ref={emailRef}
                 id="email"
@@ -3038,13 +3162,16 @@ function CreateDialog({
                   onFieldBlur("email", e.timeStamp);
                   void runCheck();
                 }}
-                aria-invalid={!!emailError || inUse || closing || fixSame || fixTaken}
+                aria-invalid={!!emailError || suspectValue || inUse || closing || fixSame || fixTaken}
                 aria-describedby="email-note"
               />
             </div>
             <div id="email-note" role="status" aria-live="polite">
               {emailError ? (
                 <p className="error">{emailError}</p>
+              ) : suspectValue ? (
+                // 잘렸을 수 있는 메일 칩 값 그대로(눌러 넣음 · 직접 침 · 붙여 넣음) — 고칠 때까지 떠 있고 보내기를 막아요(반박 리뷰 F2)
+                <p className="error">{SUSPECT_EMAIL}</p>
               ) : fix && cancelError ? (
                 <p className="error">{cancelErrorText(cancelError)}</p>
               ) : fixSame ? (
@@ -3092,7 +3219,8 @@ function CreateDialog({
               </button>
             )}
             {/* 명함에서 읽은 이메일의 헷갈리는 글자 · 도메인 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
-            {scannedEmail && <ScannedEmailNotes email={trimmed} />}
+            {/* 잘렸을 수 있는 주소면 「명함과 같은지 확인」 줄은 띄우지 않아요 — 확인된 것처럼 보이지 않게(반박 리뷰 F2) */}
+            {scannedEmail && !suspectValue && <ScannedEmailNotes email={trimmed} />}
           </div>
 
           <div className="field">
@@ -3203,7 +3331,7 @@ function CreateDialog({
                 </button>
               )
             ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || sending || scanning} aria-busy={sending || checking || undefined}>
+              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectValue || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -3225,7 +3353,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={close} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || closing || sending || scanning} aria-busy={sending || checking || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || closing || suspectValue || sending || scanning} aria-busy={sending || checking || undefined}>
               {/* 첫 로그인 전 이메일이면 목록 줄과 같은 이름 「메일 재발송」(UG-450 기획 17020) — 확인 창 제목은 그대로 */}
               {sending ? "보내는 중…" : pending ? "메일 재발송" : "계정 만들고 메일 보내기"}
             </button>

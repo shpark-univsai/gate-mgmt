@@ -41,6 +41,8 @@ export type Autosaver = {
   stop(): Promise<void>;
   /** 이 내용은 이미 서버에 있어요(이어서 만든 명함을 열었을 때) */
   markSaved(key: string): void;
+  /** 마지막으로 남긴 내용을 잊어요(남긴 명함을 지웠을 때 — 같은 내용이어도 다음에 새로 남겨요) */
+  forget(): void;
   /** 보내는 중인지 */
   readonly saving: boolean;
   /** 끈 뒤인지 */
@@ -148,6 +150,9 @@ export function createAutosaver<T>(opts: AutosaveOptions<T>): Autosaver {
     },
     markSaved(key: string) {
       lastKey = key;
+    },
+    forget() {
+      lastKey = null;
     },
     get saving() {
       return inFlight !== null;
