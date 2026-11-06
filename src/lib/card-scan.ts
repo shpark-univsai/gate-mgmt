@@ -28,6 +28,7 @@ const MAX_CHIPS = 30;
 const MAX_LINE = 300;
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
+const EMAIL_RE_G = new RegExp(EMAIL_RE.source, "g");
 // 숫자로 시작해 숫자로 끝나는 묶음(사이에 공백 · . · - · 괄호). 자리 수는 아래에서 따로 봐요.
 const PHONE_RUN_RE = /\+?\(?\d[\d\s().-]{6,}\d/g;
 // 사업자 등록번호(123-45-67890) — 숫자 묶음이지만 전화번호가 아니에요
@@ -232,17 +233,20 @@ type Segment = { text: string; suspect: boolean };
  * 잘렸을 수 있는 메일 조각(suspect, UG-451):
  * - 구분자로 나뉜 앞 조각이 공백 없는 로마자 · 숫자 한 덩어리이고 이 조각이 메일로 시작(「daeun · jung@…」 → 「daeun」 「jung@…」)
  * - 바로 앞 줄이 공백 없는 한 덩어리이고 . _ - 로 끝나며 이 줄 첫 조각이 메일로 시작(「daeun.」 ↵ 「jung@…」)
+ * - 줄의 메일 주소 뒤(같은 줄 · 다음 줄)에 떨어져 읽힌 나라 도메인 꼬리(lineHasEmailFragment — 「tan@x.com · sg」 「tan@x.com」 ↵ 「sg」)
  */
 function readSegments(text: string): Segment[] {
   const seen = new Set<string>();
   const out: Segment[] = [];
-  let prevLine = "";
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.slice(0, MAX_LINE).replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim();
-    if (!line) continue;
+  const lines = text
+    .split(/\r?\n/)
+    .map((raw) => raw.slice(0, MAX_LINE).replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  lines.forEach((line, i) => {
     const parts = line.split(SEPARATOR_RE);
-    const brokenAbove = BROKEN_LOCAL_RE.test(prevLine);
-    prevLine = line;
+    const brokenAbove = i > 0 && BROKEN_LOCAL_RE.test(lines[i - 1]);
+    // 칩으로 나누기 전 줄에서 본 떨어진 나라 도메인 꼬리 — 이 줄의 메일 조각은 모두 의심(UG-451 기획 17005 반박 리뷰)
+    const fragment = lineHasEmailFragment(line, lines[i + 1] ?? "");
     parts.forEach((part, p) => {
       const head = cleanSegment(part);
       const suspect = startsWithEmail(head) && (p === 0 ? brokenAbove : isLoneChunk(cleanSegment(parts[p - 1])));
@@ -252,10 +256,10 @@ function readSegments(text: string): Segment[] {
         .forEach((seg, k) => {
           if (!isMeaningful(seg) || isGarbled(seg) || isJunkChip(seg) || seen.has(seg)) return;
           seen.add(seg);
-          out.push({ text: seg, suspect: suspect && k === 0 });
+          out.push({ text: seg, suspect: (suspect && k === 0) || (fragment && EMAIL_RE.test(seg)) });
         });
     });
-  }
+  });
   return out;
 }
 
@@ -382,30 +386,60 @@ export function extractEmail(line: string): string {
 
 // 메일 주소 앞에 붙어 읽혀도 잘린 주소로 보지 않는 라벨(「E john@…」 「Email. john@…」)
 const EMAIL_LABEL_TOKEN_RE = /^(?:E|E-?mail|Mail)$/i;
-// 잘못 읽은 끝 도메인(UG-451) — 실재하지 않는 최상위 도메인 중 com · net · org · kr 을 잘못 읽은 흔한 모양만(.cor · .con …)
-const TLD_TYPOS = new Set("cor con corn cpm comm coom ner nel orq ogr krr".split(" "));
+// 잘못 읽은 끝 도메인(UG-451) — 실재하지 않는 최상위 도메인 중 com · net · org · kr 을 잘못 읽은 흔한 모양만(.cor · .con …).
+// .cm · .om 은 실재하지만(카메룬 · 오만) 명함에서는 .com 의 글자를 놓친 것일 가능성이 훨씬 커 오독으로 봐요(기획 17005 반박 리뷰)
+const TLD_TYPOS = new Set("cor con corn cpm comm coom ner nel orq ogr krr cm om".split(" "));
 
 /**
  * 끝 도메인 바로 뒤에 띄어쓰기 없이 붙어도 주소를 그대로 믿는 덩어리(UG-451 기획 17005) — 맺음 기호만으로 된 덩어리예요.
- * . , ; : (문장 · 나열 끝) · | (구분자 — 칩을 나눌 때 이미 떨어져요) · 닫는 괄호 · 따옴표(「(kim@x.com)」 「<kim@x.com>」 「"kim@x.com"」)뿐이면 괜찮아요.
- * 그 밖에 글자 · 숫자 · 기호(- & _ / + # % @ ! ? 등)가 하나라도 섞이면 주소가 더 이어지다 잘못 읽혔을 수 있어 처음 채우기에서 빼요
- * (「…com-s&」 「…com&」 「…com58」 → 정규식이 「…com」까지만 주소로 잡아요). 잘린 주소를 조용히 채우는 쪽이 비워 두는 쪽보다 나빠서
+ * . , ; : (문장 · 나열 끝) · | (구분자 — 칩을 나눌 때 이미 떨어져요) · 닫는 괄호 · 따옴표(「(kim@x.com)」 「<kim@x.com>」 「"kim@x.com"」),
+ * 전각 맺음 기호(） 。 、 ， ； ：)뿐이면 괜찮아요.
+ * 그 밖에 글자 · 숫자 · 기호(- & _ / + # % @ ! ? ( 등)가 하나라도 섞이면 주소가 더 이어지다 잘못 읽혔을 수 있어 처음 채우기에서 빼요
+ * (「…com-s&」 「…com&」 「…com58」 「…com(대표)」 → 정규식이 「…com」까지만 주소로 잡아요). 잘린 주소를 조용히 채우는 쪽이 비워 두는 쪽보다 나빠서
  * 띄어쓰기 없이 이어 쓴 다음 주소 · 누리집(「kim@x.com,www.x.com」 「kim@x.com/www.x.com」)도 비워요 — 칩은 남아 눌러 넣을 수 있어요.
- * 띄어 쓴 경우(「kim@x.com, www.x.com」)는 위 tail 규칙대로 채워요. 「…comTel」처럼 소문자 끝 도메인에 대문자 낱말이 붙은 것은
- * 정규식이 한 덩어리로 잡아 여기까지 오지 않고 extractEmail 이 떼요(전처럼 채워요).
- * 줄 끝의 | _ = ~ : ; , ' " 등은 칩 정리(cleanSegment)에서 이미 떨어져요.
+ * 띄어 쓴 경우(「kim@x.com, www.x.com」)는 채워요. 붙은 항목 라벨(「…comTel」 「…com전화」)은 GLUED_LABEL_RE 를 봐요.
+ * 줄 끝의 | _ = ~ : ; , ' " 등은 칩 정리(cleanSegment)에서 이미 떨어져요. 문장 끝 점 하나(「…com.」)는 채워요(설계 결정).
  */
-const GLUED_OK_RE = /^[.,;:|)\]}>"'’”」』〉》]+$/;
+const GLUED_OK_RE = /^[.,;:|)\]}>"'’”」』〉》）。、，；：］】]+$/;
 /**
- * 소문자 끝 도메인에 띄어쓰기 없이 붙은 대문자 낱말 중 떼어도 되는 것(UG-451 기획 17005) — 같은 줄의 항목 라벨이에요(「…comTel」 「…comFax」).
- * 그 밖의 대문자 덩어리(「…comSG」 「…comKR」)는 나라 도메인 앞 점을 놓친 것일 수 있어 떼지 않고 의심으로 봐요.
+ * 끝 도메인 바로 뒤(띄어쓰기 없이)에 붙어도 떼고 채우는 항목 라벨(UG-451 기획 17005). 라벨 뒤는 더 보지 않아요(「…comTel:02-…」 「…comWeb:www…」).
+ * - 영어 두 글자 이상: 소문자 끝 도메인에 대문자로 붙어요(「…comTel」 — 정규식이 끝 도메인 한 덩어리로 잡고 extractEmail 이 떼요)
+ * - 한글: 끝 도메인 뒤에 붙어요(「…com전화02-…」 「…co.kr홈페이지」)
+ * 영어 한 글자(T · M · F · P · H · C)는 바로 뒤가 전화번호일 때만(GLUED_PHONE_LETTER_RE) — 「…coM」 「…neT」는 끝 글자가 대문자로 읽힌
+ * 잘린 주소(.com · .net)일 수 있어요. E 한 글자도 같은 까닭으로 받지 않아요. 라벨이 아닌 대문자 덩어리(「…comSG」)는 나라 도메인 앞 점을 놓친 것일 수 있어 의심.
  */
-const GLUED_LABEL_RE = new RegExp(`^(?:${PHONE_LABEL}|${EMAIL_LABEL}|Web|WEB|Website|Homepage|Www|WWW|Office|Add|Addr|Address|ADDRESS)$`);
+const GLUED_LABEL_RE = new RegExp(
+  "^(?:(?:Telephone|Tel|TEL|Phone|PHONE|Mobile|MOBILE|Mob|Cell|CELL|HP|Fax|FAX|Direct|DID|E-mail|E-Mail|Email|EMAIL|Mail|MAIL|" +
+    "Website|Web|WEB|Homepage|Www|WWW|Office|Address|ADDRESS|Addr|Add)(?![a-z])|" +
+    "전화번호|전화|휴대폰|휴대전화|핸드폰|팩스|직통|대표전화|대표번호|이메일|메일|홈페이지|누리집|웹|주소|사무실)",
+);
+const GLUED_PHONE_LETTER_RE = /^[TMFPHC][.:)]?\s?[+(\d]/;
 /**
  * 점을 놓쳐 끝 도메인에 나라 도메인이 붙은 모양(「…comsg」 「…cokr」 「…netmy」) — 실재하지 않는 최상위 도메인이라 오독으로 봐요(UG-451 기획 17005).
  * 소문자로 붙으면 정규식이 한 덩어리 끝 도메인으로 잡아 위 규칙으로는 못 보고, 명함에 흔한 나라만 골랐어요.
  */
 const GLUED_CC_TLD_RE = /^(?:com|net|org|co|ac|or|go|edu|gov)(?:sg|kr|my|hk|jp|cn|tw|uk|au|id|ph|th|vn|nz)$/i;
+// 띄어쓰기를 놓쳐 끝 도메인에 소문자 항목 라벨이 붙은 모양(「…comtel 02-…」 「…comfax」) — 떼어 채우지 않고 오독으로 봐요
+const GLUED_LOWER_LABEL_TLD_RE = /^(?:com|net|org|co|kr|sg)(?:tel|fax|mobile|mob|email|mail|web|www|hp|tl)$/;
+
+// 주소 앞에 띄어쓰기 없이 붙어도 되는 여는 괄호 · 따옴표(「(kim@…」 「「kim@…」) — 그 앞은 다시 줄 처음 · 공백 · 메일 라벨이어야 해요
+const OPENERS_END_RE = /[(<[{"'“‘「『（［【〈《]+$/u;
+// 주소 바로 앞의 메일 라벨 끝(「E:」 「E.」 「E)」 「Email:」 「E-mail:」 「Mail:」 「이메일:」 「메일」 …, 쌍점 없이도)
+const EMAIL_LABEL_END_RE = new RegExp(`(?:^|[\\s(<\\[])${EMAIL_LABEL}\\s*[.:)]?$`);
+
+/**
+ * 주소 뒤에 남은 것이 1~2글자 로마자 토막뿐인지(UG-451 기획 17005 반박 리뷰) — 공백 · 구분자 · 줄바꿈으로 떨어져 읽힌 나라 도메인 꼬리
+ * (「… · sg」 「… / sg」 「…|sg」 「… sg.」 「… SG)」 「… S G」 「…co m.sg」 「…co m」). 칩을 나누면 꼬리가 떨어져 나가
+ * 칩만 봐서는 몰라요 — 읽은 줄 그대로에서도 봐요(readSegments). 토막이 하나도 없으면 false.
+ * 「… T. 02-…」(라벨 + 번호) · 「…, www.x.com」(3글자 이상) 처럼 다른 것이 섞이면 false.
+ */
+function ccFragmentOnly(rest: string): boolean {
+  const tokens = rest
+    .split(/[\s·・•/|,;:.]+/)
+    .map((t) => t.replace(/^[(<[{"'“‘「『（［【〈《]+|[)\]}>"'’”」』）。、，；：］】]+$/gu, ""))
+    .filter(Boolean);
+  return tokens.length > 0 && tokens.every((t) => /^[A-Za-z]{1,2}$/.test(t));
+}
 
 /**
  * 메일 주소 앞뒤에서 본 「잘렸을 수 있는」 조각. head · tail = 읽은 그대로의 앞 덩어리 · 뒤 조각(없으면 ""), typo = 끝 도메인 오독,
@@ -418,13 +452,17 @@ type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean
  * (「daeun jung@…」 → jung@… · 「…@bluepeak.com. sg」 → …@bluepeak.com).
  * - head: 주소 바로 앞에 공백 · 쉼표 · 점 · 가운뎃점(· ・ •)으로만 떨어진 로마자 · 숫자 덩어리(「daeun jung@」 「daeun,jung@」 「daeun·jung@」).
  *   메일 라벨(E · Email · Mail)과 전화번호 끝자리(「010-1234-5678 kim@…」)는 빼요.
+ *   또 주소 바로 앞 글자가 줄 처음 · 공백 · 여는 괄호 · 따옴표 · 메일 라벨 끝(「E:」 「Email:」 「이메일」)이 아니면 붙은 덩어리 전체(기획 17005 반박 리뷰 —
+ *   「hong:gildong@」 「hong—gildong@」 「hong(gildong@」 「hong홍gildong@」 → gildong@… 는 다른 사람의 실제 주소일 수 있어요).
  * - tail: 끝 도메인 바로 뒤에 점 · 쉼표 · 가운뎃점(앞뒤 공백 허용) + 1~4글자 로마자 · 숫자 덩어리(「. kr」 「.58」 「· sg」),
- *   또는 공백 하나 뒤 로마자 2글자로 줄이 끝남(「…co kr」 「…com SG」). 덩어리 뒤에 . · @ 가 이어지면 다음 주소 · 누리집이라 괜찮아요
- *   (「kim@x.com, www.x.com」 「kim@x.com, lee@x.com」). 문장 끝 점(「…com.」)도 괜찮아요.
- *   또 끝 도메인 바로 뒤(띄어쓰기 없이)에 붙은 덩어리가 맺음 기호(GLUED_OK_RE)만이 아니면 그 덩어리 전체(기획 17005 —
- *   「…@bluepeak.com.sg」를 「…@bluepeak.com-s&」로 읽어 「…@bluepeak.com」이 채워진 일). 아래 GLUED_OK_RE 참고.
- * - typo: 끝 도메인이 흔한 오독 모양(TLD_TYPOS — .cor · .con 등) · 점을 놓쳐 나라 도메인이 붙은 모양(GLUED_CC_TLD_RE — 「…comsg」)
- * - glue: 소문자 끝 도메인에 붙은 대문자 덩어리가 항목 라벨(GLUED_LABEL_RE — 「…comTel」)이 아님(「…comSG」)
+ *   또는 뒤에 남은 것이 1~2글자 로마자 토막뿐(ccFragmentOnly — 「…co kr」 「…com SG)」 「… S G」).
+ *   덩어리 뒤에 . · @ 가 이어지면 다음 주소 · 누리집이라 괜찮아요(「kim@x.com, www.x.com」 「kim@x.com, lee@x.com」). 문장 끝 점(「…com.」)도 괜찮아요.
+ *   또 끝 도메인 바로 뒤(띄어쓰기 없이)에 붙은 덩어리가 항목 라벨(GLUED_LABEL_RE)로 시작하지 않고 맺음 기호(GLUED_OK_RE)만도 아니면 그 덩어리 전체
+ *   (기획 17005 — 「…@bluepeak.com.sg」를 「…@bluepeak.com-s&」로 읽어 「…@bluepeak.com」이 채워진 일).
+ *   라벨로 시작하면 라벨 뒤는 보지 않아요 — 끝 도메인 꼬리가 아니에요.
+ * - typo: 끝 도메인이 흔한 오독 모양(TLD_TYPOS — .cor · .con · .cm 등) · 점을 놓쳐 나라 도메인이 붙은 모양(GLUED_CC_TLD_RE — 「…comsg」) ·
+ *   소문자 라벨이 붙은 모양(GLUED_LOWER_LABEL_TLD_RE — 「…comtel」)
+ * - glue: 소문자 끝 도메인에 붙은 대문자 덩어리(「…comSG」 「…coM」)가 라벨이 아니거나, 한 글자 라벨인데 뒤가 전화번호가 아님
  */
 function emailSuspicion(text: string): EmailSuspicion | null {
   const line = text.slice(0, MAX_LINE);
@@ -443,15 +481,46 @@ function emailSuspicion(text: string): EmailSuspicion | null {
       /^[\d+-]+$/.test(hm[1]) && last !== undefined && last.index + last[0].length === rest.length && digitsOf(last[0]).length >= 8;
     if (!phoneTail) head = hm[1] + hm[2];
   }
-  const glued = after.match(/^\S+/)?.[0] ?? "";
-  const tail =
-    after.match(/^(?:\s*[.,·・•]\s*[A-Za-z0-9]{1,4}(?![A-Za-z0-9.@])| [A-Za-z]{2}$)/)?.[0] ??
-    (glued && !GLUED_OK_RE.test(glued) ? glued : "");
+  if (!head) {
+    const bare = before.replace(OPENERS_END_RE, "");
+    if (bare !== "" && !/\s$/.test(bare) && !EMAIL_LABEL_END_RE.test(bare)) head = before.match(/\S+$/)?.[0] ?? "";
+  }
+
+  // 소문자 끝 도메인에 붙은 대문자 덩어리(「…comTel」의 Tel) — 주소가 아니라 뒤에 붙은 것으로 봐요
+  const caps = m[0].slice(m[0].lastIndexOf(".") + 1).match(/^[a-z]{2,}([A-Z][A-Za-z]*)$/)?.[1] ?? "";
+  const glued = caps + after;
+  const label = glued !== "" && (GLUED_LABEL_RE.test(glued) || GLUED_PHONE_LETTER_RE.test(glued));
+  let tail = "";
+  let glue = false;
+  if (caps && !label) {
+    glue = true;
+    tail = after.match(/^\S+/)?.[0] ?? "";
+  } else if (!label) {
+    const chunk = after.match(/^\S+/)?.[0] ?? "";
+    tail =
+      after.match(/^\s*[.,·・•]\s*[A-Za-z0-9]{1,4}(?![A-Za-z0-9.@])/)?.[0] ??
+      (ccFragmentOnly(after) ? after : chunk && !GLUED_OK_RE.test(chunk) ? chunk : "");
+  }
   const tld = extractEmail(line).split(".").pop() ?? "";
-  const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld);
-  const capsGlued = m[0].slice(m[0].lastIndexOf(".") + 1).match(/^[a-z]{2,}([A-Z][A-Za-z]*)$/)?.[1];
-  const glue = capsGlued !== undefined && !GLUED_LABEL_RE.test(capsGlued);
+  const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld) || GLUED_LOWER_LABEL_TLD_RE.test(tld);
   return { match: m[0], head, tail, typo, glue };
+}
+
+/**
+ * 읽은 줄(칩으로 나누기 전)에서 메일 주소 뒤에 떨어져 읽힌 나라 도메인 꼬리가 있는지(UG-451 기획 17005 반박 리뷰).
+ * 칩은 구분자(· / | …)로 나뉘고 1~2글자 토막은 잡음으로 빠져 칩만 봐서는 몰라요.
+ * - 같은 줄: 주소 뒤에 남은 것이 1~2글자 로마자 토막뿐(「tan@x.com · sg」 「tan@x.com|sg」)
+ * - 다음 줄: 주소가 줄 끝(맺음 기호만 뒤에)이고 다음 줄이 1~2글자 로마자 토막 한두 개뿐(「sg」 「.sg」 「m.sg」)
+ *   — 다음 줄이 「HR」 같은 짧은 낱말이어도 비워요(잘린 주소를 채우는 쪽이 더 나빠요)
+ */
+function lineHasEmailFragment(line: string, next: string): boolean {
+  for (const m of line.matchAll(EMAIL_RE_G)) {
+    const after = line.slice(m.index + m[0].length);
+    if (ccFragmentOnly(after)) return true;
+    const rest = after.trim();
+    if ((rest === "" || GLUED_OK_RE.test(rest)) && next !== "" && ccFragmentOnly(next) && next.split(/\s+/).length <= 2) return true;
+  }
+  return false;
 }
 
 /** 줄의 메일 주소가 잘렸거나 잘못 읽혔을 수 있는지(UG-451) — 그런 주소는 처음 채우기에서 빼요(autoFill). */

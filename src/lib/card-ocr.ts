@@ -25,8 +25,11 @@ const LOAD_MAX_MS = 300_000;
  * 도구 받기가 실패(오류로 끝남 — 인터넷이 잠깐 끊김 등)하면 이만큼 쉬고 한 번만 다시 받아요(UG-451 기획 17005).
  * 다시 받기도 처음 시작부터 센 LOAD_MAX_MS(5분) 안에서만 — 한 번 더 받는다고 기다림이 두 배가 되지 않아요.
  * 시간 초과(소식 없이 LOAD_IDLE_MS · 모두 LOAD_MAX_MS)로 끊긴 것은 다시 받지 않아요 — 이미 오래 기다렸고, 멈춘 일꾼은 닫을 수 없어 둘이 함께 받게 돼요.
+ * 다시 받기는 화면(페이지)을 연 동안 한 번뿐이에요(retryUsed) — 실패한 일꾼은 tesseract 가 돌려주지 않아 닫을 수 없어,
+ * 실패할 때마다 다시 받으면 닫지 못한 일꾼이 쌓여요(반박 리뷰). 그 뒤 실패는 전처럼 바로 안내해요.
  */
 const LOAD_RETRY_DELAY_MS = 2_000;
+let retryUsed = false;
 const READ_TIMEOUT_MS = 60_000;
 
 /** 읽지 못한 까닭 — tool = 글자 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과), read = 읽다가 실패 */
@@ -153,15 +156,24 @@ export function createCardReader() {
     return Promise.race([work, timeout]).finally(() => clearInterval(timer));
   }
 
-  /** 도구 받기 — 오류로 끝나면 LOAD_RETRY_DELAY_MS 뒤 한 번만 다시(남은 시간이 있고 창이 열려 있을 때만). 진행률은 다시 0 부터 알려요. */
-  async function startWithRetry(started: number): Promise<OcrWorker> {
+  /** 도구 받기 한 번(다시 받기 포함). live = 아직 기다리는 받기인지 — 시간 초과 · 창 닫기 뒤에는 false 라 다시 받지 않아요(반박 리뷰) */
+  type LoadAttempt = { live: boolean };
+  let attempt: LoadAttempt | null = null;
+
+  /**
+   * 도구 받기 — 오류로 끝나면 LOAD_RETRY_DELAY_MS 뒤 한 번만 다시. 이 받기가 아직 지금 받기이고(시간 초과 · 창 닫기 전),
+   * 페이지에서 다시 받기를 쓴 적이 없고, 남은 시간이 있을 때만. 진행률은 다시 0 부터 알려요.
+   */
+  async function startWithRetry(started: number, mine: LoadAttempt): Promise<OcrWorker> {
     try {
       return await startWorker(logger);
     } catch (first) {
       lastActivity = Date.now();
-      if (disposed || Date.now() + LOAD_RETRY_DELAY_MS - started >= LOAD_MAX_MS) throw first;
+      const current = () => mine.live && attempt === mine && !disposed;
+      if (retryUsed || !current() || Date.now() + LOAD_RETRY_DELAY_MS - started >= LOAD_MAX_MS) throw first;
+      retryUsed = true;
       await new Promise((resolve) => setTimeout(resolve, LOAD_RETRY_DELAY_MS));
-      if (disposed) throw first;
+      if (!current()) throw first;
       lastActivity = Date.now();
       return startWorker(logger);
     }
@@ -173,10 +185,13 @@ export function createCardReader() {
   function ready(): Promise<OcrWorker> {
     if (!worker) {
       loadStarted = lastActivity = Date.now();
-      const starting = startWithRetry(loadStarted);
+      const mine: LoadAttempt = { live: true };
+      attempt = mine;
+      const starting = startWithRetry(loadStarted, mine);
       worker = starting;
-      // 실패 · 시간 초과면 버려요(시간 초과 뒤에 뜨면 닫아요)
+      // 실패 · 시간 초과면 버려요(시간 초과 뒤에 뜨면 닫아요). 시간 초과 뒤 첫 받기의 늦은 오류로 다시 받지 않게 live 를 꺼요
       withLoadTimeout(starting, loadStarted).catch(() => {
+        mine.live = false;
         if (worker === starting) worker = null;
         closeLater(starting);
       });
@@ -231,6 +246,8 @@ export function createCardReader() {
 
   function dispose() {
     disposed = true;
+    if (attempt) attempt.live = false;
+    attempt = null;
     if (worker) closeLater(worker);
     worker = null;
   }
