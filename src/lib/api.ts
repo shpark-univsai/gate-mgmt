@@ -1,7 +1,7 @@
 // 서버 연결 지점 (UG-405). 화면은 이 파일의 함수만 불러요.
 // 로그인은 Gate 인증 서버(/api/v1/auth/...), 계정 발급은 백오피스 서버(/api/v1/mgmt/...)예요. 둘 다 게이트웨이를 거쳐요.
 // 백오피스는 허용된 직원만 쓸 수 있어요(서버의 직원 허용 목록). 목록에 없으면 로그인 때 「권한 없음」으로 막혀요.
-import { ApiError, authed, publicPost, revokeRefreshToken, send } from "./http";
+import { ApiError, BACKGROUND_SESSION_ENDED, authed, publicPost, revokeRefreshToken, send, type AuthedOptions } from "./http";
 import { clearSession, getTokens, saveTokens } from "./session";
 
 export type MailLanguage = "en" | "ko";
@@ -471,8 +471,9 @@ export type CardDraftInput = {
  * not_found = 그사이 계정을 만들었거나 다른 직원이 지움(MGMT-109 — 새로 남기지 않아요)
  * photo = 사진이 너무 크거나(MGMT-110 · 112) JPEG 가 아님(MGMT-111)
  * invalid = 칸 값을 받지 않음(PJ-101 — 길이 · 제어 문자 · 빈 명함) / failed = 서버 · 네트워크 문제
+ * session = 뒤쪽 요청(background)인데 로그인이 끊김 — 로그인 화면으로 보내지 않았어요
  */
-export type CardDraftSaveResult = { ok: true; draft: CardDraft } | { ok: false; reason: "not_found" | "photo" | "invalid" | "failed" };
+export type CardDraftSaveResult = { ok: true; draft: CardDraft } | { ok: false; reason: "not_found" | "photo" | "invalid" | "failed" | "session" };
 
 /**
  * 「작성 중」 명함 칸 길이 상한 — 서버(CardDraftRequest @Size)와 같아요. 줄바꿈 · 탭 같은 제어 문자도 서버가 받지 않아요(PJ-101).
@@ -507,12 +508,12 @@ const toCardDraft = (d: CardDraftDto): CardDraft => ({
 const isDraftNotFound = (e: unknown) => e instanceof ApiError && (e.code === CARD_DRAFT_NOT_FOUND || (e.status === 404 && !e.code));
 
 /** 「작성 중」 명함 목록 — 모든 직원 것. 목록 화면의 검색어가 있으면 같은 검색어로 걸러요(한 번에 최대 100장, total = 전체 장 수). */
-export async function listCardDrafts(keyword = ""): Promise<{ items: CardDraft[]; total: number }> {
+export async function listCardDrafts(keyword = "", opts: AuthedOptions = {}): Promise<{ items: CardDraft[]; total: number }> {
   const params = new URLSearchParams();
   if (keyword.trim()) params.set("keyword", keyword.trim());
   params.set("page", "1");
   params.set("size", "100");
-  const data = await authed<{ content: CardDraftDto[]; totalElements: number }>("GET", `${MGMT}/card-drafts?${params}`);
+  const data = await authed<{ content: CardDraftDto[]; totalElements: number }>("GET", `${MGMT}/card-drafts?${params}`, undefined, opts);
   const items = data.content.map(toCardDraft);
   return { items, total: Math.max(items.length, Number(data.totalElements) || 0) };
 }
@@ -520,11 +521,14 @@ export async function listCardDrafts(keyword = ""): Promise<{ items: CardDraft[]
 /** 이어서 만들기 — 칩 · 사진까지. not_found = 그사이 계정을 만들었거나 지워짐 */
 export async function getCardDraft(
   id: string,
+  opts: AuthedOptions = {},
 ): Promise<{ ok: true; detail: CardDraftDetail } | { ok: false; reason: "not_found" | "failed" }> {
   try {
     const data = await authed<{ draft: CardDraftDto; chips?: unknown; photo?: string | null }>(
       "GET",
       `${MGMT}/card-drafts/${encodeURIComponent(id)}`,
+      undefined,
+      opts,
     );
     return {
       ok: true,
@@ -535,14 +539,15 @@ export async function getCardDraft(
   }
 }
 
-/** 남기기 — id 가 없으면 새로(POST), 있으면 그 명함을 통째 바꿔요(PUT). */
-export async function saveCardDraft(id: string | null, input: CardDraftInput): Promise<CardDraftSaveResult> {
+/** 남기기 — id 가 없으면 새로(POST), 있으면 그 명함을 통째 바꿔요(PUT). background = 자동 저장(로그인이 끊겨도 로그인 화면으로 보내지 않음) */
+export async function saveCardDraft(id: string | null, input: CardDraftInput, opts: AuthedOptions = {}): Promise<CardDraftSaveResult> {
   try {
     const data = id
-      ? await authed<CardDraftDto>("PUT", `${MGMT}/card-drafts/${encodeURIComponent(id)}`, input)
-      : await authed<CardDraftDto>("POST", `${MGMT}/card-drafts`, input);
+      ? await authed<CardDraftDto>("PUT", `${MGMT}/card-drafts/${encodeURIComponent(id)}`, input, opts)
+      : await authed<CardDraftDto>("POST", `${MGMT}/card-drafts`, input, opts);
     return { ok: true, draft: toCardDraft(data) };
   } catch (e) {
+    if (e instanceof ApiError && e.code === BACKGROUND_SESSION_ENDED) return { ok: false, reason: "session" };
     if (id && isDraftNotFound(e)) return { ok: false, reason: "not_found" };
     if (e instanceof ApiError && ((e.code && CARD_DRAFT_PHOTO_ERRORS.includes(e.code)) || e.status === 413)) return { ok: false, reason: "photo" };
     if (e instanceof ApiError && e.code === "PJ-101") return { ok: false, reason: "invalid" };
@@ -551,9 +556,9 @@ export async function saveCardDraft(id: string | null, input: CardDraftInput): P
 }
 
 /** [지우기] — 사진 · 칩 · 입력한 값 모두. 이미 없으면(계정을 만들었거나 다른 직원이 지움) 그대로 성공이에요(멱등). */
-export async function deleteCardDraft(id: string): Promise<boolean> {
+export async function deleteCardDraft(id: string, opts: AuthedOptions = {}): Promise<boolean> {
   try {
-    await authed<{ deleted: boolean }>("DELETE", `${MGMT}/card-drafts/${encodeURIComponent(id)}`);
+    await authed<{ deleted: boolean }>("DELETE", `${MGMT}/card-drafts/${encodeURIComponent(id)}`, undefined, opts);
     return true;
   } catch (e) {
     return isDraftNotFound(e);

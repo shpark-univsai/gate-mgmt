@@ -123,7 +123,7 @@ function inTabOnce(run: () => Promise<string>): Promise<string> {
  * 로그인이 끊겼어요(재발급 실패 · 백오피스 권한 없음) — 로그인 상태를 지우고 이유와 함께 로그인 화면으로 보내요.
  * 토큰이 이미 없으면(이 탭 · 다른 탭에서 직접 로그아웃) 안내 없이 보내요.
  */
-function sessionEnded(reason: LoginReason): never {
+function endSession(reason: LoginReason): never {
   const loggedOut = getTokens() === null;
   clearSession();
   if (!loggedOut) setLoginReason(reason);
@@ -131,11 +131,26 @@ function sessionEnded(reason: LoginReason): never {
   throw new ApiError(401);
 }
 
+/** 뒤에서 부른 요청(자동 저장 등)의 로그인이 끊김 — 로그인 화면으로 보내지 않고 이 오류만 던져요(UG-451 기획 17009) */
+export const BACKGROUND_SESSION_ENDED = "BACKGROUND-SESSION-ENDED";
+
+export type AuthedOptions = {
+  /**
+   * 직원이 누르지 않은 뒤쪽 요청(「작성 중」 자동 저장). 로그인이 끊겨도 로그인 화면으로 보내지 않고(입력 중인 창이 사라지지 않게)
+   * ApiError(401, BACKGROUND_SESSION_ENDED)를 던져요 — 다음에 직원이 누르는 요청이 로그인 화면으로 보내요.
+   */
+  background?: boolean;
+};
+
 /** 직원 토큰을 붙여 부르는 백오피스 API */
-export async function authed<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function authed<T>(method: string, path: string, body?: unknown, opts: AuthedOptions = {}): Promise<T> {
   const init: RequestInit = body === undefined ? {} : json(body);
+  const sessionEnded = (reason: LoginReason): never => {
+    if (opts.background) throw new ApiError(401, BACKGROUND_SESSION_ENDED);
+    return endSession(reason);
+  };
   const token = getTokens()?.accessToken;
-  if (!token) sessionEnded("expired");
+  if (!token) return sessionEnded("expired");
   try {
     return await send<T>(method, path, init, token);
   } catch (e) {
@@ -149,8 +164,11 @@ export async function authed<T>(method: string, path: string, body?: unknown): P
   let fresh: string;
   try {
     fresh = await refreshAccessToken(token);
-  } catch {
-    sessionEnded("expired");
+  } catch (e) {
+    // 재발급이 연결 끊김 · 서버 문제(응답 없음 · 시간 초과 = 0, 5xx)로 실패 — 로그인이 끝난 게 아니에요(재검토 R2).
+    // 그 요청만 실패로 돌려줘요(화면은 연결 오류로 안내 · 자동 저장은 다음 변경 때 다시). 서버가 재발급을 거절했을 때(4xx)만 로그인 끝.
+    if (e instanceof ApiError && (e.status === 0 || e.status >= 500)) throw e;
+    return sessionEnded("expired");
   }
   try {
     return await send<T>(method, path, init, fresh);
