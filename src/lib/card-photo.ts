@@ -6,8 +6,8 @@
 export const CARD_PHOTO_TEXT = {
   scanHelp: "명함에서 이메일 · 연락처를 읽어 채웁니다. 이름 · 회사명은 읽은 줄을 눌러 넣어 주세요. 명함 사진은 계정을 만들면 지웁니다.",
   confusable: "0 · O, 1 · l · I 는 명함과 한 번 더 비교해 주세요.",
-  /** 명함에서 읽은 이메일 — 앞에 도메인(굵게)이 붙어요(「company-a.com — 명함과 같은지 확인해 주세요.」) */
-  domainCheck: "명함과 같은지 확인해 주세요.",
+  /** 명함에서 읽은 이메일 — 앞에 이메일 전체(굵게)가 붙어요(「user1@company-a.com — 명함과 같은지 확인해 주세요.」, UG-451) */
+  emailCheck: "명함과 같은지 확인해 주세요.",
   thumbLabel: "찍은 명함 크게 보기",
   viewerTitle: "찍은 명함",
   close: "닫기",

@@ -148,7 +148,8 @@ export type CreateAccountResult =
   | { ok: true; account: Account; mailSent: false; mailFailureReason: MailFailureReason }
   // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
   // domain = 받는 주소의 도메인이 메일을 받을 수 없어 서버가 계정을 만들지 않음(MGMT-108 — 명함에서 도메인을 잘못 읽은 경우 등)
-  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" };
+  // network = 응답 없음 · 시간 초과 · 5xx — 서버가 만들었는지 알 수 없어요(다시 누르면 이미 만든 계정이면 duplicate 로 와요, UG-451)
+  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" | "network" };
 
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨 / failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
@@ -385,6 +386,7 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
     return { ok: false, reason: data.reason ?? "failed" };
   } catch (e) {
     if (e instanceof ApiError && e.code === RECIPIENT_DOMAIN_UNDELIVERABLE) return { ok: false, reason: "domain" };
+    if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) return { ok: false, reason: "network" };
     return { ok: false, reason: "failed" };
   }
 }

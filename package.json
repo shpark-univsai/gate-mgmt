@@ -2,13 +2,17 @@
   "name": "gate-mgmt",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "predev": "node scripts/copy-ocr-assets.mjs",
     "dev": "next dev",
     "prebuild": "node scripts/copy-ocr-assets.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",
