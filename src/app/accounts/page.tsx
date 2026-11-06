@@ -2120,12 +2120,13 @@ function CreateDialog({
     // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요
     setScan({ chips: result.chips, links });
     cursor.current = null;
-    const missing = emailFilled && !result.values.email;
-    setEmailMissing(missing);
     // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
     // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 「메일 주소를 찾지 못했습니다」가 따로 떠요.
+    // 칩이 생겼으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 위 안내와 겹치지 않게 칸 아래 안내 · 커서는 찾은 경우만.
     const found = result.values.phone !== "" || result.chips.some((c) => c.kind === "email");
-    if (!found) setScanFailed(isHeic(file) ? "format" : "read");
+    const missing = found && emailFilled && !result.values.email;
+    setEmailMissing(missing);
+    if (!found) setScanFailed("read");
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
     if (missing) emailRef.current?.focus();
   }
