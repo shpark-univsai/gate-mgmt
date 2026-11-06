@@ -289,8 +289,25 @@ const BARE_DIGITS_RE = /^[\d\s.-]+$/;
 const BARE_PHONE_RE = /^(?:0\d{8,10}|1[568]\d{6}|[3689]\d{7}|82\d{9,10}|65\d{8})$/;
 
 /**
+ * 번호가 전화번호 모양인지(UG-451 기획 16991 — 거꾸로 찍힌 명함에서 「4299400503160」이 T 라벨 뒤에 읽혀 채워진 일). 라벨이 있어도 봐요.
+ * - + 로 시작(나라 번호): 숫자 8~15자리
+ * - 그 밖에 숫자 13자리 이상: 아님
+ * - 숫자만 이어 쓴 번호: 라벨 없는 숫자만 줄과 같은 모양(BARE_PHONE_RE — 한국 0 시작 9~11자리 · 대표번호 · 싱가포르 8자리 · 82 · 65 나라 번호)
+ * - 나눠 쓴 번호(공백 · - · . · 괄호): 묶음이 둘 이상이고 묶음마다 4자리 이하(「02-123-4567」 「(02) 123 4567」 「415-555-0132」)
+ */
+function looksLikePhone(value: string): boolean {
+  const digits = digitsOf(value);
+  if (value.trim().startsWith("+")) return digits.length >= 8 && digits.length <= 15;
+  if (digits.length >= 13) return false;
+  if (BARE_PHONE_RE.test(digits)) return true;
+  const groups = value.split(/[\s().-]+/).filter(Boolean);
+  return groups.length >= 2 && groups.every((g) => /^\d{1,4}$/.test(g));
+}
+
+/**
  * 처음 채우기 순위(작을수록 먼저) — 0 휴대전화(라벨 Mobile · M · HP · 휴대폰 · 휴대전화 · Cell · C, 또는 번호가 휴대전화 모양),
- * 1 전화 라벨(Tel · T · 전화 · Phone · P …), 2 라벨 없음, null = 처음 채우기에 쓰지 않음(팩스 · 라벨 없는 숫자만 줄이 전화번호 모양이 아님).
+ * 1 전화 라벨(Tel · T · 전화 · Phone · P …), 2 라벨 없음, null = 처음 채우기에 쓰지 않음(팩스 · 전화번호 모양이 아님(looksLikePhone) ·
+ * 라벨 없는 숫자만 줄이 전화번호 모양이 아님).
  * 팩스 번호는 전화 칩으로 보여요(직원이 눌러 넣을 수 있어요). 라벨 없는 숫자만 줄이 전화번호 모양이 아니면 칩도 만들지 않아요(isJunkChip).
  */
 type PhoneRank = 0 | 1 | 2 | null;
@@ -320,7 +337,8 @@ function phoneHits(line: string): PhoneHit[] {
     // 「02-123-4567 010-1234-5678」처럼 공백으로만 이어진 두 번호는 한 묶음으로 읽혀요 — 너무 길면 공백에서 나눠 봐요
     for (const value of valid(whole) ? [whole] : whole.split(" ").filter(valid)) {
       let rank: PhoneRank = isMobile(value) ? 0 : label;
-      if (fax || (bare && !BARE_PHONE_RE.test(digitsOf(value)))) rank = null;
+      // 팩스 · 전화번호 모양이 아닌 번호(라벨이 있어도) · 라벨 없는 숫자만 줄의 모양 밖 번호는 채우지 않아요
+      if (fax || !looksLikePhone(value) || (bare && !BARE_PHONE_RE.test(digitsOf(value)))) rank = null;
       hits.push({ value, fax, rank });
     }
   }

@@ -88,6 +88,12 @@ const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있
 const SCAN_FAILED = "명함을 읽지 못했습니다. 다시 찍거나 직접 입력해 주세요.";
 // 글자 읽기 도구(약 8.5MB)를 받지 못함(인터넷 없음 · 시간 초과) — 다시 찍어도 같으니 직접 입력 안내(UG-451 기획 16991)
 const SCAN_TOOL_FAILED = "글자 읽기 도구를 받지 못했습니다. 직접 입력해 주세요.";
+// 아이폰 HEIC · HEIF 사진을 읽지 못함 — 브라우저가 열지 못하는 형식이라 다시 찍게 해요(UG-451 기획 16991)
+const SCAN_FORMAT_FAILED = "이 사진 형식은 읽을 수 없습니다. 다시 찍어 주세요.";
+/** HEIC · HEIF 사진인지(형식 · 확장자) */
+const isHeic = (file: File) => /^image\/hei[cf](-sequence)?$/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+/** 명함 읽기가 실패한 까닭 — format = 읽을 수 없는 사진 형식(HEIC), tool · read 는 card-ocr.ts */
+type ScanFailure = ReadFailure | "format";
 /** 도구를 받는 동안의 기다림 안내(진행률 0~100) */
 const scanDownloading = (percent: number) => `글자 읽기 도구를 받고 있습니다… ${percent}%`;
 
@@ -853,18 +859,16 @@ export default function AccountsPage() {
             ))}
           </div>
           <span className="count">총 {total}개</span>
-          {loadError && rows.length > 0 && (
-            <span className="error" role="alert">
-              {LOAD_FAILED}
-            </span>
-          )}
-          {draftsError && (
-            <span className="error" role="alert">
-              {DRAFTS_LOAD_FAILED}
-            </span>
-          )}
           {draftsCut && <span className="help">작성 중인 명함이 많아 최근 100개만 보입니다.</span>}
         </form>
+
+        {/* 목록 불러오기 실패 — 검색 줄 오른쪽 좁은 자리에서 두 줄로 꺾이지 않게 목록 위 한 줄씩(UG-451 기획 16991, PC · 휴대폰) */}
+        {((loadError && rows.length > 0) || draftsError) && (
+          <div className="list-errors" role="alert">
+            {loadError && rows.length > 0 && <p className="error">{LOAD_FAILED}</p>}
+            {draftsError && <p className="error">{DRAFTS_LOAD_FAILED}</p>}
+          </div>
+        )}
 
         {/* PC: 표 */}
         <div className="table" role="table" aria-label="발급한 계정">
@@ -1591,10 +1595,10 @@ function CreateDialog({
   const [scanning, setScanning] = useState(false);
   const [scan, setScan] = useState<{ chips: Chip[]; links: ScanLinks } | null>(() => (draft ? scanFromDraft(draft.chips) : null));
   // 읽지 못함 — tool = 글자 읽기 도구를 받지 못함, read = 읽었지만 글자를 찾지 못함 · 읽다가 실패
-  const [scanFailed, setScanFailed] = useState<ReadFailure | null>(null);
+  const [scanFailed, setScanFailed] = useState<ScanFailure | null>(null);
   // 글자 읽기 도구를 받는 중의 진행률(받지 않으면 null)
   const [scanProgress, setScanProgress] = useState<number | null>(null);
-  const scanFailedText = scanFailed === "tool" ? SCAN_TOOL_FAILED : SCAN_FAILED;
+  const scanFailedText = scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
   const scanWaitText = scanProgress !== null && scanProgress < 100 ? scanDownloading(scanProgress) : SCAN_WAIT;
   // 명함에서 메일 주소를 찾지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요.
   const [emailMissing, setEmailMissing] = useState(false);
@@ -2095,7 +2099,8 @@ function CreateDialog({
       setScan(null);
       cursor.current = null;
       setEmailMissing(false);
-      return setScanFailed(failure ?? "read");
+      // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저)
+      return setScanFailed(failure === "tool" ? "tool" : isHeic(file) ? "format" : (failure ?? "read"));
     }
     // 처음 채우기는 이메일 · 연락처만(회사명 · 이름은 직원이 칩을 눌러 넣어요, 기획 16846) — 회사명 · 이름 칸은 건드리지 않아요
     const links: ScanLinks = {};
@@ -2117,6 +2122,10 @@ function CreateDialog({
     cursor.current = null;
     const missing = emailFilled && !result.values.email;
     setEmailMissing(missing);
+    // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
+    // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 「메일 주소를 찾지 못했습니다」가 따로 떠요.
+    const found = result.values.phone !== "" || result.chips.some((c) => c.kind === "email");
+    if (!found) setScanFailed(isHeic(file) ? "format" : "read");
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
     if (missing) emailRef.current?.focus();
   }
