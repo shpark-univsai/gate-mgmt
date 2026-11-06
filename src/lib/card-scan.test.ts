@@ -122,9 +122,60 @@ test("UG-451 ④ 헷갈리는 글자 안내는 로컬 부분에 숫자 · 로마
 });
 
 test("UG-451 ⑤ 짧은 잡음 줄은 칩에서 빼요", () => {
-  for (const line of ["11800 8083", "### 123", "1234", "대표", "HR", "PIE", "A"]) assert.equal(isJunkChip(line), true, line);
-  for (const line of ["R&D 및 AI 팀", "B 동 3 층", "홍길동", "010-1234-5678", "02-123-4567", "T. 1234 5678", "UNIVS", "Lee"]) {
+  for (const line of ["11800 8083", "### 123", "1234", "대표", "HR", "A"]) assert.equal(isJunkChip(line), true, line);
+  for (const line of ["R&D 및 AI 팀", "B 동 3 층", "홍길동", "010-1234-5678", "02-123-4567", "T. 1234 5678", "UNIVS", "Lee", "DBS", "UOB", "IBK"]) {
     assert.equal(isJunkChip(line), false, line);
   }
-  assert.deepEqual(readLines("PIE\n11800 8083\nR&D 및 AI 팀\n대표\nB 동 3 층\n02-123-4567"), ["R&D 및 AI 팀", "B 동 3 층", "02-123-4567"]);
+  assert.deepEqual(readLines("HR\n11800 8083\nR&D 및 AI 팀\n대표\nDBS\nB 동 3 층\n02-123-4567"), [
+    "R&D 및 AI 팀",
+    "DBS",
+    "B 동 3 층",
+    "02-123-4567",
+  ]);
+});
+
+test("UG-451 리뷰 · 의심 메일이 하나라도 있으면 다른 메일 칩으로 채우지 않아요", () => {
+  const r = card("daeun jung@x.co.kr", "sales@x.co.kr");
+  assert.equal(r.values.email, "");
+  assert.equal(r.links.email, undefined);
+  assert.equal(card("sales@x.co.kr", "kim@x.com. sg").values.email, "");
+  assert.equal(card("sales@x.co.kr", "support@x.co.kr").values.email, "sales@x.co.kr");
+});
+
+test("UG-451 리뷰 · 가운뎃점 · 구분자로 나뉜 앞 조각 · 줄바꿈 잘림도 의심", () => {
+  for (const line of ["daeun·jung@x.co.kr", "daeun・jung@x.co.kr", "daeun•jung@x.co.kr", "kim@x.com· sg"]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    assert.equal(card(line).values.email, "", line);
+  }
+  // 띄어 쓴 「 · 」 는 줄을 먼저 나눠요 — 앞 조각이 한 덩어리이고 뒤 조각이 메일로 시작하면 의심
+  const split = card("daeun · jung@x.co.kr");
+  assert.equal(split.values.email, "");
+  assert.ok(split.chips.some((c) => c.text === "jung@x.co.kr" && c.suspect === true));
+  assert.equal(card("daeun / jung@x.co.kr").values.email, "");
+  // 라벨 · 여러 낱말 조각은 그대로
+  assert.equal(card("E · jung@x.co.kr").values.email, "jung@x.co.kr");
+  assert.equal(card("Miraero Logis · jung@x.co.kr").values.email, "jung@x.co.kr");
+  // 줄바꿈 잘림 — 앞 줄이 . _ - 로 끝나는 한 덩어리
+  for (const above of ["daeun.", "daeun_", "daeun-"]) assert.equal(card(above, "jung@x.co.kr").values.email, "", above);
+  assert.equal(card("daeun", "jung@x.co.kr").values.email, "jung@x.co.kr");
+  assert.equal(card("Sales Dept.", "jung@x.co.kr").values.email, "jung@x.co.kr");
+});
+
+test("UG-451 리뷰 · 뒤 조각 규칙이 다음 주소 · 누리집을 막지 않아요", () => {
+  for (const line of ["kim@x.com, www.x.com", "kim@x.com. www.x.com", "kim@x.com, lee@x.com"]) {
+    assert.equal(isSuspectEmail(line), false, line);
+    const r = card(line);
+    assert.equal(r.values.email, "kim@x.com", line);
+    assert.equal(r.chips[0].value, "kim@x.com", line);
+  }
+  assert.equal(isSuspectEmail("kim@x.com SG"), true);
+  assert.equal(card("kim@x.com SG").values.email, "");
+});
+
+test("UG-451 리뷰 · 아주 긴 줄도 앞부분만 빨리 봐요", () => {
+  const long = "a ".repeat(5000) + "kim@x.com";
+  const t = Date.now();
+  card(long);
+  isSuspectEmail(long);
+  assert.ok(Date.now() - t < 500);
 });
