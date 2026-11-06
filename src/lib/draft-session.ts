@@ -8,18 +8,24 @@ import { photoForDraft, photoFromDraft } from "./card-draft.ts";
 import { photoTag, type AutosaveResult } from "./draft-autosave.ts";
 
 /**
- * 「작성 중」으로 보낼 사진 — 화면 사진이 서버 명함의 사진과 같을 때만 keepPhoto(다시 올리지 않음).
- * 새로 찍은 사진이면 그 사진(JPEG 만), 읽는 중이거나 화면에 사진이 없으면(다시 찍기를 시작함 · 새 사진을 만들지 못함) 사진 없이 —
- * 앞 명함(A)의 사진이 새 명함(B)의 칸과 함께 남지 않게 해요(반박 리뷰 F4). 지난 촬영의 사진을 keepPhoto 로 남기는 일은 없어요.
+ * 「작성 중」으로 보낼 사진. 서버는 photo · keepPhoto 가 둘 다 없으면 사진을 지워요(PUT 은 통째 바꾸기).
+ * - 다시 찍어 읽는 중(scanning): 서버 사진을 그대로(keepPhoto) — 결과가 나오기 전에 지우지 않아요(재검토 R1).
+ * - 화면 사진이 서버 사진과 같으면 keepPhoto(다시 올리지 않음), 새로 찍은 사진이면 그 사진(JPEG 만).
+ * - 다시 찍기가 끝났는데 새 사진을 만들지 못함(HEIC 등 — 화면 사진이 비었음) · JPEG 가 아님: 사진 없이 —
+ *   앞 명함(A)의 사진이 새 명함(B)의 칸과 함께 남지 않게(반박 리뷰 F4).
  */
 export function photoPlan(photo: string | null, serverPhoto: string | null, scanning: boolean): { photo?: string; keepPhoto?: true } {
-  if (scanning || !photo) return {};
+  if (scanning) return serverPhoto ? { keepPhoto: true } : {};
+  if (!photo) return {};
   if (photo === serverPhoto) return { keepPhoto: true };
   const b64 = photoForDraft(photo);
   return b64 ? { photo: b64 } : {};
 }
 
-/** 응답을 잃은 새 명함 저장들 — since 이후에 생긴 명함만 후보(이 창을 연 시각 − 시계 오차) */
+/**
+ * 응답을 잃은 새 명함 저장들 — since 이후에 생긴 명함만 후보(이 창을 연 시각 − 시계 오차).
+ * 받아들인 한계(재검토 R3): 하나로 정해지지 않거나(둘 이상) 끝내 찾지 못한 저장은 서버에 「작성 중」 하나로 남을 수 있어요(30일 뒤 서버가 지움).
+ */
 export type LostSaves = { since: number; inputs: readonly CardDraftInput[] };
 /** 서버 · 브라우저 시계 차이를 봐주는 폭 */
 export const LOST_CLOCK_SKEW_MS = 60_000;

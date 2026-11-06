@@ -46,13 +46,14 @@ test("F4 사진: 서버 사진과 같을 때만 keepPhoto, 다시 찍기 시작 
   const b = `${JPEG}QkJC`;
   assert.deepEqual(photoPlan(a, a, false), { keepPhoto: true });
   assert.deepEqual(photoPlan(b, a, false), { photo: "QkJC" });
-  // 다시 찍는 중(화면 사진은 비워져요) — 앞 명함 사진을 남기지 않아요
-  assert.deepEqual(photoPlan(null, a, true), {});
-  // 새 명함(B)이 미리 보기를 만들지 못함(HEIC 등) — A 의 사진을 keepPhoto 로 남기지 않아요
+  // R1 다시 찍어 읽는 중(화면 사진은 비워져요) — 결과가 나오기 전에는 서버 사진을 그대로(지우지 않아요)
+  assert.deepEqual(photoPlan(null, a, true), { keepPhoto: true });
+  assert.deepEqual(photoPlan(null, null, true), {}, "서버 사진이 없으면 읽는 중에도 사진 없이");
+  // 다시 찍기가 끝났는데 새 명함(B)이 미리 보기를 만들지 못함(HEIC 등) — A 의 사진을 keepPhoto 로 남기지 않아요
   assert.deepEqual(photoPlan(null, a, false), {});
   // JPEG 가 아닌 사진은 보내지 않아요(서버가 받지 않아요)
   assert.deepEqual(photoPlan("data:image/png;base64,QUFB", null, false), {});
-  assert.deepEqual(photoPlan(a, null, true), {}, "읽는 중에는 보내지 않아요");
+  assert.deepEqual(photoPlan(a, null, true), {}, "읽는 중에는 새 사진을 보내지 않아요");
 });
 
 test("F2 후보: 이 창을 연 뒤 내가 만든 명함 · 네 칸 · 사진 유무가 같은 것만", () => {

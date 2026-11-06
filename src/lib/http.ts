@@ -164,7 +164,10 @@ export async function authed<T>(method: string, path: string, body?: unknown, op
   let fresh: string;
   try {
     fresh = await refreshAccessToken(token);
-  } catch {
+  } catch (e) {
+    // 재발급이 연결 끊김 · 서버 문제(응답 없음 · 시간 초과 = 0, 5xx)로 실패 — 로그인이 끝난 게 아니에요(재검토 R2).
+    // 그 요청만 실패로 돌려줘요(화면은 연결 오류로 안내 · 자동 저장은 다음 변경 때 다시). 서버가 재발급을 거절했을 때(4xx)만 로그인 끝.
+    if (e instanceof ApiError && (e.status === 0 || e.status >= 500)) throw e;
     return sessionEnded("expired");
   }
   try {

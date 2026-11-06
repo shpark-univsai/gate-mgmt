@@ -556,9 +556,9 @@ export async function saveCardDraft(id: string | null, input: CardDraftInput, op
 }
 
 /** [지우기] — 사진 · 칩 · 입력한 값 모두. 이미 없으면(계정을 만들었거나 다른 직원이 지움) 그대로 성공이에요(멱등). */
-export async function deleteCardDraft(id: string): Promise<boolean> {
+export async function deleteCardDraft(id: string, opts: AuthedOptions = {}): Promise<boolean> {
   try {
-    await authed<{ deleted: boolean }>("DELETE", `${MGMT}/card-drafts/${encodeURIComponent(id)}`);
+    await authed<{ deleted: boolean }>("DELETE", `${MGMT}/card-drafts/${encodeURIComponent(id)}`, undefined, opts);
     return true;
   } catch (e) {
     return isDraftNotFound(e);

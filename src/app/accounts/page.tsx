@@ -839,7 +839,8 @@ export default function AccountsPage() {
   /** 이어서 만든 창에서 이미 만든 계정에 안내 메일을 다시 보냄 — 그 명함은 다 썼어요. 창은 기다리지 않고, 지운 뒤 목록을 새로 고쳐요. */
   const discardUsedDraft = useCallback(
     (id: string) => {
-      void deleteCardDraft(id).then(() => reload());
+      // 뒤쪽 정리라 로그인이 끊겨도 로그인 화면으로 보내지 않아요(재검토 R5 — 자동 저장 뒤 지우기도 이 길로 와요)
+      void deleteCardDraft(id, { background: true }).then(() => reload());
     },
     [reload],
   );
@@ -2063,7 +2064,8 @@ function CreateDialog({
     // 사진(draft-session.ts photoPlan): 화면 사진이 서버 명함의 사진과 같으면 keepPhoto(다시 올리지 않음), 새로 찍은 사진이면 그 사진,
     // 읽는 중 · 다시 찍기가 사진을 만들지 못했으면 사진 없이 — 앞 명함 사진이 새 명함 칸과 함께 남지 않게(반박 리뷰 F4)
     const plan = photoPlan(photo, mem.serverPhoto, scanning);
-    if (!Object.values(values).some(Boolean) && !plan.photo && !plan.keepPhoto) return id ? { id, remove: true } : null;
+    // 비었으면 지울 것 — 단, 다시 찍어 읽는 중에는 비어 보여도 지우지 않아요(결과를 기다리는 중이에요, 재검토 R1). 그때는 그냥 남기지 않아요
+    if (!Object.values(values).some(Boolean) && !plan.photo && !plan.keepPhoto) return id && !scanning ? { id, remove: true } : null;
     const chips = chipsForDraft(scan);
     // 첫 로그인 전 이메일이라 메일 언어를 잠깐 바꿨으면 직원이 고른 언어로
     const lang = languageChosen ? (langBeforePending.current ?? language) : null;
@@ -2152,7 +2154,8 @@ function CreateDialog({
     let posted = !id;
     let out = await onAutosave(id, input, lostRef.current);
     // 이 창의 자동 저장이 만든 명함을 그사이 다른 직원이 지움 — 입력이 사라지지 않게 한 번 새로 남겨요(F5).
-    // 이어서 만든 원래 명함이면 되살리지 않아요(계정을 만들었을 수 있어요)
+    // 이어서 만든 원래 명함이면 되살리지 않아요(계정을 만들었을 수 있어요).
+    // 받아들인 한계(재검토 R4): 다른 직원이 그 명함으로 계정을 만들어 지워진 경우에도 한 번은 새로 남겨요(직원이 목록에서 지우면 돼요)
     if (id && keep.recreate && !out.res.ok && out.res.reason === "not_found" && !recreatedRef.current && !memRef.current.ended) {
       recreatedRef.current = true;
       posted = true;
@@ -2235,7 +2238,7 @@ function CreateDialog({
       await autosave?.stop();
       let id = mem.id;
       if (!id) {
-        const found = await findLostDraft(lostRef.current, staffEmail);
+        const found = await findLostDraft(lostRef.current, staffEmail, true);
         if (found.kind === "found") id = found.id;
       }
       mem.id = null;
