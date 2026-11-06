@@ -240,10 +240,17 @@ type Lead = { text: string; value: string };
  * (「E. daeun · jung@…」 「이메일 daeun / jung@…」 「M. 010-… E. daeun · jung@…」 「E. daeun.」 ↵ 「jung@…」). test = 덩어리 판별(isLoneChunk · BROKEN_LOCAL_RE)
  */
 function leadChunk(prev: string, test: (chunk: string) => boolean): Lead | null {
-  if (test(prev)) return { text: prev, value: prev };
-  const m = prev.match(LABELED_CHUNK_END_RE);
-  return m && test(m[2]) ? { text: m[1] + m[2], value: m[2] } : null;
+  // 앞에 붙은 여는 괄호 · 따옴표는 떼고 봐요(「(daeun · jung@…)」, 반박 리뷰) — 칩 글자에는 남고 값에서는 빠져요
+  const bare = prev.replace(OPENERS_START_RE, "");
+  if (test(bare)) return { text: prev, value: bare };
+  const m = bare.match(LABELED_CHUNK_END_RE);
+  const chunk = m ? m[2].replace(OPENERS_START_RE, "") : "";
+  return m && test(chunk) ? { text: m[1] + m[2], value: chunk } : null;
 }
+
+/** 조각 앞의 여는 괄호 · 따옴표 · 메일 라벨을 뗀 알맹이(「(jung@…」 「E. jung@…」 「(E. jung@…」 → 「jung@…」) */
+const stripEmailOpeners = (seg: string) =>
+  seg.replace(OPENERS_START_RE, "").replace(LEADING_EMAIL_LABEL_RE, "").replace(OPENERS_START_RE, "");
 
 /**
  * 칩으로 보여 줄 조각. suspect = 앞 조각 · 앞 줄과 이어 보면 잘렸을 수 있는 메일 조각(UG-451).
@@ -305,7 +312,7 @@ function readSegments(text: string): Segment[] {
       // 이 조각 앞에 떨어져 읽힌 메일 앞 덩어리(읽은 그대로 이어 붙일 글자 · 칩 값에 넣을 글자) — 없으면 null.
       // 이 조각이 메일 라벨로 시작해도(「daeun.」 ↵ 「E. jung@…」) 봐요(반박 리뷰 F1)
       let lead: Lead | null = null;
-      if (startsWithEmail(head) || startsWithEmail(head.replace(LEADING_EMAIL_LABEL_RE, ""))) {
+      if (startsWithEmail(head) || startsWithEmail(stripEmailOpeners(head))) {
         if (p === 0) lead = brokenAbove ? { text: `${brokenAbove.text} `, value: `${brokenAbove.value} ` } : null;
         else {
           const found = leadChunk(cleanSegment(parts[p - 1]), isLoneChunk);
@@ -496,6 +503,8 @@ const GLUED_LOWER_LABEL_TLD_RE = /^(?:com|net|org|co|kr|sg)(?:tel|fax|mobile|mob
 
 // 주소 앞에 띄어쓰기 없이 붙어도 되는 여는 괄호 · 따옴표(「(kim@…」 「「kim@…」) — 그 앞은 다시 줄 처음 · 공백 · 메일 라벨이어야 해요
 const OPENERS_END_RE = /[(<[{"'“‘「『（［【〈《]+$/u;
+// 같은 여는 괄호 · 따옴표가 조각 · 덩어리 앞에 붙은 것(「(daeun」 「(jung@…」)
+const OPENERS_START_RE = /^[(<[{"'“‘「『（［【〈《]+/u;
 // 주소 바로 앞의 메일 라벨 끝(「E:」 「e.」 「E)」 「E>」 「Email▶」 「E-MAIL:」 「e.mail:」 「Mail to:」 「이메일：」 「메일」 …, 쌍점 없이도) —
 // 대소문자 · 전각 기호(： ． ）)도 받아요. 그 밖의 기호(✉ © /)가 붙으면 라벨로 보지 않아요(반박 리뷰)
 const EMAIL_LABEL_END_RE = /(?:^|[\s(<[])(?:e[-.]?mail|e|mail(?:\s*to)?|이메일|메일)\s*[.:)>▶►→：．）]?$/i;
@@ -535,7 +544,7 @@ function ccFragmentOnly(rest: string, loose = false): boolean {
  * 메일 주소 앞뒤에서 본 「잘렸을 수 있는」 조각. head · tail = 읽은 그대로의 앞 덩어리 · 뒤 조각(없으면 ""), typo = 끝 도메인 오독,
  * glue = 끝 도메인에 라벨이 아닌 대문자 덩어리가 붙음(「…comSG」 — match 에 들어 있어요)
  */
-type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean; glue: boolean };
+type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean; glue: boolean; dots: boolean };
 
 /**
  * 줄의 메일 주소가 잘렸을 수 있는지 살펴요(UG-451). 글자 읽기가 주소 속 「.」 를 공백 · 쉼표로 읽으면 메일 모양 꼬리만 뽑혀요
@@ -596,7 +605,10 @@ function emailSuspicion(text: string): EmailSuspicion | null {
   }
   const tld = extractEmail(line).split(".").pop() ?? "";
   const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld) || GLUED_LOWER_LABEL_TLD_RE.test(tld);
-  return { match: m[0], head, tail, typo, glue };
+  // @ 앞이 점으로 시작 · 끝나거나 점이 겹침(「.jung@」 「kim.@」 「kim..lee@」) — 앞 덩어리가 떨어졌거나 글자를 놓친 것이에요(반박 리뷰)
+  const local = extractEmail(line).split("@")[0] ?? "";
+  const dots = local.startsWith(".") || local.endsWith(".") || local.includes("..");
+  return { match: m[0], head, tail, typo, glue, dots };
 }
 
 /**
@@ -654,7 +666,7 @@ function emailFragmentTails(line: string, next: string): Map<string, string> {
 /** 줄의 메일 주소가 잘렸거나 잘못 읽혔을 수 있는지(UG-451) — 그런 주소는 처음 채우기에서 빼요(autoFill). */
 export function isSuspectEmail(line: string): boolean {
   const s = emailSuspicion(line);
-  return s !== null && (s.head !== "" || s.tail !== "" || s.typo || s.glue);
+  return s !== null && (s.head !== "" || s.tail !== "" || s.typo || s.glue || s.dots);
 }
 
 /** 한 줄의 종류와 칸에 넣을 값. 메일이 함께 있는 줄은 메일로 봐요(메일 칸이 더 중요해요 — 라벨로 나눈 뒤라 드물어요). */
@@ -664,7 +676,7 @@ export function classifyLine(line: string): { kind: ChipKind; value: string; fax
     // 잘렸을 수 있는 주소는 앞 덩어리부터 뒤 조각까지 읽은 그대로(「daeun jung@miraero-logis.co.kr」)를 값으로 —
     // 칩을 눌러 넣으면 형식 오류로 보여 직원이 고쳐요(잘린 꼬리가 조용히 들어가지 않게)
     const s = emailSuspicion(line);
-    if (s && (s.head || s.tail || s.glue)) return { kind: "email", value: (s.head + s.match + s.tail).trim() };
+    if (s && (s.head || s.tail || s.glue || s.dots)) return { kind: "email", value: (s.head + s.match + s.tail).trim() };
     return { kind: "email", value: email };
   }
   const phone = bestPhone(phoneHits(line));

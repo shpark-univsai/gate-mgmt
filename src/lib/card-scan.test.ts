@@ -670,3 +670,33 @@ test("UG-451 17022 리뷰 F2 · 의심 칩 값은 형식 검사에 걸리거나 
   assert.equal(isSuspectValue("kim@x.com", ok.chips), false);
   assert.equal(isSuspectValue("", card("kim@x.cm").chips), false);
 });
+
+test("UG-451 17022 리뷰 · 여는 괄호 · 따옴표 안의 떨어진 앞 덩어리도 의심", () => {
+  for (const lines of [["(daeun · jung@x.co.kr)"], ["「daeun · jung@x.co.kr」"], ["daeun.", "(jung@x.co.kr)"], ["daeun.", "<jung@x.co.kr>"], ["(daeun.", "jung@x.co.kr"]]) {
+    const label = lines.join(" ↵ ");
+    const r = card(...lines);
+    assert.equal(r.values.email, "", label);
+    const chip = r.chips.find((c) => c.kind === "email");
+    assert.equal(chip?.suspect, true, label);
+    // 값은 공백이 들어간 읽은 그대로 — 형식 검사에 걸려요
+    assert.equal(PAGE_EMAIL_RE.test(chip?.value ?? ""), false, label);
+  }
+  // 괄호만 있는 주소 · 대문자로 시작하는 이름 덩어리는 전처럼 채워요
+  assert.equal(card("(kim@x.com)").values.email, "kim@x.com");
+  assert.equal(card("Daeun · jung@x.co.kr").values.email, "jung@x.co.kr");
+});
+
+test("UG-451 17022 리뷰 · @ 앞이 점으로 시작 · 끝나거나 점이 겹치면 의심(읽은 그대로 칩, 칸 값 경고)", () => {
+  for (const lines of [["daeun", ".jung@x.co.kr"], [".jung@x.co.kr"], ["kim.@x.com"], ["kim..lee@x.com"]]) {
+    const label = lines.join(" ↵ ");
+    const r = card(...lines);
+    assert.equal(r.values.email, "", label);
+    const chip = r.chips.find((c) => c.kind === "email");
+    assert.ok(chip && isSuspectChip(chip), label);
+    assert.equal(chip?.value, lines[lines.length - 1], label);
+    assert.equal(isSuspectValue(chip?.value ?? "", r.chips), true, label);
+  }
+  // 점이 가운데 하나씩인 주소 · 붙은 메일 라벨(「E.jung@」)은 그대로 채워요
+  assert.equal(card("kim.lee@x.com").values.email, "kim.lee@x.com");
+  assert.equal(card("E.jung@x.com").values.email, "jung@x.com");
+});
