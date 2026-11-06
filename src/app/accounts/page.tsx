@@ -272,8 +272,12 @@ const canResend = (a: Account) => a.status === "pending" && !a.resendBlocked && 
  * 새 명함의 저장을 다시 시도하기 전에, 앞 저장(응답만 잃음)이 서버에 남았는지 찾아요 — 「작성 중」 목록에서
  * 네 칸 값 · 사진 유무가 같고 최근(10분 안)에 생긴 명함(가장 최근 것). 없거나 목록을 받지 못하면 null(새로 남겨요).
  * 목록은 검색어 없이 최근 100장 — 검색어가 어느 칸을 보는지에 기대지 않아요.
+ * 지금 로그인한 직원이 만든 명함만 봐요(createdBy = 직원 이메일, 대소문자 무시) — 다른 직원의 명함을 덮어쓰지 않게.
+ * 직원 이메일을 모르면 찾지 않아요(새로 남겨요).
  */
-async function findLostDraft(input: CardDraftInput): Promise<string | null> {
+async function findLostDraft(input: CardDraftInput, staffEmail: string | null | undefined): Promise<string | null> {
+  const me = staffEmail?.trim().toLowerCase();
+  if (!me) return null;
   try {
     const { items } = await listCardDrafts();
     const same = (a: string | null | undefined, b: string | undefined) => (a ?? "") === (b ?? "");
@@ -285,6 +289,7 @@ async function findLostDraft(input: CardDraftInput): Promise<string | null> {
           same(d.name, input.name) &&
           same(d.email, input.email) &&
           same(d.phone, input.phone) &&
+          d.createdBy.trim().toLowerCase() === me &&
           d.hasPhoto === !!input.photo &&
           Date.parse(d.createdAt) >= since,
       )
@@ -298,6 +303,8 @@ async function findLostDraft(input: CardDraftInput): Promise<string | null> {
 export default function AccountsPage() {
   const router = useRouter();
   const staff = useStaff();
+  // 「작성 중」 새 명함을 다시 저장할 때 내가 만든 명함만 찾으려고(createdBy 와 같은 직원 이메일)
+  const staffEmail = staff?.email ?? null;
 
   const [rows, setRows] = useState<Account[]>([]);
   const [total, setTotal] = useState(0);
@@ -512,7 +519,7 @@ export default function AccountsPage() {
         }
         // 새 명함(번호 없음)을 다시 시도할 때: 앞 저장이 서버에는 남고 응답만 잃었을 수 있어요 — 같은 값의 최근 명함이 있으면 그 명함에 이어 써요
         let id = keep.id;
-        if (!id && retry) id = await findLostDraft(keep.input);
+        if (!id && retry) id = await findLostDraft(keep.input, staffEmail);
         let res = await saveCardDraft(id, keep.input);
         // 찾은 명함이 그사이 없어졌으면(계정을 만들었거나 지움) 새로 남겨요
         if (!keep.id && id && !res.ok && res.reason === "not_found") {
@@ -559,7 +566,7 @@ export default function AccountsPage() {
       draftSaves.current.set(id, saving);
       return result;
     },
-    [reload],
+    [reload, staffEmail],
   );
 
   /**
