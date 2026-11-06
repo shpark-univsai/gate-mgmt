@@ -189,6 +189,7 @@ export function chipEmailsState(emails: readonly string[], known: Readonly<Recor
  * 2. 칸 이메일이 「새 계정」으로 확인됐으면 open — 명함에 다른 주소가 있어도 직원이 고른 주소예요
  * 3. 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소로: 하나라도 이미 있는 계정이면 existing(이 명함은 있는 고객 것 — 칸을 지워도
  *    사진 · 칩에 그 주소가 남아요), 아직 확인 못 한 주소가 있으면 wait, 모두 새 주소면 open
+ *    (2 의 칸 이메일이 의심 칩 값 · 잘린 꼬리 주소면(fieldSuspect) 「새 계정」이어도 3 으로 가요)
  * fieldStatus = 칸 이메일의 확인 결과(없으면 known 에서 찾아요), chipEmails = 명함 칩의 메일 주소(chipEmailAddresses)
  */
 export function draftSaveGate(args: {
@@ -197,13 +198,22 @@ export function draftSaveGate(args: {
   fieldStatus: CheckStatus | null;
   chipEmails: readonly string[];
   known: Readonly<Record<string, CheckStatus>>;
+  /** 명함에 잘렸을 수 있는 메일 칩이 있는지(isSuspectChip) */
+  suspectChips?: boolean;
+  /** 칸 값이 의심 칩 값 · 그 칩에서 뽑은 잘린 주소와 같은지(isSuspectValue) */
+  fieldSuspect?: boolean;
 }): DraftEmailGate {
   const fieldStatus = args.fieldStatus ?? args.known[args.email] ?? null;
   const field = draftEmailGate(args.email, args.checkable, fieldStatus);
   if (field !== "open") return field;
-  if (args.email && args.checkable && fieldStatus === "new") return "open";
+  const fieldNew = !!args.email && args.checkable && !args.fieldSuspect && fieldStatus === "new";
+  if (fieldNew) return "open";
   const chips = chipEmailsState(args.chipEmails, args.known);
-  return chips === "existing" ? "existing" : chips === "unknown" ? "wait" : "open";
+  if (chips === "existing") return "existing";
+  // 4. 잘렸을 수 있는 메일 칩이 있으면 잘린 꼬리 주소의 확인 결과로 정하지 않아요(최종 리뷰 R2) —
+  //    칸에 의심이 아닌 주소가 「새 계정」으로 확인될 때까지 기다려요(닫을 때는 gateAtClose 가 전처럼 남겨요)
+  if (args.suspectChips) return "wait";
+  return chips === "unknown" ? "wait" : "open";
 }
 
 /**

@@ -236,3 +236,20 @@ test("UG-451 17022 · 이미 있는 계정이면 이 창의 자동 저장이 만
   assert.equal(ownDraftToDiscard("7", own), null); // 이어서 만들기로 연 명함
   assert.equal(ownDraftToDiscard(null, own), null);
 });
+
+test("UG-451 최종 리뷰 R2 · 잘렸을 수 있는 메일 칩이 있으면 잘린 꼬리 주소로 정하지 않고 칸 주소가 「새 계정」일 때까지 기다려요", () => {
+  const TAIL = "jung@x.co.kr"; // 「daeun · jung@x.co.kr」에서 뽑은 잘린 주소
+  const gate = (email: string, fieldStatus: "new" | null, known: Record<string, "new" | "in_use">, fieldSuspect = false) =>
+    draftSaveGate({ email, checkable: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), fieldStatus, chipEmails: [TAIL], known, suspectChips: true, fieldSuspect });
+  // 꼬리 주소가 「새 계정」이어도 칸이 비었거나 의심 값이면 기다려요
+  assert.equal(gate("", null, { [TAIL]: "new" }), "wait");
+  assert.equal(gate("daeun · jung@x.co.kr", null, { [TAIL]: "new" }), "wait");
+  assert.equal(gate(TAIL, "new", { [TAIL]: "new" }, true), "wait");
+  // 칸에 고친 주소가 「새 계정」으로 확인되면 남겨요 — 확인 전이면 기다려요
+  assert.equal(gate("daeun.jung@x.co.kr", "new", { [TAIL]: "new" }), "open");
+  assert.equal(gate("daeun.jung@x.co.kr", null, { [TAIL]: "new" }), "wait");
+  // 꼬리 주소가 있는 계정이면 전처럼 existing(이 창의 자동 저장 명함을 지워요)
+  assert.equal(gate("", null, { [TAIL]: "in_use" }), "existing");
+  // 닫을 때는 기다림을 전처럼 남김으로
+  assert.equal(gateAtClose(gate("", null, { [TAIL]: "new" })), "open");
+});

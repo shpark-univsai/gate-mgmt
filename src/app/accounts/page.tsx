@@ -68,6 +68,7 @@ import {
   confusableParts,
   emailHasConfusable,
   isFilled,
+  isSuspectChip,
   isSuspectValue,
   scanCard,
   tapChip,
@@ -2151,9 +2152,17 @@ function CreateDialog({
   const chipEmails = scan ? chipEmailAddresses(scan.chips) : [];
   // 「작성 중」으로 남겨도 되는지(UG-451 기획 17022 · 반박 리뷰 F3 · F4, draftSaveGate) — 칸 이메일이 「새 계정」으로 확인됐거나,
   // 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소가 모두 새 주소일 때만. 확인 전이면 wait, 있는 계정이면 existing
-  const emailGate = draftSaveGate({ email: trimmed, checkable: EMAIL_RE.test(trimmed), fieldStatus: current?.status ?? null, chipEmails, known });
-  // 칸 값이 잘렸을 수 있는 메일 칩의 값과 똑같음 — 경고하고 보내기를 막아요(반박 리뷰 F2, 고치면 풀려요)
+  // 칸 값이 잘렸을 수 있는 메일 칩의 값 · 그 칩에서 뽑은 잘린 주소와 같음 — 경고하고 보내기를 막아요(반박 리뷰 F2 · 최종 리뷰 R3, 고치면 풀려요)
   const suspectValue = !!scan && isSuspectValue(trimmed, scan.chips);
+  const emailGate = draftSaveGate({
+    email: trimmed,
+    checkable: EMAIL_RE.test(trimmed),
+    fieldStatus: current?.status ?? null,
+    chipEmails,
+    known,
+    suspectChips: !!scan && scan.chips.some(isSuspectChip),
+    fieldSuspect: suspectValue,
+  });
 
   /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
   function pickPendingLanguage(l: MailLanguage) {
@@ -2311,6 +2320,8 @@ function CreateDialog({
           fieldStatus: field?.status ?? current?.status ?? null,
           chipEmails,
           known: { ...known, ...chips },
+          suspectChips: !!scan && scan.chips.some(isSuspectChip),
+          fieldSuspect: suspectValue,
         });
       }
       if (gateAtClose(gate) === "existing") {
