@@ -11,6 +11,7 @@ export type ChipKind = "email" | "phone" | "other";
  * 읽은 한 줄(라벨 · 구분자로 나눈 조각). text = 칩에 보이는 글자(읽은 그대로), value = 메일 · 전화 칩이 칸에 넣는 값(뽑은 주소 · 번호).
  * fax = 고른 번호가 팩스 라벨 바로 뒤 번호.
  * suspect = 앞뒤 줄 · 조각을 함께 봐야 알 수 있는 「잘렸을 수 있는」 메일 칩(UG-451, readSegments) — 처음 채우기에만 쓰고 「작성 중」 저장에는 남지 않아요.
+ * 잘렸을 수 있는 메일 칩은 text · value 모두 떨어진 앞 덩어리 · 꼬리까지 읽은 그대로예요(UG-451 기획 17022 — 「tan@x.com · sg」).
  */
 export type Chip = { id: number; text: string; kind: ChipKind; value: string; fax?: boolean; suspect?: boolean };
 
@@ -224,8 +225,34 @@ const isLoneChunk = (seg: string) => /^[a-z][A-Za-z0-9_%+-]*$/.test(seg) && !EMA
 // 끝 글자 말고는 점이 없어요(「Ltd.」 「Inc.」 「Co.」 「Pte.」 「www.x.com.」은 빼요)
 const BROKEN_LOCAL_RE = /^[a-z][A-Za-z0-9_%+-]*[._-]$/;
 
-/** 칩으로 보여 줄 조각. suspect = 앞 조각 · 앞 줄과 이어 보면 잘렸을 수 있는 메일 조각(UG-451) */
-type Segment = { text: string; suspect: boolean };
+/**
+ * 칩으로 보여 줄 조각. suspect = 앞 조각 · 앞 줄과 이어 보면 잘렸을 수 있는 메일 조각(UG-451).
+ * value = 칩으로 나누며 떨어진 앞 덩어리 · 꼬리까지 이어 붙인 「읽은 그대로」의 칩 값(UG-451 기획 17022) — 앞 메일 라벨(「E.」)은 빼요
+ */
+type Segment = { text: string; suspect: boolean; value?: string };
+
+// 구분자를 남기며 나누기(앞 덩어리를 읽은 그대로 이어 붙일 때 씀)
+const SEPARATOR_SPLIT_RE = new RegExp(`(${SEPARATOR_RE.source})`);
+/** 칩 글자에 넣을 구분자 — 붙어 읽힌 「|」도 띄어 써요(이어 붙인 글자가 늘 공백을 품어 메일 형식 검사에 걸리게) */
+const spacedSeparator = (sep: string) => ` ${sep.trim()} `;
+
+/**
+ * 메일 주소 뒤에 「떨어진 꼬리」가 붙은 조각이면 꼬리까지 이은 읽은 그대로, 아니면 null(UG-451 기획 17022).
+ * 조각이 주소(+ 맺음 기호)로 끝날 때만 이어요 — 조각에 이미 뒤 글자가 들어 있으면 그대로 읽은 것이에요.
+ */
+function withEmailTail(seg: string, tails: ReadonlyMap<string, string>): { text: string; value: string } | null {
+  const m = seg.match(EMAIL_RE);
+  if (!m || m.index === undefined) return null;
+  const tail = tails.get(m[0]);
+  if (tail === undefined) return null;
+  const end = m.index + m[0].length;
+  const rest = seg.slice(end);
+  if (rest !== "" && !GLUED_OK_RE.test(rest)) return null;
+  const text = seg.slice(0, end) + tail;
+  // 값은 주소에 붙은 앞 덩어리부터(classifyLine 과 같게) — 「E. tan@x.com SG」의 라벨은 빼요
+  const head = emailSuspicion(seg)?.head ?? "";
+  return { text, value: text.slice(m.index - head.length) };
+}
 
 /**
  * 읽은 글자 → 칩으로 보여 줄 조각. 줄마다 구분자(/ · | …)와 줄 가운데 항목 라벨(T. · M. · E. · Fax …) 앞에서 나누고 정리해요.
@@ -233,7 +260,9 @@ type Segment = { text: string; suspect: boolean };
  * 잘렸을 수 있는 메일 조각(suspect, UG-451):
  * - 구분자로 나뉜 앞 조각이 공백 없는 로마자 · 숫자 한 덩어리이고 이 조각이 메일로 시작(「daeun · jung@…」 → 「daeun」 「jung@…」)
  * - 바로 앞 줄이 공백 없는 한 덩어리이고 . _ - 로 끝나며 이 줄 첫 조각이 메일로 시작(「daeun.」 ↵ 「jung@…」)
- * - 줄의 메일 주소 뒤(같은 줄 · 다음 줄)에 떨어져 읽힌 나라 도메인 꼬리(lineHasEmailFragment — 「tan@x.com · sg」 「tan@x.com」 ↵ 「sg」)
+ * - 줄의 메일 주소 뒤(같은 줄 · 다음 줄)에 떨어져 읽힌 나라 도메인 꼬리(emailFragmentTails — 「tan@x.com · sg」 「tan@x.com」 ↵ 「sg」)
+ * 이런 조각의 칩 글자 · 값은 떨어진 앞 덩어리 · 꼬리까지 읽은 그대로예요(UG-451 기획 17022 — 「daeun · jung@…」 「tan@x.com · sg」,
+ * 다음 줄은 띄어 이어 「tan@x.com sg」). 칩을 눌러 넣으면 형식 오류로 보여 직원이 고쳐요 — 잘린 주소(「tan@x.com」)가 조용히 들어가지 않게.
  */
 function readSegments(text: string): Segment[] {
   const seen = new Set<string>();
@@ -243,20 +272,36 @@ function readSegments(text: string): Segment[] {
     .map((raw) => raw.slice(0, MAX_LINE).replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim())
     .filter(Boolean);
   lines.forEach((line, i) => {
-    const parts = line.split(SEPARATOR_RE);
+    const pieces = line.split(SEPARATOR_SPLIT_RE);
+    const parts = pieces.filter((_, k) => k % 2 === 0);
+    const seps = pieces.filter((_, k) => k % 2 === 1);
     const brokenAbove = i > 0 && BROKEN_LOCAL_RE.test(lines[i - 1]);
     // 칩으로 나누기 전 줄에서 본 떨어진 나라 도메인 꼬리 — 이 줄의 메일 조각은 모두 의심(UG-451 기획 17005 반박 리뷰)
-    const fragment = lineHasEmailFragment(line, lines[i + 1] ?? "");
+    const tails = emailFragmentTails(line, lines[i + 1] ?? "");
+    const fragment = tails.size > 0;
     parts.forEach((part, p) => {
       const head = cleanSegment(part);
-      const suspect = startsWithEmail(head) && (p === 0 ? brokenAbove : isLoneChunk(cleanSegment(parts[p - 1])));
+      // 이 조각 앞에 떨어져 읽힌 메일 앞 덩어리(읽은 그대로 이어 붙일 글자) — 없으면 null
+      let lead: string | null = null;
+      if (startsWithEmail(head)) {
+        if (p === 0) lead = brokenAbove ? `${lines[i - 1]} ` : null;
+        else {
+          const prev = cleanSegment(parts[p - 1]);
+          lead = isLoneChunk(prev) ? prev + spacedSeparator(seps[p - 1]) : null;
+        }
+      }
       part
         .split(LABEL_SPLIT_RE)
         .map(cleanSegment)
         .forEach((seg, k) => {
           if (!isMeaningful(seg) || isGarbled(seg) || isJunkChip(seg) || seen.has(seg)) return;
           seen.add(seg);
-          out.push({ text: seg, suspect: (suspect && k === 0) || (fragment && EMAIL_RE.test(seg)) });
+          const headCut = lead !== null && k === 0;
+          const suspect = headCut || (fragment && EMAIL_RE.test(seg));
+          const tailed = fragment ? withEmailTail(seg, tails) : null;
+          if (!headCut && tailed === null) return void out.push({ text: seg, suspect });
+          const before = headCut ? (lead ?? "") : "";
+          out.push({ text: before + (tailed?.text ?? seg), suspect: true, value: before + (tailed?.value ?? seg) });
         });
     });
   });
@@ -532,34 +577,52 @@ function emailSuspicion(text: string): EmailSuspicion | null {
  * 끝 도메인이 co · ne · or 로 끝나고 뒤에(공백 · 구분자 다음) 로마자 1~2글자 토막이 따로 읽혔는지
  * (「…co m」 「…co rn」 「…co om」 「…ne tt」 「…co M 010-…」 「…ne T 02-…」) — .com · .net · .org 의 끝 글자가 떨어져 · 잘못 읽힌 것일 수 있어요
  * (반박 리뷰 · 최종 확인 — rn 은 m 을 잘못 읽은 흔한 모양). 여는 괄호 뒤(「…co (rn)」)도 같아요. 토막 뒤에 로마자가 더 이어지면(「…co Tel 02-…」) 보지 않아요.
- * 다음 줄이 이런 토막 하나뿐인 것(「…co」 ↵ 「rn」)은 lineHasEmailFragment 가 봐요.
+ * 다음 줄이 이런 토막 하나뿐인 것(「…co」 ↵ 「rn」)은 emailFragmentTails 가 봐요.
  * 「…co.kr」 「…com」 같은 다른 끝 도메인도 보지 않아요(「…co.kr rn」 「…com Dr」는 채워요).
  */
 function cutTldLetterAfter(address: string, after: string): boolean {
+  return cutTldLetterTail(address, after) !== "";
+}
+
+/** cutTldLetterAfter 의 토막까지(앞 공백 · 구분자 포함, 「 M」 「 | rn」) — 아니면 "" */
+function cutTldLetterTail(address: string, after: string): string {
   const tld = address.slice(address.lastIndexOf(".") + 1);
-  return CUT_TLD_RE.test(tld) && /^[\s·・•/|,;:.([（［]+[A-Za-z]{1,2}(?![A-Za-z])/.test(after);
+  if (!CUT_TLD_RE.test(tld)) return "";
+  return after.match(/^[\s·・•/|,;:.([（［]+[A-Za-z]{1,2}(?![A-Za-z])/)?.[0] ?? "";
 }
 
 /**
- * 읽은 줄(칩으로 나누기 전)에서 메일 주소 뒤에 떨어져 읽힌 나라 도메인 꼬리가 있는지(UG-451 기획 17005 반박 리뷰).
+ * 읽은 줄(칩으로 나누기 전)에서 메일 주소 뒤에 떨어져 읽힌 나라 도메인 꼬리(UG-451 기획 17005 반박 리뷰) — 주소(정규식이 잡은 글자) → 꼬리(읽은 그대로).
  * 칩은 구분자(· / | …)로 나뉘고 1~2글자 토막은 잡음으로 빠져 칩만 봐서는 몰라요.
- * - 같은 줄: 주소 뒤에 남은 것이 나라 도메인 꼬리뿐(ccFragmentOnly — 「tan@x.com · sg」 「tan@x.com|sg」 「…com s」),
- *   또는 co · ne · or 로 끝난 주소 뒤에 1~2글자 토막(cutTldLetterAfter — 「…co rn」 「…co | rn」)
+ * - 같은 줄: 주소 뒤에 남은 것이 나라 도메인 꼬리뿐(ccFragmentOnly — 「tan@x.com · sg」 「tan@x.com|sg」 「…com s」) → 남은 것 전부,
+ *   또는 co · ne · or 로 끝난 주소 뒤에 1~2글자 토막(cutTldLetterTail — 「…co rn」 「…co | rn」) → 그 토막까지
  * - 다음 줄: 주소가 줄 끝(맺음 기호만 뒤에)이고 다음 줄이 나라 도메인 꼬리 한두 토막뿐(「sg」 「.sg」 「m.sg」 「S G」),
- *   또는 co · ne · or 로 끝난 주소 다음 줄이 1~2글자 토막 하나뿐(「rn」 「m」). 「HR」 「M」 「KT」 같은 짧은 낱말은 그 밖에는 채워요
+ *   또는 co · ne · or 로 끝난 주소 다음 줄이 1~2글자 토막 하나뿐(「rn」 「m」) → 줄 끝 + 공백 + 다음 줄. 「HR」 「M」 「KT」 같은 짧은 낱말은 그 밖에는 채워요
+ * 꼬리의 붙어 읽힌 구분자 「|」는 띄어 써요(spacedSeparator — 칩 글자가 메일 형식 검사에 걸리게, 기획 17022).
  */
-function lineHasEmailFragment(line: string, next: string): boolean {
+function emailFragmentTails(line: string, next: string): Map<string, string> {
+  const tails = new Map<string, string>();
+  const spaced = (tail: string) => tail.replace(/^\s*\|\s*/, spacedSeparator("|"));
   for (const m of line.matchAll(EMAIL_RE_G)) {
     const after = line.slice(m.index + m[0].length);
-    if (ccFragmentOnly(after, true) || cutTldLetterAfter(m[0], after)) return true;
+    if (ccFragmentOnly(after, true)) {
+      tails.set(m[0], spaced(after));
+      continue;
+    }
+    const cut = cutTldLetterTail(m[0], after);
+    if (cut) {
+      tails.set(m[0], spaced(cut));
+      continue;
+    }
     const rest = after.trim();
     if ((rest === "" || GLUED_OK_RE.test(rest)) && next !== "") {
-      if (ccFragmentOnly(next) && next.split(/\s+/).length <= 2) return true;
+      const joined = `${after.trimEnd()} ${next}`;
+      if (ccFragmentOnly(next) && next.split(/\s+/).length <= 2) tails.set(m[0], joined);
       // co · ne · or 로 끝난 주소 다음 줄이 로마자 1~2글자 토막 하나뿐(「rn」 「m」 「om」) — .com · .net · .org 의 끝이 떨어졌을 수 있어요
-      if (cutTldLetterAfter(m[0], ` ${next}`) && /^[.(（]?[A-Za-z]{1,2}[.)）]?$/.test(next)) return true;
+      else if (cutTldLetterAfter(m[0], ` ${next}`) && /^[.(（]?[A-Za-z]{1,2}[.)）]?$/.test(next)) tails.set(m[0], joined);
     }
   }
-  return false;
+  return tails;
 }
 
 /** 줄의 메일 주소가 잘렸거나 잘못 읽혔을 수 있는지(UG-451) — 그런 주소는 처음 채우기에서 빼요(autoFill). */
@@ -588,7 +651,9 @@ export function toChips(text: string): Chip[] {
     .slice(0, MAX_CHIPS)
     .map((seg, i) => {
       const chip: Chip = { id: i + 1, text: seg.text, ...classifyLine(seg.text) };
-      return chip.kind === "email" && seg.suspect ? { ...chip, suspect: true } : chip;
+      if (chip.kind !== "email" || !seg.suspect) return chip;
+      // 떨어진 앞 덩어리 · 꼬리까지 이은 칩은 값도 보이는 글자 그대로(UG-451 기획 17022 — 잘린 주소가 들어가지 않게)
+      return { ...chip, suspect: true, ...(seg.value !== undefined ? { value: seg.value } : {}) };
     });
 }
 

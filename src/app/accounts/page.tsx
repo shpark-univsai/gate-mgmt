@@ -49,7 +49,10 @@ import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type A
 import {
   LOST_CLOCK_SKEW_MS,
   addLost,
+  draftEmailGate,
   forNewDraft,
+  gateAtClose,
+  ownDraftToDiscard,
   photoPlan,
   recordSave,
   resolveLostDraft,
@@ -104,6 +107,8 @@ const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있
 const SCAN_FAILED = "명함을 읽지 못했습니다. 다시 찍거나 직접 입력해 주세요.";
 // 글자 읽기 도구(약 8.5MB)를 받지 못함(인터넷 없음 · 시간 초과) — 다시 찍어도 같으니 직접 입력 안내(UG-451 기획 16991)
 const SCAN_TOOL_FAILED = "글자 읽기 도구를 받지 못했습니다. 직접 입력해 주세요.";
+// 도구 받기를 이 페이지에서 여러 번 실패해 저절로 다시 받지 않을 때(UG-451 기획 17022 — 실패한 일꾼은 닫을 수 없어 쌓여요)
+const SCAN_TOOL_RELOAD = "글자 읽기 도구를 받지 못했습니다. 페이지를 새로 고친 뒤 다시 찍어 주세요.";
 // 아이폰 HEIC · HEIF 사진을 읽지 못함 — 브라우저가 열지 못하는 형식이라 다시 찍게 해요(UG-451 기획 16991)
 const SCAN_FORMAT_FAILED = "이 사진 형식은 읽을 수 없습니다. 다시 찍어 주세요.";
 /** HEIC · HEIF 사진인지(형식 · 확장자) */
@@ -549,6 +554,11 @@ type AutosaveItem = { id: string | null; input: CardDraftInput; recreate?: CardD
 
 /** 자동 저장 — 입력이 멈춘 뒤 기다릴 시간(UG-451 기획 17009) */
 const AUTOSAVE_DELAY = 2000;
+/**
+ * 응답을 잃은 저장을 찾을 때 후보로 볼 명함의 시작 시각 — 창을 연 시각 − 시계 오차(F2). 창을 여는 효과 안에서만 불러요
+ * (함수로 둔 까닭: React 컴파일러 검사가 효과 안의 Date.now 를 그리는 중으로 잘못 보는 일이 있어요)
+ */
+const lostSince = () => Date.now() - LOST_CLOCK_SKEW_MS;
 
 /**
  * 같은 명함의 저장 · 지우기는 차례대로 — 앞 저장(닫을 때 저장 · 자동 저장)이 끝난 뒤에 해요(차례가 바뀌어 옛 값이 남거나 지운 명함이 되살아나지 않게).
@@ -2042,7 +2052,7 @@ function CreateDialog({
   // 이메일 미리 조회 중. 버튼은 잠그지 않아요 — 칸을 벗어나며 시작된 조회 때문에 첫 클릭이 사라졌어요.
   // 대신 보내기는 진행 중인 조회를 기다려 같은 결과를 써요(조회를 두 번 하지 않고, busy 로 두 번 만들지도 않아요).
   const [checking, setChecking] = useState(false);
-  const inflight = useRef<{ key: string; result: Promise<EmailCheck | null> } | null>(null);
+  const inflight = useRef<{ key: string; result: Promise<EmailCheck | null>; quiet: boolean } | null>(null);
   // 마지막 이메일 확인이 실패한 까닭 — network = 응답 없음 · 5xx · 시간 초과(버튼 위에 「연결이 불안정해…」), other = 그 밖
   const checkFailure = useRef<"network" | "other" | null>(null);
   const busy = useRef(false);
@@ -2081,10 +2091,12 @@ function CreateDialog({
   const [scanFailed, setScanFailed] = useState<ScanFailure | null>(null);
   // 글자 읽기 도구를 받는 중의 진행률(받지 않으면 null)
   const [scanProgress, setScanProgress] = useState<number | null>(null);
-  const scanFailedText = scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
+  const scanFailedText =
+    scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "tool_reload" ? SCAN_TOOL_RELOAD : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
   const scanWaitText = scanProgress !== null && scanProgress < 100 ? scanDownloading(scanProgress) : SCAN_WAIT;
-  // 명함에서 메일 주소를 찾지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요.
-  const [emailMissing, setEmailMissing] = useState(false);
+  // 명함에서 메일 주소를 채우지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요(UG-451 기획 17022).
+  // none = 메일 모양 글자를 하나도 읽지 못함, unsure = 메일 칩은 있지만 잘렸을 수 있어 채우지 않음(읽은 줄에서 고르거나 직접 입력)
+  const [emailMissing, setEmailMissing] = useState<"none" | "unsure" | null>(null);
   // 비교용 명함 사진(줄인 JPEG data URL). 기기에는 저장하지 않아요(기획 16841). 계정을 만들면 바로 지우고,
   // 주소 오류로 고치는 동안(fix)에는 남겨 두며, 만들지 않고 닫으면 「작성 중」 명함과 함께 서버에 남겨요(기획 16864 — 계정을 만들거나 30일이면 서버가 지워요).
   const [photo, setPhoto] = useState<string | null>(draftPhoto);
@@ -2098,6 +2110,66 @@ function CreateDialog({
   });
   // 명함 읽기가 자동으로 채운 값(칸별). 칸 값이 이것과 같으면 직원이 손대지 않은 것으로 보고 다시 찍을 때 바꿔요(UG-451 기획 16991)
   const autoFilled = useRef<Partial<Record<ScanField, string>>>({});
+
+  const trimmed = email.trim();
+  // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
+  const key = trimmed;
+  const current = check && check.email === key ? check.result : null;
+  // 「작성 중」으로 남겨도 되는지 — 이메일 확인이 「새 계정」으로 끝났거나 확인할 이메일이 없을 때만(UG-451 기획 17022, draftEmailGate)
+  const emailGate = draftEmailGate(trimmed, EMAIL_RE.test(trimmed), current?.status ?? null);
+
+  /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
+  function pickPendingLanguage(l: MailLanguage) {
+    if (langBeforePending.current === null) langBeforePending.current = language;
+    setLanguage(l);
+  }
+
+  /**
+   * 이메일 확인 — target = 확인할 이메일(기본은 칸 값, 명함이 방금 채운 값은 아직 이 그림에 없어 따로 받아요).
+   * quiet = 직원이 부르지 않은 확인(명함이 채움 · 「작성 중」 저장 전 확인, UG-451 기획 17022) — 실패해도 칸 아래 안내를 띄우지 않아요.
+   * 같은 이메일을 확인하는 중이면 그 결과를 같이 기다려요 — 직원이 부른 쪽(칸을 벗어남)이면 실패 안내는 띄워요.
+   */
+  function runCheck(target: string = trimmed, quiet = false): Promise<EmailCheck | null> {
+    if (!EMAIL_RE.test(target)) return Promise.resolve(null);
+    if (check && check.email === target) return Promise.resolve(check.result);
+    if (inflight.current?.key === target) {
+      const joined = inflight.current.result;
+      if (!quiet && inflight.current.quiet) {
+        void joined.then((r) => {
+          if (r === null && checkFailure.current && emailRef.current?.value.trim() === target) setEmailError(CHECK_FAILED);
+        });
+      }
+      return joined;
+    }
+    const result = lookup(target, quiet);
+    inflight.current = { key: target, result, quiet };
+    void result.finally(() => {
+      if (inflight.current?.result === result) inflight.current = null;
+    });
+    return result;
+  }
+
+  async function lookup(asked: string, quiet: boolean): Promise<EmailCheck | null> {
+    let result: EmailCheck;
+    setChecking(true);
+    try {
+      result = await checkEmail(asked);
+      checkFailure.current = null;
+    } catch (e) {
+      checkFailure.current = isNetworkError(e) ? "network" : "other";
+      if (!quiet && emailRef.current?.value.trim() === asked) setEmailError(CHECK_FAILED);
+      return null;
+    } finally {
+      setChecking(false);
+    }
+    // 조회하는 사이 이메일을 고쳤으면 버려요.
+    if (emailRef.current?.value.trim() !== asked) return null;
+    setCheck({ email: asked, result });
+    if (result.status === "pending") {
+      pickPendingLanguage(result.language);
+    }
+    return result;
+  }
 
   /**
    * 닫을 때 「작성 중」으로 남길 것. 명함을 찍었거나 네 칸 중 하나라도 채웠을 때만(서버도 빈 명함은 받지 않아요 — PJ-101).
@@ -2153,6 +2225,17 @@ function CreateDialog({
     }
     // 다시 시도하는 동안에는 실패 안내 · 버튼(「저장하는 중…」)을 그대로 둬요
     setKeepingDraft(true);
+    // 이미 있는 계정(사용 중 · 해지 중 · 첫 로그인 전)의 이메일이면 남기지 않아요(UG-451 기획 17022) — 확인 전 · 확인 실패였으면 한 번 더 확인하고,
+    // 그래도 모르면 전처럼 남겨요(gateAtClose). 이 창의 자동 저장이 이미 남긴 명함은 지워요 — 이어서 만든 원래 명함은 그대로(ownDraftToDiscard)
+    if (!keep.remove) {
+      const rechecked = emailGate === "wait" ? await runCheck(trimmed, true) : null;
+      if (gateAtClose(emailGate, rechecked?.status ?? null) === "existing") {
+        keepLock.current = false;
+        setKeepingDraft(false);
+        consumeDraft(true);
+        return onClose();
+      }
+    }
     // 새 명함인데 앞 저장(닫기 · 자동 저장)의 응답을 잃었으면 목록이 서버에 남은 그 명함을 찾아 이어 써요(중복 「작성 중」 방지)
     const ok = await onKeepDraft(keep, lostRef.current);
     keepLock.current = false;
@@ -2188,14 +2271,16 @@ function CreateDialog({
   // 새로고침 뒤에는 목록의 「작성 중」 줄에서 이어서 만들어요. 화면에는 아무것도 띄우지 않아요(칸도 잠그지 않아요) —
   // 실패하면 다음 변경 때 다시 하고, 닫을 때 저장(실패하면 「저장하지 못했습니다」)이 그대로 마지막 안전망이에요.
   // 남길 것은 닫을 때와 같은 draftToKeep — 주소를 고치는 중 · 결과 화면 · 보내는 중 · 계정을 만든 뒤에는 남기지 않고, 칸을 다 비우면(지울 것) 건너뛰어요.
-  /** 지금 남길 것과 내용 열쇠 */
-  function autosaveSnapshot() {
+  /**
+   * 지금 남길 것과 내용 열쇠. anyEmail = 이메일 확인과 상관없이(이어서 만든 명함을 연 그대로인지 볼 때만)
+   * 이메일 확인이 「새 계정」으로 끝나기 전 · 이미 있는 계정(사용 중 · 해지 중 · 발급 기록)이면 남기지 않아요(반박 리뷰 F6 · UG-451 기획 17022 —
+   * 명함이 채운 이메일이 확인 전에 사진과 함께 먼저 남던 것). 조회할 수 없는 모양 · 빈 이메일은 그대로 남겨요(draftEmailGate).
+   * 이미 남긴 명함은 여기서 지우지 않아요 — 직원이 이메일을 고칠 수 있어요(닫을 때 정해요, close)
+   */
+  function autosaveSnapshot(anyEmail = false) {
     const keep = draftToKeep();
     if (!keep || keep.remove) return null;
-    // 이메일이 이미 있는 계정(사용 중 · 해지 중 · 발급 기록 — 「계정 만들고 메일 보내기」를 못 하는 경우)이면 남기지 않아요(반박 리뷰 F6).
-    // 이미 남긴 명함은 지우지 않아요 — 직원이 이메일을 고칠 수 있어요
-    const checked = check && check.email === email.trim() ? check.result : null; // 아래 current 와 같은 값
-    if (checked && checked.status !== "new") return null;
+    if (!anyEmail && emailGate !== "open") return null;
     const key = draftContentKey(keep.input, memRef.current.serverPhoto);
     // 서버가 받지 않은 사진(너무 큼 · 형식)은 다시 올리지 않아요 — 바뀔 때마다 같은 큰 사진을 되풀이해 보내지 않게(F7)
     const input = keep.input.photo && photoTag(keep.input.photo) === rejectedPhotoRef.current ? withoutPhoto(keep.input) : keep.input;
@@ -2230,9 +2315,11 @@ function CreateDialog({
   // 일정표는 늘 마지막 그림의 값으로 남겨요
   const autosaveSnapshotRef = useRef(autosaveSnapshot);
   const autosaveRunRef = useRef(autosaveRun);
+  const runCheckRef = useRef(runCheck);
   useEffect(() => {
     autosaveSnapshotRef.current = autosaveSnapshot;
     autosaveRunRef.current = autosaveRun;
+    runCheckRef.current = runCheck;
   });
   useEffect(() => {
     const autosave = createAutosaver<AutosaveItem>({
@@ -2241,9 +2328,9 @@ function CreateDialog({
       save: (keep) => autosaveRunRef.current(keep),
     });
     // 응답을 잃은 저장은 이 창을 연 뒤 생긴 명함에서만 찾아요(F2)
-    lostRef.current = { since: Date.now() - LOST_CLOCK_SKEW_MS, inputs: [] };
-    // 이어서 만든 명함을 연 그대로면 다시 보내지 않아요
-    const first = autosaveSnapshotRef.current();
+    lostRef.current = { since: lostSince(), inputs: [] };
+    // 이어서 만든 명함을 연 그대로면 다시 보내지 않아요 — 이메일 확인 전이라도(확인이 끝난 뒤 같은 값을 다시 보내지 않게)
+    const first = autosaveSnapshotRef.current(true);
     if (first && memRef.current.id) autosave.markSaved(first.key);
     autosaveRef.current = autosave;
     openRef.current = true;
@@ -2253,10 +2340,15 @@ function CreateDialog({
       void autosave.stop();
     };
   }, []);
-  // 칸 · 메일 언어 · 칩 연결 · 이메일 확인 결과가 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요)
+  // 칸 · 메일 언어 · 칩 연결 · 이메일 확인 결과가 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요).
+  // 이메일 확인을 기다리는 중(확인 전 · 실패)이면 같은 때 확인도 다시 해요(조용히) — 확인이 끝나면(check) 다시 여기로 와 남겨요(UG-451 기획 17022).
+  // 확인이 실패해도 check · 칸이 그대로라 저절로 되풀이하지 않아요 — 다음 변경 · 칸을 벗어날 때 · 닫을 때 다시 해요
   useEffect(() => {
     autosaveRef.current?.schedule();
-  }, [company, name, email, phone, language, languageChosen, scan, check]);
+    if (emailGate !== "wait" || fix || mailFailure) return;
+    const timer = setTimeout(() => void runCheckRef.current(trimmed, true), AUTOSAVE_DELAY);
+    return () => clearTimeout(timer);
+  }, [company, name, email, phone, language, languageChosen, scan, check, emailGate, trimmed, fix, mailFailure]);
   // 명함 읽기가 끝나면(읽지 못해도 사진은 남아요) 바로 — 사진은 이때 한 번 올리고 다음부터는 keepPhoto
   const [scanDone, setScanDone] = useState(0);
   useEffect(() => {
@@ -2281,16 +2373,17 @@ function CreateDialog({
    * 이어서 만든 · 자동 저장한 명함을 다 썼어요(이미 만든 계정에 안내 메일 · 재설정 메일을 보냄) — 목록의 「작성 중」 줄 · 사진은 목록이 뒤에서 지워요.
    * 자동 저장을 먼저 끄고(보내는 중이면 끝난 뒤 — 그 저장이 남긴 명함은 recordSave 가 지울 것으로 돌려줘요) 지워요.
    * 응답을 잃은 새 명함도 찾아 지워요(F1 — 이미 있는 고객의 개인정보가 「작성 중」에 30일 남지 않게).
+   * ownOnly = 이미 있는 계정의 이메일이라 남기지 않고 닫음(UG-451 기획 17022) — 이 창의 자동 저장이 만든 명함만 지우고 이어서 만든 원래 명함은 그대로
    */
-  function consumeDraft() {
+  function consumeDraft(ownOnly = false) {
     const mem = memRef.current;
     if (mem.ended) return;
     mem.ended = true;
     const autosave = autosaveRef.current;
     void (async () => {
       await autosave?.stop();
-      let id = mem.id;
-      if (!id) {
+      let id = ownOnly ? ownDraftToDiscard(mem.id, ownIdsRef.current) : mem.id;
+      if (!mem.id) {
         const found = await findLostDraft(lostRef.current, staffEmail, true);
         if (found.kind === "found") id = found.id;
       }
@@ -2320,10 +2413,6 @@ function CreateDialog({
     return Number.isSafeInteger(n) ? { draftId: n } : {};
   }
 
-  const trimmed = email.trim();
-  // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
-  const key = trimmed;
-  const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
   // 해지 중인 계정(UG-443 기획 16908) — 사용 중처럼 막되 까닭을 다르게
@@ -2343,12 +2432,6 @@ function CreateDialog({
     }
   }, [pending]);
 
-  /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
-  function pickPendingLanguage(l: MailLanguage) {
-    if (langBeforePending.current === null) langBeforePending.current = language;
-    setLanguage(l);
-  }
-
   /**
    * 실패 결과 · 발급 취소 창에 넘길 대상(첫 로그인 전 발급 기록). 회사명은 기록의 것 —
    * 입력 칸 값을 쓰면 다른 이름이 그 계정 이름처럼 보여요. 서버가 아직 회사명을 주지 않으면 이메일만 보여요.
@@ -2364,41 +2447,6 @@ function CreateDialog({
     resendBlocked: p.resendBlocked,
     ...(p.mailFailureReason ? { mailFailureReason: p.mailFailureReason } : {}),
   });
-
-  function runCheck(): Promise<EmailCheck | null> {
-    if (!EMAIL_RE.test(trimmed)) return Promise.resolve(null);
-    if (current) return Promise.resolve(current);
-    if (inflight.current?.key === key) return inflight.current.result;
-    const result = lookup();
-    inflight.current = { key, result };
-    void result.finally(() => {
-      if (inflight.current?.result === result) inflight.current = null;
-    });
-    return result;
-  }
-
-  async function lookup(): Promise<EmailCheck | null> {
-    const asked = key;
-    let result: EmailCheck;
-    setChecking(true);
-    try {
-      result = await checkEmail(trimmed);
-      checkFailure.current = null;
-    } catch (e) {
-      checkFailure.current = isNetworkError(e) ? "network" : "other";
-      if (emailRef.current?.value.trim() === asked) setEmailError(CHECK_FAILED);
-      return null;
-    } finally {
-      setChecking(false);
-    }
-    // 조회하는 사이 이메일을 고쳤으면 버려요.
-    if (emailRef.current?.value.trim() !== asked) return null;
-    setCheck({ email: asked, result });
-    if (result.status === "pending") {
-      pickPendingLanguage(result.language);
-    }
-    return result;
-  }
 
   /** 만들기 · 재발송이 「이미 있음」으로 막힌 뒤 다시 조회해 칸 아래에 보여 줘요. 네트워크 · 서버 문제면 버튼 위 안내. */
   async function recheck() {
@@ -2627,7 +2675,7 @@ function CreateDialog({
     // 이메일이 바뀌면 재설정 확인 창의 전제(그 이메일이 사용 중)가 깨져요 — 직원이 다시 누를 때까지 열지 않아요
     setResetConfirm(false);
     setResetReturned(false);
-    if (value.trim()) setEmailMissing(false);
+    if (value.trim()) setEmailMissing(null);
   }
 
   /** 칸마다 값 넣기(명함 · 칩). 그 칸의 오류 안내는 지워요. */
@@ -2731,10 +2779,10 @@ function CreateDialog({
       }
       setScan(null);
       cursor.current = null;
-      setEmailMissing(false);
+      setEmailMissing(null);
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
       // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저)
-      return setScanFailed(failure === "tool" ? "tool" : isHeic(file) ? "format" : (failure ?? "read"));
+      return setScanFailed(failure === "tool" || failure === "tool_reload" ? failure : isHeic(file) ? "format" : (failure ?? "read"));
     }
     // 처음 채우기는 이메일 · 연락처만(회사명 · 이름은 직원이 칩을 눌러 넣어요, 기획 16846) — 회사명 · 이름 칸은 건드리지 않아요
     const links: ScanLinks = {};
@@ -2755,12 +2803,16 @@ function CreateDialog({
     setScan({ chips: result.chips, links });
     cursor.current = null;
     // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
-    // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 「메일 주소를 찾지 못했습니다」가 따로 떠요.
+    // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 이메일 칸 아래 안내가 따로 떠요.
     // 칩이 생겼으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 위 안내와 겹치지 않게 칸 아래 안내 · 커서는 찾은 경우만.
     const found = result.values.phone !== "" || result.chips.some((c) => c.kind === "email");
     const missing = found && emailFilled && !result.values.email;
-    setEmailMissing(missing);
+    // 메일 칩(또는 @ 가 든 줄)은 있는데 채우지 않음 = 잘렸을 수 있어 확인하지 못함, 메일 모양 글자가 하나도 없음 = 찾지 못함(UG-451 기획 17022)
+    const emailLike = result.chips.some((c) => c.kind === "email" || c.text.includes("@"));
+    setEmailMissing(missing ? (emailLike ? "unsure" : "none") : null);
     if (!found) setScanFailed("read");
+    // 명함이 채운 이메일은 바로 확인해요 — 이미 있는 계정이면 직원이 일찍 알고, 확인이 「새 계정」으로 끝나기 전에는 「작성 중」으로 남기지 않아요(기획 17022)
+    if (emailFilled && result.values.email && EMAIL_RE.test(result.values.email)) void runCheck(result.values.email, true);
     setScanDone((n) => n + 1); // 읽은 값 · 사진을 바로 「작성 중」에 남겨요(UG-451 기획 17009)
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
     if (missing) emailRef.current?.focus();
@@ -3004,8 +3056,12 @@ function CreateDialog({
                   이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
                 </p>
               ) : emailMissing ? (
-                // 명함에서 메일 주소를 못 읽음(N4) — 막힌 게 아니라 회색(C 와 같은 모양)
-                <p className="help">메일 주소를 찾지 못했습니다. 직접 입력해 주세요.</p>
+                // 명함에서 메일 주소를 채우지 못함(N4) — 막힌 게 아니라 회색(C 와 같은 모양). 메일 칩이 있었으면(잘렸을 수 있음) 고르라고(UG-451 기획 17022)
+                <p className="help">
+                  {emailMissing === "unsure"
+                    ? "메일 주소를 확인하지 못했습니다. 읽은 줄에서 고르거나 직접 입력해 주세요."
+                    : "메일 주소를 찾지 못했습니다. 직접 입력해 주세요."}
+                </p>
               ) : (
                 <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
               )}

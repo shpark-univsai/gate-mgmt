@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { emailHasConfusable, isJunkChip, isSuspectEmail, readLines, scanCard } from "./card-scan.ts";
+import { emailHasConfusable, isJunkChip, isSuspectEmail, readLines, scanCard, tapChip } from "./card-scan.ts";
 
 const card = (...lines: string[]) => scanCard(lines.join("\n"));
 
@@ -150,7 +150,8 @@ test("UG-451 리뷰 · 가운뎃점 · 구분자로 나뉜 앞 조각 · 줄바�
   // 띄어 쓴 「 · 」 는 줄을 먼저 나눠요 — 앞 조각이 한 덩어리이고 뒤 조각이 메일로 시작하면 의심
   const split = card("daeun · jung@x.co.kr");
   assert.equal(split.values.email, "");
-  assert.ok(split.chips.some((c) => c.text === "jung@x.co.kr" && c.suspect === true));
+  // 칩은 떨어진 앞 덩어리까지 읽은 그대로(기획 17022)
+  assert.ok(split.chips.some((c) => c.text === "daeun · jung@x.co.kr" && c.value === "daeun · jung@x.co.kr" && c.suspect === true));
   assert.equal(card("daeun / jung@x.co.kr").values.email, "");
   // 라벨 · 여러 낱말 조각은 그대로
   assert.equal(card("E · jung@x.co.kr").values.email, "jung@x.co.kr");
@@ -540,4 +541,70 @@ test("UG-451 17005 최종 확인 · co · ne · or 뒤에 띄어 쓴 1~2글자 �
     ["kim@x.net Fax 02-123-4568", "kim@x.net"],
   ];
   for (const [line, email] of filled) assert.equal(card(line).values.email, email, line);
+});
+
+test("UG-451 17022 · 잘렸을 수 있는 주소 칩은 떨어진 앞 덩어리 · 꼬리까지 읽은 그대로 보이고 그대로 넣어요", () => {
+  // [읽은 줄들, 칩 글자, 칩 값]
+  const cases: [string[], string, string][] = [
+    // 같은 줄의 나라 도메인 꼬리(구분자로 나뉘어 칩에서 떨어졌던 것)
+    [["tan@bluepeak.com · sg"], "tan@bluepeak.com · sg", "tan@bluepeak.com · sg"],
+    [["tan@bluepeak.com / sg"], "tan@bluepeak.com / sg", "tan@bluepeak.com / sg"],
+    [["tan@bluepeak.com • sg"], "tan@bluepeak.com • sg", "tan@bluepeak.com • sg"],
+    // 붙어 읽힌 「|」는 띄어 써요 — 공백이 있어야 형식 검사에 걸려요
+    [["tan@bluepeak.com|sg"], "tan@bluepeak.com | sg", "tan@bluepeak.com | sg"],
+    [["tan@bluepeak.com | sg"], "tan@bluepeak.com | sg", "tan@bluepeak.com | sg"],
+    // 다음 줄 꼬리는 띄어 이어요
+    [["tan@bluepeak.com", "sg"], "tan@bluepeak.com sg", "tan@bluepeak.com sg"],
+    [["tan@bluepeak.com.", "sg"], "tan@bluepeak.com. sg", "tan@bluepeak.com. sg"],
+    [["tan@bluepeak.co", "m.sg"], "tan@bluepeak.co m.sg", "tan@bluepeak.co m.sg"],
+    // 앞 메일 라벨은 칩 글자에는 남고 값에서는 빠져요
+    [["E. tan@bluepeak.com", "SG", "T. +65 6123 4567"], "E. tan@bluepeak.com SG", "tan@bluepeak.com SG"],
+    // co · ne · or 뒤 토막(같은 줄 구분자 · 라벨로 나뉨 · 다음 줄)
+    [["kim@x.co | rn"], "kim@x.co | rn", "kim@x.co | rn"],
+    [["kim@x.co M 010-1234-5678"], "kim@x.co M", "kim@x.co M"],
+    [["kim@x.co", "rn"], "kim@x.co rn", "kim@x.co rn"],
+    // 구분자 · 줄바꿈으로 떨어진 앞 덩어리
+    [["daeun / jung@x.co.kr"], "daeun / jung@x.co.kr", "daeun / jung@x.co.kr"],
+    [["daeun|jung@x.co.kr"], "daeun | jung@x.co.kr", "daeun | jung@x.co.kr"],
+    [["daeun.", "jung@x.co.kr"], "daeun. jung@x.co.kr", "daeun. jung@x.co.kr"],
+    // 나뉘지 않은 줄(전부터 읽은 그대로) — 붙은 잡음 · 앞에 붙은 글자 · 띄어 쓴 토막
+    [["kim@bluepeak.com-s&"], "kim@bluepeak.com-s&", "kim@bluepeak.com-s&"],
+    [["hong:gildong@x.com"], "hong:gildong@x.com", "hong:gildong@x.com"],
+    [["kim@x.co m"], "kim@x.co m", "kim@x.co m"],
+    [["tan@bluepeak.com sg"], "tan@bluepeak.com sg", "tan@bluepeak.com sg"],
+  ];
+  for (const [lines, text, value] of cases) {
+    const label = lines.join(" ↵ ");
+    const r = card(...lines);
+    assert.equal(r.values.email, "", label);
+    const chip = r.chips.find((c) => c.kind === "email");
+    assert.ok(chip, label);
+    assert.equal(chip.text, text, label);
+    assert.equal(chip.value, value, label);
+    // 눌러 넣는 값은 형식 검사(화면의 EMAIL_RE)에 걸려요 — 잘린 주소가 조용히 들어가지 않게
+    if (!value.includes("-s&") && !value.includes(":")) assert.equal(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value), false, label);
+    // 칩을 누르면 이 값이 이메일 칸에 들어가요
+    const tap = tapChip(chip, r.links, r.values, null);
+    assert.deepEqual(tap.set, { field: "email", value }, label);
+  }
+});
+
+test("UG-451 17022 · 의심이 아닌 메일 칩은 전처럼 뽑은 주소", () => {
+  for (const [lines, value] of [
+    [["kim@x.com T. 02-123-4567"], "kim@x.com"],
+    [["E. kim@x.com"], "kim@x.com"],
+    [["kim@x.com / www.x.com"], "kim@x.com"],
+    [["kim@x.com", "Seoul, Korea"], "kim@x.com"],
+  ] as [string[], string][]) {
+    const r = card(...lines);
+    assert.equal(r.values.email, value, lines.join(" ↵ "));
+    assert.equal(r.chips.find((c) => c.kind === "email")?.value, value, lines.join(" ↵ "));
+  }
+  // 한 줄에 주소가 둘이고 하나에만 꼬리가 붙었으면 그 칩만 꼬리까지 — 다른 칩은 뽑은 주소(채우지는 않아요)
+  const two = card("kim@x.com / tan@y.com · sg");
+  assert.equal(two.values.email, "");
+  assert.deepEqual(
+    two.chips.filter((c) => c.kind === "email").map((c) => c.value),
+    ["kim@x.com", "tan@y.com · sg"],
+  );
 });

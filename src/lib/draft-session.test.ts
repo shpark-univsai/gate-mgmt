@@ -6,7 +6,10 @@ import { test } from "node:test";
 import type { CardDraft, CardDraftInput } from "./api.ts";
 import {
   addLost,
+  draftEmailGate,
   forNewDraft,
+  gateAtClose,
+  ownDraftToDiscard,
   lostCandidates,
   photoPlan,
   recordSave,
@@ -168,4 +171,32 @@ test("응답 잃은 저장은 가장 최근 5개만 기억해요", () => {
     ["c2", "c3", "c4", "c5", "c6"],
   );
   assert.equal(l.since, T0);
+});
+
+test("UG-451 17022 · 이메일 확인이 「새 계정」으로 끝나기 전에는 자동 저장하지 않아요", () => {
+  // 이메일이 없거나 조회할 수 없는 모양이면 이메일 걱정이 없어요 — 남겨요
+  assert.equal(draftEmailGate("", false, null), "open");
+  assert.equal(draftEmailGate("tan@bluepeak.com · sg", false, null), "open");
+  // 조회 전 · 조회 중 · 조회 실패(결과 없음) — 기다려요(명함 읽기가 채운 이메일도)
+  assert.equal(draftEmailGate("kim@example.com", true, null), "wait");
+  // 새 계정이면 남겨요
+  assert.equal(draftEmailGate("kim@example.com", true, "new"), "open");
+  // 이미 있는 계정 — 사용 중 · 해지 중 · 첫 로그인 전
+  for (const s of ["in_use", "closing", "pending"] as const) assert.equal(draftEmailGate("kim@example.com", true, s), "existing", s);
+});
+
+test("UG-451 17022 · 닫을 때는 기다리던 이메일을 다시 확인한 결과로 — 그래도 모르면 전처럼 남겨요", () => {
+  assert.equal(gateAtClose("open", null), "open");
+  assert.equal(gateAtClose("existing", null), "existing");
+  assert.equal(gateAtClose("wait", "new"), "open");
+  for (const s of ["in_use", "closing", "pending"] as const) assert.equal(gateAtClose("wait", s), "existing", s);
+  // 다시 확인도 실패 — 입력이 사라지지 않게 남겨요
+  assert.equal(gateAtClose("wait", null), "open");
+});
+
+test("UG-451 17022 · 이미 있는 계정이면 이 창의 자동 저장이 만든 명함만 지워요(이어서 만든 원래 명함은 그대로)", () => {
+  const own = new Set(["41"]);
+  assert.equal(ownDraftToDiscard("41", own), "41");
+  assert.equal(ownDraftToDiscard("7", own), null); // 이어서 만들기로 연 명함
+  assert.equal(ownDraftToDiscard(null, own), null);
 });
