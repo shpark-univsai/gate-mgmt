@@ -38,6 +38,7 @@ import {
   type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
+import { isTextTruncated } from "@/lib/text-overflow";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
@@ -203,7 +204,8 @@ function GoneCardCompany({ account, query }: { account: Account; query: string }
     let alive = true;
     const measure = () => {
       if (!alive) return;
-      const cut = textEl.scrollWidth > textEl.clientWidth;
+      // 1px 보다 덜 넘쳐도 「…」가 그려져요 — 소수점 폭으로 재요(UG-450 기획 17003)
+      const cut = isTextTruncated(textEl);
       setTruncated(cut);
       if (!cut) setOpen(false);
     };
