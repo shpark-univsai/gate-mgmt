@@ -84,11 +84,12 @@ const SCRUBBED_EMAIL_TIP = "개인정보 보호를 위해 도메인만 남겼어
  * 고객 이메일. 파기 완료 · 철회한 기록은 서버가 이메일 · 회사명을 비우고 도메인(@example.com)만 남겨요 —
  * 도메인만 덩그러니 보이면 주소로 읽혀 「…@example.com」으로 앞이 지워졌음을 보여 주고 「—」와 같은 회색으로(UG-450).
  * tip: 마우스를 올리면 까닭(PC 목록 · 철회 창). 휴대폰 카드는 마우스가 없어 빼요.
+ * card: 휴대폰 카드 — 「…@example.com」을 PC 와 같은 13 으로(UG-450 기획 16995, 카드 이메일 14 보다 한 단계 작게).
  */
-function ClosureEmail({ closure, tip = false }: { closure: Closure; tip?: boolean }) {
+function ClosureEmail({ closure, tip = false, card = false }: { closure: Closure; tip?: boolean; card?: boolean }) {
   if (closure.email) return <span>{closure.email}</span>;
   return (
-    <span className="dash" title={tip ? SCRUBBED_EMAIL_TIP : undefined}>
+    <span className={card ? "dash dash-sm" : "dash"} title={tip ? SCRUBBED_EMAIL_TIP : undefined}>
       {`\u2026${closure.emailDomain}`}
     </span>
   );
@@ -108,6 +109,26 @@ const processedAtText = (c: Closure) =>
       : `${fmtFull(c.requestedAt)} 실행`;
 function processedAt(c: Closure) {
   return c.completedAt ? processedAtText(c) : <span className="help">{processedAtText(c)}</span>;
+}
+
+/**
+ * 휴대폰 카드 셋째 줄 「프로젝트 1개 · khj · 2026.11.03 11:00 철회」(UG-450 기획 16995).
+ * 처리자가 없으면(철회 · 처리 중 등) 그 칸을 구분점과 함께 빼요 — 「·  ·」 겹침 없이.
+ * 한 줄 고정: 처리자 이름이 길면 그 칸만 말줄임 — 프로젝트 수 · 처리 일시는 늘 다 보이고 카드 높이도 그대로예요.
+ */
+function ClosureCardMeta({ closure }: { closure: Closure }) {
+  const who = handle(closure.processedBy);
+  return (
+    <span className="card-meta card-meta-parts">
+      <span>{`프로젝트 ${closure.projectCount}개`}</span>
+      {who && (
+        <span className="card-meta-who" title={who}>
+          {` · ${who}`}
+        </span>
+      )}
+      <span>{` · ${processedAtText(closure)}`}</span>
+    </span>
+  );
 }
 
 type ToastState = { title: string; detail: string; tone?: "error" } | null;
@@ -416,7 +437,7 @@ export default function ClosuresPage() {
               </div>
               <div className="card-line">
                 <span className="card-email">
-                  <ClosureEmail closure={c} />
+                  <ClosureEmail closure={c} card />
                 </span>
                 {c.status === "failed" ? (
                   <button type="button" className="link-action" onClick={() => retry(c)} disabled={retrying !== null}>
@@ -431,9 +452,7 @@ export default function ClosuresPage() {
                 )}
               </div>
               <div className="card-line">
-                <span className="card-meta">
-                  {`프로젝트 ${c.projectCount}개 · ${handle(c.processedBy)} · ${processedAtText(c)}`}
-                </span>
+                <ClosureCardMeta closure={c} />
               </div>
             </li>
           ))}

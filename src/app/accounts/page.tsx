@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Dialog, PopupSelect, Toast } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { fmtFull, fmtShort, handle, kstParts, pageItems } from "@/lib/format";
@@ -180,6 +180,88 @@ function StatusWithRecord({ account }: { account: Account }) {
 function CompanyCell({ account, query }: { account: Account; query: string }) {
   if (account.company) return <Highlight text={account.company} query={query} />;
   return isGone(account) ? <span className="gone-company">삭제됨</span> : <span className="dash">—</span>;
+}
+
+/**
+ * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 — 회사명(또는 「삭제됨」)이 카드 폭을 다 써요(UG-450 기획 16995).
+ * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(휴대폰은 마우스를 올릴 수 없어 title 이 보이지 않아요).
+ * 말줄임되지 않은 이름은 그냥 글자 — 누를 것이 없어요. 바깥을 누르거나 Esc 면 닫혀요.
+ */
+function GoneCardCompany({ account, query }: { account: Account; query: string }) {
+  const [textEl, setTextEl] = useState<HTMLElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const tipId = useId();
+  const shown = open && truncated;
+
+  // 카드 폭이 바뀌면(화면 회전 등) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
+  // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴로 바뀜 · 회사명 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
+  // 말줄임이 풀리면 열린 말풍선도 닫아요 — 다시 잘려도 저절로 열리지 않게.
+  useEffect(() => {
+    if (!textEl) return;
+    let alive = true;
+    const measure = () => {
+      if (!alive) return;
+      const cut = textEl.scrollWidth > textEl.clientWidth;
+      setTruncated(cut);
+      if (!cut) setOpen(false);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(textEl);
+    document.fonts?.ready.then(measure).catch(() => {});
+    return () => {
+      alive = false;
+      ro.disconnect();
+    };
+  }, [textEl, account.company, query]);
+
+  useEffect(() => {
+    if (!shown) return;
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [shown]);
+
+  const text = (
+    <strong ref={setTextEl} className="card-company card-company-line">
+      <CompanyCell account={account} query={query} />
+    </strong>
+  );
+  return (
+    <div className="card-company-full" ref={wrapRef}>
+      {truncated ? (
+        <button
+          type="button"
+          className="card-company-tap"
+          aria-describedby={shown ? tipId : undefined}
+          onClick={() => setOpen((v) => !v)}
+          // Tab 으로 다른 곳에 가면 닫아요(반박 리뷰)
+          onBlur={(e) => {
+            if (!wrapRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
+          }}
+        >
+          {text}
+        </button>
+      ) : (
+        text
+      )}
+      {shown && (
+        <span role="tooltip" id={tipId} className="card-company-tip">
+          {account.company || "삭제됨"}
+        </span>
+      )}
+    </div>
+  );
 }
 
 /** 상태 글자(메일 실패 까닭 포함) — 목록 줄과 확인 창이 같은 말을 써요. */
@@ -1019,35 +1101,47 @@ export default function AccountsPage() {
               </div>
             </li>
           ))}
-          {visible.map((a) => (
-            <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}${isGone(a) ? " is-cancelled" : ""}`}>
-              <div className="card-line">
-                <strong className="card-company">
-                  <CompanyCell account={a} query={applied.keyword} />
-                </strong>
-                <span className="card-status">
-                  <StatusWithRecord account={a} />
-                  {/* 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
-                  {a.status === "pending" && <CardMore label="발급 취소" onSelect={() => setCancelTarget(a)} />}
-                </span>
-              </div>
-              <div className="card-line">
-                <span className="card-email">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
-                {canResend(a) && (
-                  <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
-                    <IcReload size={14} />
-                    재발송
-                  </button>
-                )}
-              </div>
-              {/* 발급 취소 · 해지됨 카드는 처리 기록을 상태 옆으로 옮겨(UG-450 기획 16965) 이 줄이 없어요 — 전처럼 메일 언어 · 만든 정보는 보이지 않아요 */}
-              {!isGone(a) && (
+          {visible.map((a) =>
+            isGone(a) ? (
+              // 발급 취소 · 해지됨 카드(UG-450 기획 16995): 첫 줄은 회사명(「삭제됨」)만 카드 폭 전체로, 둘째 줄은 이메일(늘 「—」) 자리에
+              // 상태 배지 + 처리 기록(「● 발급 취소 11.04 14:51 · khj」) — 카드 높이는 그대로, 메일 언어 · 만든 정보 줄은 전처럼 없어요
+              <li key={a.id} className={`card-row is-cancelled${a.id === freshId ? " is-new" : ""}`}>
+                <div className="card-line">
+                  <GoneCardCompany account={a} query={applied.keyword} />
+                </div>
+                <div className="card-line">
+                  <span className="card-status card-status--record">
+                    <StatusWithRecord account={a} />
+                  </span>
+                </div>
+              </li>
+            ) : (
+              <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
+                <div className="card-line">
+                  <strong className="card-company">
+                    <CompanyCell account={a} query={applied.keyword} />
+                  </strong>
+                  <span className="card-status">
+                    <StatusWithRecord account={a} />
+                    {/* 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
+                    {a.status === "pending" && <CardMore label="발급 취소" onSelect={() => setCancelTarget(a)} />}
+                  </span>
+                </div>
+                <div className="card-line">
+                  <span className="card-email">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
+                  {canResend(a) && (
+                    <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
+                      <IcReload size={14} />
+                      재발송
+                    </button>
+                  )}
+                </div>
                 <div className="card-line">
                   <span className="card-meta">{`${languageShort(a.language)} · ${handle(a.createdBy) || "—"} · ${fmtShort(a.createdAt)}`}</span>
                 </div>
-              )}
-            </li>
-          ))}
+              </li>
+            ),
+          )}
         </ul>
 
         {total > 0 && (
