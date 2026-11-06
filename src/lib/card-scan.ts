@@ -407,6 +407,7 @@ const GLUED_OK_RE = /^[.,;:|)\]}>"'’”」』〉》）。、，；：］】]+$
  * - 한글: 끝 도메인 뒤에 붙어요(「…com전화02-…」 「…co.kr홈페이지」)
  * 영어 한 글자(T · M · F · P · H · C)는 바로 뒤가 전화번호일 때만(GLUED_PHONE_LETTER_RE) — 「…coM」 「…neT」는 끝 글자가 대문자로 읽힌
  * 잘린 주소(.com · .net)일 수 있어요. E 한 글자도 같은 까닭으로 받지 않아요. 라벨이 아닌 대문자 덩어리(「…comSG」)는 나라 도메인 앞 점을 놓친 것일 수 있어 의심.
+ * 대문자를 떼고 남는 끝 도메인이 co · ne · or(CUT_TLD_RE)이면 라벨이어도 받지 않아요 — 「…coM 010-…」 「…neT 02-…」 「…coTel」은 의심(반박 리뷰).
  */
 const GLUED_LABEL_RE = new RegExp(
   "^(?:(?:Telephone|Tel|TEL|Phone|PHONE|Mobile|MOBILE|Mob|Cell|CELL|HP|Fax|FAX|Direct|DID|E-mail|E-Mail|Email|EMAIL|Mail|MAIL|" +
@@ -424,21 +425,39 @@ const GLUED_LOWER_LABEL_TLD_RE = /^(?:com|net|org|co|kr|sg)(?:tel|fax|mobile|mob
 
 // 주소 앞에 띄어쓰기 없이 붙어도 되는 여는 괄호 · 따옴표(「(kim@…」 「「kim@…」) — 그 앞은 다시 줄 처음 · 공백 · 메일 라벨이어야 해요
 const OPENERS_END_RE = /[(<[{"'“‘「『（［【〈《]+$/u;
-// 주소 바로 앞의 메일 라벨 끝(「E:」 「E.」 「E)」 「Email:」 「E-mail:」 「Mail:」 「이메일:」 「메일」 …, 쌍점 없이도)
-const EMAIL_LABEL_END_RE = new RegExp(`(?:^|[\\s(<\\[])${EMAIL_LABEL}\\s*[.:)]?$`);
+// 주소 바로 앞의 메일 라벨 끝(「E:」 「e.」 「E)」 「E>」 「Email▶」 「E-MAIL:」 「e.mail:」 「Mail to:」 「이메일：」 「메일」 …, 쌍점 없이도) —
+// 대소문자 · 전각 기호(： ． ）)도 받아요. 그 밖의 기호(✉ © /)가 붙으면 라벨로 보지 않아요(반박 리뷰)
+const EMAIL_LABEL_END_RE = /(?:^|[\s(<[])(?:e[-.]?mail|e|mail(?:\s*to)?|이메일|메일)\s*[.:)>▶►→：．）]?$/i;
+// 끝 글자를 대문자로 읽으면 정규식이 그 글자를 떼고 남는 끝 도메인(co · ne · or ← com · net · org) — 여기에 대문자가 붙으면 라벨로 보지 않아요
+const CUT_TLD_RE = /^(?:co|ne|or)$/i;
 
 /**
- * 주소 뒤에 남은 것이 1~2글자 로마자 토막뿐인지(UG-451 기획 17005 반박 리뷰) — 공백 · 구분자 · 줄바꿈으로 떨어져 읽힌 나라 도메인 꼬리
- * (「… · sg」 「… / sg」 「…|sg」 「… sg.」 「… SG)」 「… S G」 「…co m.sg」 「…co m」). 칩을 나누면 꼬리가 떨어져 나가
- * 칩만 봐서는 몰라요 — 읽은 줄 그대로에서도 봐요(readSegments). 토막이 하나도 없으면 false.
- * 「… T. 02-…」(라벨 + 번호) · 「…, www.x.com」(3글자 이상) 처럼 다른 것이 섞이면 false.
+ * 떨어져 읽힌 나라 도메인 꼬리로 보는 나라(반박 리뷰) — 명함에 흔한 아시아 · 영연방 나라만.
+ * 부서 · 직함 · 낱말과 겹치는 나라 도메인은 뺐어요: it(IT) · ai(AI) · pr(PR) · hr(HR) · in · me · tv · co · us · de · do · go · la · mo · to · so · is · am · be · no · ca · io.
+ * 그래서 메일 뒤의 「(HQ)」 「/ IT」 「| PR」 「· VP」 「Jr.」, 다음 줄의 「HR」 「KT」 「AI」 「UX UI」 같은 짧은 낱말은 채움을 막지 않아요.
  */
-function ccFragmentOnly(rest: string): boolean {
+const CC_FRAGMENT = "sg|kr|my|hk|jp|cn|tw|au|nz|uk|ph|th|vn|id|kh|mm|bd|pk|lk|np|ae";
+// 꼬리를 이어 붙인 모양: (잘린 끝 도메인 조각 m · t · g · com · co …) + 나라(「sg」 「m.sg」 「S G」 「co kr」)
+const CC_FRAGMENT_RE = new RegExp(`^(?:m|t|g|com|net|org|co|ne|or|ac|go|edu|gov)?(?:${CC_FRAGMENT})$`);
+
+/**
+ * 주소 뒤에 남은 것이 떨어져 읽힌 나라 도메인 꼬리뿐인지(UG-451 기획 17005 반박 리뷰) — 공백 · 구분자 · 줄바꿈으로 떨어져 읽힌 꼬리
+ * (「… · sg」 「… / sg」 「…|sg」 「… sg.」 「… SG)」 「… S G」 「…co m.sg」 「…co kr」). 칩을 나누면 꼬리가 떨어져 나가
+ * 칩만 봐서는 몰라요 — 읽은 줄 그대로에서도 봐요(readSegments). 토막(로마자 1~3글자, 3개까지)을 이어 붙여 CC_FRAGMENT_RE 모양이면 true.
+ * loose = 같은 줄 — 로마자 한 글자만 남은 것(「…com s」, 나라 도메인이 덜 읽힘)도 true. 다음 줄은 한 글자(「M」 「T」 「i」 — 라벨 · 잡음)로는 비우지 않아요.
+ * 「… T. 02-…」(라벨 + 번호) · 「…, www.x.com」 · 「(HQ)」 처럼 다른 것이면 false.
+ */
+function ccFragmentOnly(rest: string, loose = false): boolean {
   const tokens = rest
     .split(/[\s·・•/|,;:.]+/)
     .map((t) => t.replace(/^[(<[{"'“‘「『（［【〈《]+|[)\]}>"'’”」』）。、，；：］】]+$/gu, ""))
     .filter(Boolean);
-  return tokens.length > 0 && tokens.every((t) => /^[A-Za-z]{1,2}$/.test(t));
+  return (
+    tokens.length > 0 &&
+    tokens.length <= 3 &&
+    tokens.every((t) => /^[A-Za-z]{1,3}$/.test(t)) &&
+    (CC_FRAGMENT_RE.test(tokens.join("").toLowerCase()) || (loose && tokens.join("").length === 1))
+  );
 }
 
 /**
@@ -487,9 +506,12 @@ function emailSuspicion(text: string): EmailSuspicion | null {
   }
 
   // 소문자 끝 도메인에 붙은 대문자 덩어리(「…comTel」의 Tel) — 주소가 아니라 뒤에 붙은 것으로 봐요
-  const caps = m[0].slice(m[0].lastIndexOf(".") + 1).match(/^[a-z]{2,}([A-Z][A-Za-z]*)$/)?.[1] ?? "";
+  const capsMatch = m[0].slice(m[0].lastIndexOf(".") + 1).match(/^([a-z]{2,})([A-Z][A-Za-z]*)$/);
+  const caps = capsMatch?.[2] ?? "";
   const glued = caps + after;
-  const label = glued !== "" && (GLUED_LABEL_RE.test(glued) || GLUED_PHONE_LETTER_RE.test(glued));
+  // 「…coM」 「…neT 02-…」 「…coTel」: 남는 끝 도메인이 co · ne · or 이면 끝 글자를 대문자로 읽은 .com · .net · .org 일 수 있어 라벨로 보지 않아요(반박 리뷰)
+  const cutTld = caps !== "" && CUT_TLD_RE.test(capsMatch?.[1] ?? "");
+  const label = !cutTld && glued !== "" && (GLUED_LABEL_RE.test(glued) || GLUED_PHONE_LETTER_RE.test(glued));
   let tail = "";
   let glue = false;
   if (caps && !label) {
@@ -499,11 +521,20 @@ function emailSuspicion(text: string): EmailSuspicion | null {
     const chunk = after.match(/^\S+/)?.[0] ?? "";
     tail =
       after.match(/^\s*[.,·・•]\s*[A-Za-z0-9]{1,4}(?![A-Za-z0-9.@])/)?.[0] ??
-      (ccFragmentOnly(after) ? after : chunk && !GLUED_OK_RE.test(chunk) ? chunk : "");
+      (ccFragmentOnly(after, true) || cutTldLetterAfter(m[0], after) ? after : chunk && !GLUED_OK_RE.test(chunk) ? chunk : "");
   }
   const tld = extractEmail(line).split(".").pop() ?? "";
   const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld) || GLUED_LOWER_LABEL_TLD_RE.test(tld);
   return { match: m[0], head, tail, typo, glue };
+}
+
+/**
+ * 끝 도메인이 co · ne · or 로 끝나고 바로 뒤(공백 하나까지)에 m · t · g 한 글자가 따로 읽혔는지(「…co m」 「…co M 010-…」 「…ne T 02-…」) —
+ * .com · .net · .org 의 끝 글자가 떨어져 읽힌 것일 수 있어요(반박 리뷰). 「…co.kr」 같은 다른 끝 도메인은 보지 않아요.
+ */
+function cutTldLetterAfter(address: string, after: string): boolean {
+  const tld = address.slice(address.lastIndexOf(".") + 1);
+  return CUT_TLD_RE.test(tld) && /^\s?[mtg](?![A-Za-z])/i.test(after);
 }
 
 /**
@@ -516,7 +547,7 @@ function emailSuspicion(text: string): EmailSuspicion | null {
 function lineHasEmailFragment(line: string, next: string): boolean {
   for (const m of line.matchAll(EMAIL_RE_G)) {
     const after = line.slice(m.index + m[0].length);
-    if (ccFragmentOnly(after)) return true;
+    if (ccFragmentOnly(after, true) || cutTldLetterAfter(m[0], after)) return true;
     const rest = after.trim();
     if ((rest === "" || GLUED_OK_RE.test(rest)) && next !== "" && ccFragmentOnly(next) && next.split(/\s+/).length <= 2) return true;
   }
