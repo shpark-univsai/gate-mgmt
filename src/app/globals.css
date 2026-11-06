@@ -417,6 +417,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .popup-select-option[aria-selected="true"] { font-weight: 600; }
 .popup-select-check { flex: none; color: var(--gray-0); }
 .count { margin-left: auto; color: var(--gray-500); white-space: nowrap; } /* 옆에 안내가 붙어도 「총 N개」는 한 줄로 */
+.count.is-hidden { visibility: hidden; } /* 목록을 받지 못했을 때 — 자리는 그대로(UG-451 기획 17005) */
 /* 목록 불러오기 실패 안내 — 검색 줄과 목록 사이 한 줄씩(UG-451). 위아래 간격은 검색 줄 ↔ 목록 간격(16)과 같게 */
 .list-errors { display: flex; flex-direction: column; gap: 4px; margin-bottom: -8px; }
 .list-errors .error { margin: 0; }

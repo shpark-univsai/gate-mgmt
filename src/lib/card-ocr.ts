@@ -21,6 +21,15 @@ const PREVIEW_QUALITY = 0.8;
 // tesseract 는 파일 단위로만 소식을 줘요 — 큰 파일(언어 데이터)을 받는 동안에는 소식이 없어 넉넉히(UG-451 반박 리뷰)
 const LOAD_IDLE_MS = 150_000;
 const LOAD_MAX_MS = 300_000;
+/**
+ * 도구 받기가 실패(오류로 끝남 — 인터넷이 잠깐 끊김 등)하면 이만큼 쉬고 한 번만 다시 받아요(UG-451 기획 17005).
+ * 다시 받기도 처음 시작부터 센 LOAD_MAX_MS(5분) 안에서만 — 한 번 더 받는다고 기다림이 두 배가 되지 않아요.
+ * 시간 초과(소식 없이 LOAD_IDLE_MS · 모두 LOAD_MAX_MS)로 끊긴 것은 다시 받지 않아요 — 이미 오래 기다렸고, 멈춘 일꾼은 닫을 수 없어 둘이 함께 받게 돼요.
+ * 다시 받기는 화면(페이지)을 연 동안 한 번뿐이에요(retryUsed) — 실패한 일꾼은 tesseract 가 돌려주지 않아 닫을 수 없어,
+ * 실패할 때마다 다시 받으면 닫지 못한 일꾼이 쌓여요(반박 리뷰). 그 뒤 실패는 전처럼 바로 안내해요.
+ */
+const LOAD_RETRY_DELAY_MS = 2_000;
+let retryUsed = false;
 const READ_TIMEOUT_MS = 60_000;
 
 /** 읽지 못한 까닭 — tool = 글자 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과), read = 읽다가 실패 */
@@ -80,11 +89,22 @@ async function prepare(file: Blob): Promise<{ canvas: HTMLCanvasElement | null; 
 type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 type OcrLog = { status: string; progress: number };
 
+/**
+ * 일꾼을 띄우고 도구를 받아요. tesseract 는 엔진(core)을 받지 못하면 약속을 끝내지만, 언어 데이터를 받지 못하면(인터넷이 잠깐 끊김 등)
+ * 약속이 끝나지 않고 오류만 errorHandler 로 알려요 — 그래서 띄우는 동안 온 오류로 실패를 바로 알아차려요(UG-451 기획 17005, 다시 받기).
+ * 띄운 뒤(글자 읽기 중) 오류는 그 읽기 약속이 따로 실패로 끝나요 — 여기서는 무시해요(errorHandler 가 없으면 tesseract 가 잡히지 않는 오류를 던져요).
+ * 실패한 일꾼은 tesseract 가 돌려주지 않아 닫을 수 없어요(전에도 같았어요 — 쉬는 일꾼이 남아요).
+ */
 async function startWorker(logger: (m: OcrLog) => void): Promise<OcrWorker> {
   // 화면 묶음에는 넣지 않고 처음 누를 때 받아요(목록 화면을 무겁게 하지 않게)
   const { createWorker, OEM } = await import("tesseract.js");
-  return createWorker(["kor", "eng"], OEM.LSTM_ONLY, {
+  const startup: { fail: ((reason: Error) => void) | null } = { fail: null };
+  const failed = new Promise<never>((_, reject) => {
+    startup.fail = reject;
+  });
+  const created = createWorker(["kor", "eng"], OEM.LSTM_ONLY, {
     logger,
+    errorHandler: (err: unknown) => startup.fail?.(new Error(`명함 읽기 도구 받기 실패: ${String(err)}`)),
     workerPath: asset("/ocr/worker.min.js"),
     corePath: asset("/ocr/core"),
     langPath: asset("/ocr/lang"),
@@ -94,6 +114,11 @@ async function startWorker(logger: (m: OcrLog) => void): Promise<OcrWorker> {
     // 브라우저 저장소 이름에 모델 판(4.0.0_best_int)을 넣어요 — 언어 데이터를 바꾸면 옛 사본을 읽지 않게
     cachePath: "gate-mgmt-ocr-4.0.0_best_int",
   });
+  try {
+    return await Promise.race([created, failed]);
+  } finally {
+    startup.fail = null;
+  }
 }
 
 /** 늦게라도 뜬 일꾼은 닫아요(시간 초과 · 창 닫기 뒤). 끝나지 않는 약속이면 할 수 있는 게 없어요. */
@@ -117,9 +142,8 @@ export function createCardReader() {
     else if (m.status === "loading language traineddata") onProgress?.(Math.round(30 + 70 * m.progress));
   }
 
-  /** 받는 동안 소식이 오면 기다림을 늘리는 한도(LOAD_IDLE_MS · LOAD_MAX_MS) */
-  function withLoadTimeout<T>(work: Promise<T>): Promise<T> {
-    const started = Date.now();
+  /** 받는 동안 소식이 오면 기다림을 늘리는 한도(LOAD_IDLE_MS · LOAD_MAX_MS). started = 처음 받기 시작한 시각(다시 받기도 같은 시각부터 세요) */
+  function withLoadTimeout<T>(work: Promise<T>, started: number): Promise<T> {
     let timer: ReturnType<typeof setInterval> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setInterval(() => {
@@ -132,18 +156,47 @@ export function createCardReader() {
     return Promise.race([work, timeout]).finally(() => clearInterval(timer));
   }
 
+  /** 도구 받기 한 번(다시 받기 포함). live = 아직 기다리는 받기인지 — 시간 초과 · 창 닫기 뒤에는 false 라 다시 받지 않아요(반박 리뷰) */
+  type LoadAttempt = { live: boolean };
+  let attempt: LoadAttempt | null = null;
+
+  /**
+   * 도구 받기 — 오류로 끝나면 LOAD_RETRY_DELAY_MS 뒤 한 번만 다시. 이 받기가 아직 지금 받기이고(시간 초과 · 창 닫기 전),
+   * 페이지에서 다시 받기를 쓴 적이 없고, 남은 시간이 있을 때만. 진행률은 다시 0 부터 알려요.
+   */
+  async function startWithRetry(started: number, mine: LoadAttempt): Promise<OcrWorker> {
+    try {
+      return await startWorker(logger);
+    } catch (first) {
+      lastActivity = Date.now();
+      const current = () => mine.live && attempt === mine && !disposed;
+      if (retryUsed || !current() || Date.now() + LOAD_RETRY_DELAY_MS - started >= LOAD_MAX_MS) throw first;
+      retryUsed = true;
+      await new Promise((resolve) => setTimeout(resolve, LOAD_RETRY_DELAY_MS));
+      if (!current()) throw first;
+      lastActivity = Date.now();
+      return startWorker(logger);
+    }
+  }
+
+  // 지금 받는 도구의 시작 시각 — 받는 중에 다시 찍어 read 가 또 불려도 처음 시각부터 세요
+  let loadStarted = 0;
+
   function ready(): Promise<OcrWorker> {
     if (!worker) {
-      lastActivity = Date.now();
-      const starting = startWorker(logger);
+      loadStarted = lastActivity = Date.now();
+      const mine: LoadAttempt = { live: true };
+      attempt = mine;
+      const starting = startWithRetry(loadStarted, mine);
       worker = starting;
-      // 실패 · 시간 초과면 버려요(시간 초과 뒤에 뜨면 닫아요)
-      withLoadTimeout(starting).catch(() => {
+      // 실패 · 시간 초과면 버려요(시간 초과 뒤에 뜨면 닫아요). 시간 초과 뒤 첫 받기의 늦은 오류로 다시 받지 않게 live 를 꺼요
+      withLoadTimeout(starting, loadStarted).catch(() => {
+        mine.live = false;
         if (worker === starting) worker = null;
         closeLater(starting);
       });
     }
-    return withLoadTimeout(worker);
+    return withLoadTimeout(worker, loadStarted);
   }
 
   /**
@@ -193,6 +246,8 @@ export function createCardReader() {
 
   function dispose() {
     disposed = true;
+    if (attempt) attempt.live = false;
+    attempt = null;
     if (worker) closeLater(worker);
     worker = null;
   }

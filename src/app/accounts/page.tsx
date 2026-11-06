@@ -38,6 +38,7 @@ import {
   type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
+import { isTextTruncated } from "@/lib/text-overflow";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
@@ -203,7 +204,8 @@ function GoneCardCompany({ account, query }: { account: Account; query: string }
     let alive = true;
     const measure = () => {
       if (!alive) return;
-      const cut = textEl.scrollWidth > textEl.clientWidth;
+      // 1px 보다 덜 넘쳐도 「…」가 그려져요 — 소수점 폭으로 재요(UG-450 기획 17003)
+      const cut = isTextTruncated(textEl);
       setTruncated(cut);
       if (!cut) setOpen(false);
     };
@@ -940,7 +942,11 @@ export default function AccountsPage() {
               </button>
             ))}
           </div>
-          <span className="count">총 {total}개</span>
+          {/* 목록을 받지 못했으면(처음 불러오는 중 포함) 「총 N개」를 가려요 — 요약 칩은 「전체 42」인데 목록 위가 「총 0개」로 읽혔어요(UG-451 기획 17005).
+              자리는 남겨(visibility) 옆 안내 · 아래 목록이 움직이지 않게 해요. 다시 받으면 보여요. */}
+          <span className={`count${loaded && !loadError ? "" : " is-hidden"}`} aria-hidden={loaded && !loadError ? undefined : true}>
+            총 {total}개
+          </span>
           {draftsCut && <span className="help">작성 중인 명함이 많아 최근 100개만 보입니다.</span>}
         </form>
 

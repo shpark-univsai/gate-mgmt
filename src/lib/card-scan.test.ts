@@ -226,3 +226,318 @@ test("UG-451 16991 ⑦ 전화번호 모양이 아닌 번호는 라벨이 있어�
   ];
   for (const [line, phone] of ok) assert.equal(card(line).values.phone, phone, line);
 });
+
+test("UG-451 17005 끝 도메인 바로 뒤에 글자 · 숫자 · 기호가 붙으면 채우지 않아요(잘렸을 수 있어요)", () => {
+  const suspect: [string, string][] = [
+    // [읽은 줄, 칩 값(읽은 그대로 — 눌러 넣으면 형식 오류로 보여요)]
+    ["marcus.wong@bluepeak.com-s&", "marcus.wong@bluepeak.com-s&"],
+    ["E. marcus.wong@bluepeak.com-s&", "marcus.wong@bluepeak.com-s&"],
+    ["kim@x.com&", "kim@x.com&"],
+    ["kim@x.com58", "kim@x.com58"],
+    ["kim@x.com-sg", "kim@x.com-sg"],
+    ["kim@x.com_sg", "kim@x.com_sg"],
+    ["kim@x.com/sg", "kim@x.com/sg"],
+    ["kim@x.com#", "kim@x.com#"],
+    ["kim@x.com-", "kim@x.com-"],
+    ["kim@x.com.-", "kim@x.com.-"],
+    ["kim@x.com,www.x.com", "kim@x.com,www.x.com"],
+    // 라벨이 아닌 대문자 덩어리가 붙음(나라 도메인 앞 점을 놓침)
+    ["kim@x.comSG", "kim@x.comSG"],
+    ["kim@x.co.krKR", "kim@x.co.krKR"],
+  ];
+  for (const [line, value] of suspect) {
+    assert.equal(isSuspectEmail(line), true, line);
+    const r = card("Company-A", line, "M. 010-1234-5678");
+    assert.equal(r.values.email, "", line);
+    assert.equal(r.links.email, undefined, line);
+    const chip = r.chips.find((c) => c.kind === "email");
+    assert.ok(chip, line);
+    assert.equal(chip.value, value, line);
+    // 칩 글자는 읽은 그대로
+    assert.ok(line.endsWith(chip.text.replace(/^E\. /, "")), line);
+  }
+  // 소문자로 붙은 나라 도메인(점을 놓침)도 오독으로 봐요
+  for (const line of ["marcus.wong@bluepeak.comsg", "kim@x.cokr", "kim@x.netmy"]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    assert.equal(card(line).values.email, "", line);
+  }
+  // 다른 정상 메일 칩이 있어도 비워요(규칙 그대로)
+  assert.equal(card("sales@x.com", "marcus.wong@bluepeak.com-s&").values.email, "");
+});
+
+test("UG-451 17005 맺음 기호 · 띄어쓰기 · 라벨만 붙은 주소는 그대로 채워요", () => {
+  const ok: [string, string][] = [
+    ["kim@x.com", "kim@x.com"],
+    ["kim@x.com.", "kim@x.com"],
+    ["kim@x.com,", "kim@x.com"],
+    ["kim@x.com;", "kim@x.com"],
+    ["kim@x.com|", "kim@x.com"],
+    ["(kim@x.com)", "kim@x.com"],
+    ["<kim@x.com>", "kim@x.com"],
+    ["\"kim@x.com\"", "kim@x.com"],
+    ["E: kim@x.com).", "kim@x.com"],
+    ["kim@x.com T. 02-123-4567", "kim@x.com"],
+    ["kim@x.com, www.x.com", "kim@x.com"],
+    ["kim@x.comTel", "kim@x.com"],
+    ["kim@x.comFax", "kim@x.com"],
+    ["kim@x.com.sg", "kim@x.com.sg"],
+    ["kim@x.co.kr", "kim@x.co.kr"],
+    ["kim@company-a.network", "kim@company-a.network"],
+  ];
+  for (const [line, email] of ok) {
+    assert.equal(isSuspectEmail(line), false, line);
+    assert.equal(card(line).values.email, email, line);
+  }
+});
+
+test("UG-451 17005 리뷰 · 끝 도메인에 붙은 라벨은 떼고 라벨 뒤는 보지 않아요", () => {
+  const ok: [string, string][] = [
+    ["kim@x.comTel:02-123-4567", "kim@x.com"],
+    ["kim@x.comTel:+65 6123 4567", "kim@x.com"],
+    ["kim@x.comTel)02-123-4567", "kim@x.com"],
+    ["kim@x.comM:010-1234-5678", "kim@x.com"],
+    ["kim@x.comM.010-1234-5678", "kim@x.com"],
+    ["kim@x.comT:6123 4567", "kim@x.com"],
+    ["kim@x.comT +65 6123 4567", "kim@x.com"],
+    ["kim@x.co.krTel02-123-4567", "kim@x.co.kr"],
+    ["kim@x.co.krTel.02-123-4567", "kim@x.co.kr"],
+    ["kim@x.comTEL. 02-123-4567", "kim@x.com"],
+    ["E:kim@x.comWeb:www.x.com", "kim@x.com"],
+    ["E-mail:kim@x.co.krHomepage:www.x.co.kr", "kim@x.co.kr"],
+    // 한글 라벨도 붙어 읽히면 떼요
+    ["kim@x.com전화02-123-4567", "kim@x.com"],
+    ["kim@x.co.kr휴대폰010-1234-5678", "kim@x.co.kr"],
+    ["kim@x.com팩스:02-123-4568", "kim@x.com"],
+    ["kim@x.com홈페이지", "kim@x.com"],
+    ["kim@x.co.kr홈페이지:www.x.co.kr", "kim@x.co.kr"],
+  ];
+  for (const [line, email] of ok) {
+    assert.equal(isSuspectEmail(line), false, line);
+    assert.equal(card(line).values.email, email, line);
+  }
+});
+
+test("UG-451 17005 리뷰 · 한 글자 대문자는 뒤가 전화번호일 때만 라벨 — 아니면 잘린 끝 도메인일 수 있어요", () => {
+  for (const line of ["tan@bluepeak.coM", "kim@x.neT", "kim@x.orG", "kim@x.coE", "kim@x.coP", "kim@x.coH", "kim@x.coF", "kim@x.coT", "kim@x.comT/02-123-4567"]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    assert.equal(card(line).values.email, "", line);
+  }
+  // 칩 값은 읽은 그대로(잘린 주소가 조용히 들어가지 않게)
+  assert.equal(card("tan@bluepeak.coM").chips[0].value, "tan@bluepeak.coM");
+});
+
+test("UG-451 17005 리뷰 · 주소 바로 앞에 붙은 글자 · 기호가 있으면 채우지 않아요", () => {
+  for (const line of [
+    "hong:gildong@x.com",
+    "hong'gildong@x.com",
+    "hong—gildong@x.com",
+    "hong，gildong@x.com",
+    "hong。gildong@x.com",
+    "hong/gildong@x.com",
+    "hong(gildong@x.com",
+    "hong)gildong@x.com",
+    "hong홍gildong@x.com",
+    "hong;gildong@x.com",
+    "hong*gildong@x.com",
+  ]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    const r = card(line);
+    assert.equal(r.values.email, "", line);
+    // 칩 값은 앞 덩어리까지 읽은 그대로
+    assert.equal(r.chips[0].value, line, line);
+  }
+  // 줄 처음 · 공백 · 여는 괄호 · 따옴표 · 메일 라벨 끝은 괜찮아요
+  const ok: [string, string][] = [
+    ["E:kim@x.com", "kim@x.com"],
+    ["E)kim@x.com", "kim@x.com"],
+    ["E.kim@x.com", "kim@x.com"],
+    ["Email:kim@x.com", "kim@x.com"],
+    ["E-mail:kim@x.com", "kim@x.com"],
+    ["Mail:kim@x.com", "kim@x.com"],
+    ["이메일:kim@x.com", "kim@x.com"],
+    ["메일kim@x.com", "kim@x.com"],
+    ["(kim@x.com)", "kim@x.com"],
+    ["[kim@x.com]", "kim@x.com"],
+    ["「kim@x.com」", "kim@x.com"],
+    ["“kim@x.com”", "kim@x.com"],
+    ["Email: (kim@x.com)", "kim@x.com"],
+    ["hong-gildong@x.com", "hong-gildong@x.com"],
+  ];
+  for (const [line, email] of ok) {
+    assert.equal(isSuspectEmail(line), false, line);
+    assert.equal(card(line).values.email, email, line);
+  }
+  // 구분자로 나뉜 조각은 그대로(기존 규칙)
+  for (const [lines, email] of [
+    [["UNIVS · kim@x.com"], "kim@x.com"],
+    [["010-1234-5678 · kim@x.com"], "kim@x.com"],
+    [["Email: kim@x.com"], "kim@x.com"],
+  ] as [string[], string][]) {
+    assert.equal(card(...lines).values.email, email, lines.join(" ↵ "));
+  }
+});
+
+test("UG-451 17005 리뷰 · 공백 · 구분자 · 줄바꿈으로 떨어진 1~2글자 꼬리가 있으면 채우지 않아요", () => {
+  for (const lines of [
+    ["tan@bluepeak.com · sg"],
+    ["tan@bluepeak.com • sg"],
+    ["tan@bluepeak.com / sg"],
+    ["tan@bluepeak.com | sg"],
+    ["tan@bluepeak.com|sg"],
+    ["kim@x.com sg."],
+    ["tan@bluepeak.com SG)"],
+    ["tan@bluepeak.com Sg"],
+    ["tan@bluepeak.com S G"],
+    ["tan@bluepeak.co m.sg"],
+    ["tan@bluepeak.co m"],
+    ["tan@bluepeak.com", "sg"],
+    ["tan@bluepeak.com", ".sg"],
+    ["tan@bluepeak.com.", "sg"],
+    ["tan@bluepeak.co", "m.sg"],
+    ["E. tan@bluepeak.com", "SG", "T. +65 6123 4567"],
+  ]) {
+    const r = card(...lines);
+    assert.equal(r.values.email, "", lines.join(" ↵ "));
+    assert.equal(r.links.email, undefined, lines.join(" ↵ "));
+    assert.ok(r.chips.some((c) => c.kind === "email"), lines.join(" ↵ "));
+  }
+  // 라벨 + 번호 · 3글자 이상 낱말 · 다음 줄이 다른 내용이면 그대로
+  const filled: [string[], string][] = [
+    [["kim@x.com T. 02-123-4567"], "kim@x.com"],
+    [["kim@x.com M +65 9123 4567"], "kim@x.com"],
+    [["kim@x.com, www.x.com"], "kim@x.com"],
+    [["kim@x.com / www.x.com"], "kim@x.com"],
+    [["kim@x.com Tel 02-123-4567"], "kim@x.com"],
+    [["kim@x.com (영업)"], "kim@x.com"],
+    [["kim@x.com", "www.x.com"], "kim@x.com"],
+    [["kim@x.com", "T. 02-123-4567"], "kim@x.com"],
+    [["kim@x.com", "Seoul, Korea"], "kim@x.com"],
+    [["kim@x.com", "서울시 중구"], "kim@x.com"],
+  ];
+  for (const [lines, email] of filled) assert.equal(card(...lines).values.email, email, lines.join(" ↵ "));
+});
+
+test("UG-451 17005 리뷰 · 전각 맺음 기호는 채우고, 붙은 괄호 글 · 소문자 라벨 · .cm 은 비워요", () => {
+  for (const line of ["kim@x.com）", "kim@x.com。", "kim@x.com、", "kim@x.com，", "kim@x.com；", "kim@x.com：", "kim@x.com."]) {
+    assert.equal(card(line).values.email, "kim@x.com", line);
+  }
+  for (const line of ["kim@x.co.kr(대표)", "kim@x.co.kr（대표）", "Email: kim@x.co.kr(영업팀)", "kim@x.comtel 02-123-4567", "kim@x.comfax", "tan@bluepeak.cm", "tan@bluepeak.om"]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    assert.equal(card(line).values.email, "", line);
+  }
+});
+
+test("UG-451 17005 재리뷰 · co · ne · or 뒤에 붙은 대문자는 라벨이어도 의심(.com · .net · .org 끝 글자일 수 있어요)", () => {
+  for (const line of [
+    "kim@x.coM 010-1234-5678",
+    "kim@x.coM.010-1234-5678",
+    "kim@x.coM)010-1234-5678",
+    "kim@x.coM +65 9123 4567",
+    "kim@x.neT 02-123-4567",
+    "kim@x.orG 02-123-4567",
+    "kim@x.coC 010-1234-5678",
+    "kim@x.coH.P 010-1234-5678",
+    "kim@x.coTel 02-123-4567",
+    "kim@x.coMobile 010-1234-5678",
+    "kim@x.coMail",
+    "kim@x.co M 010-1234-5678",
+    "kim@x.ne T 02-123-4567",
+  ]) {
+    assert.equal(card(line).values.email, "", line);
+  }
+  // com · net · org · co.kr 뒤 라벨은 그대로 떼고 채워요
+  const ok: [string, string][] = [
+    ["kim@x.comM.010-1234-5678", "kim@x.com"],
+    ["kim@x.comT +65 6123 4567", "kim@x.com"],
+    ["kim@x.netTel 02-123-4567", "kim@x.net"],
+    ["kim@x.co.krM.010-1234-5678", "kim@x.co.kr"],
+    ["kim@x.co", "kim@x.co"],
+    ["kim@x.co Tel 02-123-4567", "kim@x.co"],
+  ];
+  // .co 뒤에 띄어 쓴 한 글자 라벨(T · M · G)은 「.com」의 m 이 떨어진 것과 구별이 안 돼 비워요(안전 쪽 결정)
+  assert.equal(card("kim@x.co T. 02-123-4567").values.email, "");
+  for (const [line, email] of ok) assert.equal(card(line).values.email, email, line);
+});
+
+test("UG-451 17005 재리뷰 · 떨어진 꼬리는 나라 도메인 모양일 때만 — 부서 · 직함 · 짧은 잡음은 채워요", () => {
+  const filled: [string[], string][] = [
+    [["kim@x.com (HQ)"], "kim@x.com"],
+    [["kim@x.com / IT"], "kim@x.com"],
+    [["kim@x.com | PR"], "kim@x.com"],
+    [["kim@x.com · VP"], "kim@x.com"],
+    [["kim@x.com Jr."], "kim@x.com"],
+    [["kim@x.com (Mr)"], "kim@x.com"],
+    [["E kim@x.com HR"], "kim@x.com"],
+    ...["HR", "M", "M.", "T", "KT", "SK", "LG", "AI", "QR", "Go", "J.K", "UX UI", "ee", "i", "IT Team"].map(
+      (next): [string[], string] => [["kim@x.com", next], "kim@x.com"],
+    ),
+  ];
+  for (const [lines, email] of filled) assert.equal(card(...lines).values.email, email, lines.join(" ↵ "));
+  for (const lines of [
+    ["kim@x.com KR"],
+    ["tan@bluepeak.com s"],
+    ["tan@bluepeak.com · SG"],
+    ["kim@x.com / lee@y.com sg"],
+    ["kim@x.com", "sg"],
+    ["kim@x.com", "S G"],
+    ["kim@x.com", "my"],
+    ["kim@x.com, lee@y.com", "sg"],
+    ["tan@bluepeak.co", "m.sg"],
+  ]) {
+    assert.equal(card(...lines).values.email, "", lines.join(" ↵ "));
+  }
+});
+
+test("UG-451 17005 재리뷰 · 메일 라벨 끝은 대소문자 · 전각 기호 · ▶ · > 도 받아요", () => {
+  for (const line of [
+    "E-MAIL:kim@x.com",
+    "e-mail:kim@x.com",
+    "mail:kim@x.com",
+    "e:kim@x.com",
+    "e.mail:kim@x.com",
+    "E-mail：kim@x.com",
+    "이메일：kim@x.com",
+    "Mail to:kim@x.com",
+    "Email▶kim@x.com",
+    "E>kim@x.com",
+    "E:(kim@x.com)",
+  ]) {
+    assert.equal(isSuspectEmail(line), false, line);
+    assert.equal(card(line).values.email, "kim@x.com", line);
+  }
+  for (const line of ["✉kim@x.com", "©kim@x.com", "®kim@x.com", "Tel 02-123-4567/kim@x.com"]) {
+    assert.equal(card(line).values.email, "", line);
+  }
+});
+
+test("UG-451 17005 최종 확인 · co · ne · or 뒤에 띄어 쓴 1~2글자 토막이 오면 비워요", () => {
+  for (const line of [
+    "kim@x.co rn",
+    "kim@x.co rm",
+    "kim@x.co om",
+    "kim@x.ne tt",
+    "kim@x.or g",
+    "kim@x.co rn 010-1234-5678",
+    "kim@x.co · rn",
+    "kim@x.co / om",
+    "kim@x.co|rn",
+    "kim@x.co (rn)",
+  ]) {
+    assert.equal(card(line).values.email, "", line);
+  }
+  // 다음 줄이 토막 하나뿐 — co · ne · or 로 끝난 주소만
+  for (const lines of [["kim@x.co", "rn"], ["kim@x.co", "m"], ["kim@x.ne", "t."], ["kim@x.or", "(g)"]]) {
+    assert.equal(card(...lines).values.email, "", lines.join(" ↵ "));
+  }
+  for (const lines of [["kim@x.com", "rn"], ["kim@x.co.kr", "M"], ["kim@x.co", "Tel 02-123-4567"], ["kim@x.co", "www.x.co"]]) {
+    assert.equal(card(...lines).values.email, lines[0], lines.join(" ↵ "));
+  }
+  const filled: [string, string][] = [
+    ["kim@x.co.kr rn", "kim@x.co.kr"],
+    ["kim@x.com rn", "kim@x.com"],
+    ["kim@x.com Dr", "kim@x.com"],
+    ["kim@x.co Tel 02-123-4567", "kim@x.co"],
+    ["kim@x.net Fax 02-123-4568", "kim@x.net"],
+  ];
+  for (const [line, email] of filled) assert.equal(card(line).values.email, email, line);
+});
