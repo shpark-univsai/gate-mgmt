@@ -241,7 +241,8 @@ function ClipText({ text, query, className }: { text: string; query: string; cla
  * 아이패드(전시장 기기) · 휴대폰은 마우스를 올릴 수 없어 title 이 보이지 않아요 — 눌러서 봐요. 마우스로는 전처럼 올리면 전체 글자(title).
  * 말줄임되지 않은 글자는 그냥 글자(누를 것이 없어요). 말줄임 여부는 상자 · 글자 폭이 바뀔 때마다 다시 재요(isTextTruncated).
  * 말풍선은 화면에 고정(position: fixed)해 표의 옆 스크롤 상자에 잘리지 않게 하고, 바깥 누르기 · Esc · 스크롤 · 창 크기 바뀜 · 화면 이동(뒤로 가기) ·
- * 다른 곳으로 초점이 가면 닫혀요. 키보드: Tab 으로 가서 Enter · Space(버튼).
+ * 다른 곳으로 초점이 가면 닫혀요. 목록을 새로 받으면(resetOn — RowMenu 와 같게) 닫고, 줄이 사라지면 말풍선도 함께 없어져요(이 컴포넌트 안에 그려요).
+ * 키보드: Tab 으로 가서 Enter · Space(버튼).
  * text = 말풍선 · title 의 전체 글자, children = 보이는 글자(검색 강조 등), className = 말줄임 글자의 클래스, wrapClassName = 감싸는 상자의 클래스
  */
 function TapClip({
@@ -251,6 +252,7 @@ function TapClip({
   wrapClassName,
   strong = false,
   watch,
+  resetOn,
 }: {
   text: string;
   children: React.ReactNode;
@@ -259,6 +261,8 @@ function TapClip({
   strong?: boolean;
   /** 바뀌면 말줄임을 다시 재요(보이는 글자 · 검색어 — 상자 폭은 그대로인데 글자 폭만 바뀌는 경우) */
   watch: readonly unknown[];
+  /** 목록이 바뀌면(새로 불러옴 · 줄이 빠지거나 옮겨짐) 열린 말풍선을 닫아요(반박 리뷰 F6) */
+  resetOn: readonly unknown[];
 }) {
   const [textEl, setTextEl] = useState<HTMLElement | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -267,6 +271,11 @@ function TapClip({
   const tipId = useId();
   const shown = pos !== null && truncated;
   const watchKey = JSON.stringify(watch);
+  const [seen, setSeen] = useState(resetOn);
+  if (seen.length !== resetOn.length || seen.some((v, i) => v !== resetOn[i])) {
+    setSeen(resetOn);
+    if (pos) setPos(null);
+  }
 
   // 상자 폭이 바뀌면(화면 회전 · 표 칸 폭) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
   // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴 · 글자 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
@@ -376,24 +385,26 @@ function CustomerCell({
   language,
   gone,
   query,
+  resetOn,
 }: {
   company: string | null;
   email: string | null;
   language: MailLanguage | null;
   gone: boolean;
   query: string;
+  resetOn: readonly unknown[];
 }) {
   if (!company && !email) return gone ? <span className="gone-company">삭제됨</span> : <span className="dash">—</span>;
   return (
     <span className="customer">
       {company && (
-        <TapClip text={company} className="customer-company" wrapClassName="customer-line" watch={[company, query]}>
+        <TapClip text={company} className="customer-company" wrapClassName="customer-line" watch={[company, query]} resetOn={resetOn}>
           <Highlight text={company} query={query} />
         </TapClip>
       )}
       {email && (
         <span className="customer-email">
-          <TapClip text={email} className="customer-email-addr" wrapClassName="customer-email-clip" watch={[email, query]}>
+          <TapClip text={email} className="customer-email-addr" wrapClassName="customer-email-clip" watch={[email, query]} resetOn={resetOn}>
             <Highlight text={email} query={query} />
           </TapClip>
           {language && <span className="customer-email-lang">{` · ${LANGUAGE_TAG[language]}`}</span>}
@@ -413,7 +424,7 @@ function CompanyCell({ account, query }: { account: Account; query: string }) {
  * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 — 회사명(또는 「삭제됨」)이 카드 폭을 다 써요(UG-450 기획 16995).
  * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(TapClip — PC 표의 회사명 · 이메일과 같은 말풍선).
  */
-function GoneCardCompany({ account, query }: { account: Account; query: string }) {
+function GoneCardCompany({ account, query, resetOn }: { account: Account; query: string; resetOn: readonly unknown[] }) {
   return (
     <TapClip
       text={account.company || "삭제됨"}
@@ -421,6 +432,7 @@ function GoneCardCompany({ account, query }: { account: Account; query: string }
       wrapClassName="card-company-full"
       strong
       watch={[account.company, query]}
+      resetOn={resetOn}
     >
       <CompanyCell account={account} query={query} />
     </TapClip>
@@ -1199,7 +1211,7 @@ export default function AccountsPage() {
           {drafts.map((d) => (
             <div key={`draft-${d.id}`} className={`tr${freshId === `draft:${d.id}` ? " is-new" : ""}`} role="row">
               <span role="cell">
-                <CustomerCell company={draftTitle(d) || null} email={d.email} language={d.language} gone={false} query={applied.keyword} />
+                <CustomerCell company={draftTitle(d) || null} email={d.email} language={d.language} gone={false} query={applied.keyword} resetOn={listStamp} />
               </span>
               <span role="cell">
                 <DraftStatus />
@@ -1240,7 +1252,7 @@ export default function AccountsPage() {
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
                 <span role="cell">
-                  <CustomerCell company={a.company || null} email={a.email || null} language={a.language} gone={isGone(a)} query={applied.keyword} />
+                  <CustomerCell company={a.company || null} email={a.email || null} language={a.language} gone={isGone(a)} query={applied.keyword} resetOn={listStamp} />
                 </span>
                 <span role="cell">
                   <StatusCell account={a} />
@@ -1325,7 +1337,7 @@ export default function AccountsPage() {
               // 상태 배지 + 처리 기록(「● 발급 취소 11.04 14:51 · khj」) — 카드 높이는 그대로, 메일 언어 · 만든 정보 줄은 전처럼 없어요
               <li key={a.id} className={`card-row is-cancelled${a.id === freshId ? " is-new" : ""}`}>
                 <div className="card-line">
-                  <GoneCardCompany account={a} query={applied.keyword} />
+                  <GoneCardCompany account={a} query={applied.keyword} resetOn={listStamp} />
                 </div>
                 <div className="card-line">
                   <span className="card-status card-status--record">
@@ -1658,7 +1670,7 @@ function RowMenu({
     if (open) menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
   }, [open]);
 
-  // 줄이 꺼지면(해지 중으로 바뀜 · 여는 중) 열린 메뉴를 닫아요 — 렌더 중에 바로 맞춰요
+  // 줄이 꺼지면(「작성 중」 줄을 여는 중) 열린 메뉴를 닫아요 — 렌더 중에 바로 맞춰요
   if (open && disabled) setPos(null);
 
   useEffect(() => {
