@@ -161,8 +161,10 @@ test("UG-451 suspend 는 예약을 지우고 보내는 중인 저장이 끝날 �
   set("b");
   autosave.schedule();
   let suspended = false;
-  const p = autosave.suspend().then(() => {
+  let release: () => void = () => {};
+  const p = autosave.suspend().then((r) => {
     suspended = true;
+    release = r;
   });
   assert.equal(timers.count, 0, "예약은 지워요");
   await flush();
@@ -176,7 +178,7 @@ test("UG-451 suspend 는 예약을 지우고 보내는 중인 저장이 끝날 �
   assert.equal(saver.calls.length, 1);
   assert.equal(timers.count, 0);
   // 다시 켜면 그사이 바뀐 값을 저장해요
-  autosave.resume();
+  release();
   timers.fire();
   assert.equal(saver.calls.length, 2);
   assert.equal(saver.calls[1].value, "b");
@@ -186,8 +188,8 @@ test("UG-451 바뀐 것 없이 다시 켜기만 하면 보내지 않아요(닫�
   const { timers, saver, autosave } = setup();
   autosave.saveNow();
   saver.calls[0].resolve("failed");
-  await autosave.suspend();
-  autosave.resume();
+  const release = await autosave.suspend();
+  release();
   assert.equal(timers.count, 0);
   timers.fire();
   assert.equal(saver.calls.length, 1);
@@ -196,11 +198,28 @@ test("UG-451 바뀐 것 없이 다시 켜기만 하면 보내지 않아요(닫�
 test("UG-451 멈추며 지운 예약은 다시 켜면 저장해요", async () => {
   const { timers, saver, autosave } = setup();
   autosave.schedule();
-  await autosave.suspend();
+  const release = await autosave.suspend();
   assert.equal(timers.count, 0);
-  autosave.resume();
+  release();
   timers.fire();
   assert.equal(saver.calls.length, 1);
+});
+
+test("UG-451 F3 멈춤은 센 수 — 한쪽(보내기)이 풀어도 다른 쪽(닫을 때 저장)이 멈춰 둔 동안은 보내지 않아요", async () => {
+  const { timers, saver, autosave, set } = setup();
+  const closing = autosave.hold();
+  const submitting = autosave.hold();
+  set("b");
+  autosave.schedule();
+  autosave.saveNow();
+  submitting();
+  submitting(); // 두 번 불러도 한 번만 풀려요
+  timers.fire();
+  assert.equal(saver.calls.length, 0, "닫을 때 저장이 멈춰 둔 동안은 보내지 않아요");
+  closing();
+  timers.fire();
+  assert.equal(saver.calls.length, 1);
+  assert.equal(saver.calls[0].value, "b");
 });
 
 test("UG-451 suspend 는 보내는 중이 아니면 바로 끝나요", async () => {
@@ -218,7 +237,7 @@ test("UG-451 stop 뒤에는 어떤 저장도 시작하지 않아요(계정을 �
   saver.calls[0].resolve("saved");
   await stopped;
   assert.equal(saver.calls.length, 1);
-  autosave.resume();
+  autosave.hold()();
   autosave.schedule();
   autosave.saveNow();
   timers.fire();

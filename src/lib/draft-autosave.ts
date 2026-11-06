@@ -5,7 +5,8 @@
 // - 한 번에 하나만 보내요. 보내는 동안 바뀌면 끝난 뒤 그때의 최신 값으로 한 번 더
 // - 마지막으로 성공한 값과 같으면 보내지 않아요(key 비교)
 // - 실패하면 화면에 아무것도 띄우지 않고, 다음 변경 때 다시 해요(같은 값으로 곧바로 되풀이하지 않아요)
-// - suspend = 잠깐 멈추고 하던 저장이 끝날 때까지 기다림(닫기 · 계정 만들기 전), resume = 다시 켬
+// - hold · suspend = 잠깐 멈춤(닫기 · 계정 만들기 · 재설정 메일 확인 창). 멈춤은 센 수라, 돌려준 release 를 모두 불러야 다시 켜져요 —
+//   한쪽(보내기)이 끝나 다시 켜도 다른 쪽(닫을 때 저장)이 멈춰 둔 것은 풀리지 않아요(반박 리뷰 F3)
 // - stop = 영영 끔(계정을 만듦 · 명함을 다 씀 · 명함이 서버에서 없어짐 · 창이 닫힘) — 그 뒤에는 어떤 저장도 시작하지 않아요
 //   (계정을 만든 뒤 · 지운 뒤에 자동 저장이 명함을 되살리지 않게)
 
@@ -28,13 +29,14 @@ export type Autosaver = {
   schedule(): void;
   /** 바로 저장(명함 읽기가 끝남) — 보내는 중이면 끝난 뒤에 */
   saveNow(): void;
-  /** 잠깐 멈춤 — 예약을 지우고, 보내는 중인 저장이 끝날 때까지 기다려요. 멈춘 동안은 새로 보내지 않아요. */
-  suspend(): Promise<void>;
   /**
-   * 다시 켬 — 멈춘 사이 바뀐 것(멈추며 지운 예약 · 끝난 뒤 하려던 한 번 더 포함)이 있을 때만 delayMs 뒤에 저장해요.
-   * 바뀐 것 없이 다시 켜기만 하면 보내지 않아요(실패한 값을 곧바로 되풀이하지 않게). 끈(stop) 뒤에는 아무것도 하지 않아요.
+   * 잠깐 멈춤(바로) — 예약을 지우고 새로 보내지 않아요. 돌려준 release 로 풀어요(여러 번 불러도 한 번만 풀려요).
+   * 멈춤을 모두 풀면, 멈춘 사이 바뀐 것(멈추며 지운 예약 · 끝난 뒤 하려던 한 번 더 포함)이 있을 때만 delayMs 뒤에 저장해요 —
+   * 바뀐 것 없이 풀기만 하면 보내지 않아요(실패한 값을 곧바로 되풀이하지 않게). 끈(stop) 뒤에는 아무것도 하지 않아요.
    */
-  resume(): void;
+  hold(): () => void;
+  /** hold 하고, 보내는 중인 저장이 끝날 때까지 기다려요 */
+  suspend(): Promise<() => void>;
   /** 영영 끔 — 보내는 중인 저장이 끝날 때까지 기다려요 */
   stop(): Promise<void>;
   /** 이 내용은 이미 서버에 있어요(이어서 만든 명함을 열었을 때) */
@@ -52,7 +54,8 @@ export function createAutosaver<T>(opts: AutosaveOptions<T>): Autosaver {
   let inFlight: Promise<void> | null = null;
   // 보내는 동안 다시 저장을 부탁받았는지 — 끝난 뒤 최신 값으로 한 번 더
   let again = false;
-  let paused = false;
+  // 멈춤 수 — 0 일 때만 보내요
+  let holds = 0;
   // 멈춘 동안 저장을 부탁받았는지 — 다시 켜면 그때 저장해요
   let dirty = false;
   let stopped = false;
@@ -66,7 +69,7 @@ export function createAutosaver<T>(opts: AutosaveOptions<T>): Autosaver {
   function run() {
     timer = null;
     if (stopped) return;
-    if (paused) {
+    if (holds > 0) {
       dirty = true;
       return;
     }
@@ -100,10 +103,27 @@ export function createAutosaver<T>(opts: AutosaveOptions<T>): Autosaver {
     while (inFlight) await inFlight;
   }
 
+  function hold(): () => void {
+    holds++;
+    if (timer !== null) dirty = true; // 기다리던 변경 — 다시 켜면 저장해요
+    if (again) dirty = true; // 보내는 중에 들어온 변경도
+    cancelTimer();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      holds--;
+      if (holds > 0 || stopped || !dirty) return;
+      dirty = false;
+      cancelTimer();
+      timer = setTimer(run, opts.delayMs);
+    };
+  }
+
   return {
     schedule() {
       if (stopped) return;
-      if (paused) {
+      if (holds > 0) {
         dirty = true;
         return;
       }
@@ -115,20 +135,11 @@ export function createAutosaver<T>(opts: AutosaveOptions<T>): Autosaver {
       cancelTimer();
       run();
     },
+    hold,
     async suspend() {
-      paused = true;
-      if (timer !== null) dirty = true; // 기다리던 변경 — 다시 켜면 저장해요
-      if (again) dirty = true; // 보내는 중에 들어온 변경도
-      cancelTimer();
+      const release = hold();
       await idle();
-    },
-    resume() {
-      if (stopped || !paused) return;
-      paused = false;
-      if (!dirty) return;
-      dirty = false;
-      cancelTimer();
-      timer = setTimer(run, opts.delayMs);
+      return release;
     },
     async stop() {
       stopped = true;

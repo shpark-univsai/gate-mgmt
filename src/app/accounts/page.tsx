@@ -44,8 +44,21 @@ import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
 import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
-import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
-import { createAutosaver, draftContentKey, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
+import { chipsForDraft, draftField, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
+import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
+import {
+  LOST_CLOCK_SKEW_MS,
+  addLost,
+  forNewDraft,
+  photoPlan,
+  recordSave,
+  resolveLostDraft,
+  withoutFields,
+  withoutPhoto,
+  type DraftMemory,
+  type LostLookup,
+  type LostSaves,
+} from "@/lib/draft-session";
 import {
   confusableParts,
   emailHasConfusable,
@@ -190,9 +203,8 @@ function StatusCell({ account }: { account: Account }) {
   return (
     <span className="status-stack">
       <Status account={account} />
-      <span className="gone-record status-stack-record" title={record}>
-        {record}
-      </span>
+      {/* 직원 이름이 길어 잘렸을 때만 마우스를 올리면 전체(F8) */}
+      <ClipText className="gone-record status-stack-record" text={record} query="" />
     </span>
   );
 }
@@ -351,7 +363,15 @@ type ToastState = { title: string; detail: string; tone?: "error" } | null;
  * 계정 만들기 창을 닫을 때 「작성 중」으로 남길 것(UG-431 기획 16864). id 가 있으면 이어서 만든 그 명함을 갱신해요.
  * remove = 이어서 만든 명함의 칸 · 사진을 모두 비우고 닫음 — 남길 것이 없어 지워요.
  */
-type DraftKeep = { id: string | null; input: CardDraftInput; remove?: false } | { id: string; remove: true };
+type DraftKeep =
+  | {
+      id: string | null;
+      input: CardDraftInput;
+      remove?: false;
+      /** 이 창의 자동 저장이 만든 명함을 그사이 다른 직원이 지웠으면(not_found) 이 값으로 한 번 새로 남겨요(반박 리뷰 F5) */
+      recreate?: CardDraftInput;
+    }
+  | { id: string; remove: true };
 
 /** 「작성 중」 상태 글자(목록 줄 · 휴대폰 카드) */
 const DRAFT_LABEL = "작성 중";
@@ -434,37 +454,30 @@ const offersCancel = (reason: MailFailureReason | "blocked") => reason === "addr
 const canResend = (a: Account) => a.status === "pending" && !a.resendBlocked && a.mailFailureReason !== "address";
 
 /**
- * 새 명함의 저장을 다시 시도하기 전에, 앞 저장(응답만 잃음)이 서버에 남았는지 찾아요 — 「작성 중」 목록에서
- * 응답을 잃은 저장(lost — 닫을 때 저장 · 자동 저장, 여럿일 수 있어요) 중 하나와 네 칸 값 · 사진 유무가 같고
- * 최근(10분 안)에 생긴 명함(가장 최근 것). 없거나 목록을 받지 못하면 null(새로 남겨요).
- * 목록은 검색어 없이 최근 100장 — 검색어가 어느 칸을 보는지에 기대지 않아요.
- * 지금 로그인한 직원이 만든 명함만 봐요(createdBy = 직원 이메일, 대소문자 무시) — 다른 직원의 명함을 덮어쓰지 않게.
- * 직원 이메일을 모르면 찾지 않아요(새로 남겨요).
+ * 새 명함의 저장을 다시 시도하기 전에, 앞 저장(응답만 잃음 — 닫을 때 저장 · 자동 저장)이 서버에 남았는지 찾아요.
+ * 규칙은 draft-session.ts resolveLostDraft — 이 창을 연 뒤 생긴 내 명함 · 네 칸 · 사진 유무(사진이 있으면 사진까지)가 같고 딱 하나일 때만.
+ * 목록은 검색어 없이 최근 100장. 직원 이메일을 모르면 찾지 않아요. background = 자동 저장(로그인이 끊겨도 로그인 화면으로 보내지 않음)
  */
-async function findLostDraft(lost: readonly CardDraftInput[], staffEmail: string | null | undefined): Promise<string | null> {
-  const me = staffEmail?.trim().toLowerCase();
-  if (!me || lost.length === 0) return null;
-  try {
-    const { items } = await listCardDrafts();
-    const same = (a: string | null | undefined, b: string | undefined) => (a ?? "") === (b ?? "");
-    const since = Date.now() - 10 * 60_000;
-    const matches = (d: CardDraft, input: CardDraftInput) =>
-      same(d.company, input.company) &&
-      same(d.name, input.name) &&
-      same(d.email, input.email) &&
-      same(d.phone, input.phone) &&
-      d.hasPhoto === !!input.photo;
-    const hit = items
-      .filter((d) => d.createdBy.trim().toLowerCase() === me && Date.parse(d.createdAt) >= since && lost.some((input) => matches(d, input)))
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
-    return hit?.id ?? null;
-  } catch {
-    return null;
-  }
+function findLostDraft(lost: LostSaves, staffEmail: string | null | undefined, background = false): Promise<LostLookup> {
+  const opts = { background };
+  return resolveLostDraft({
+    lost,
+    me: staffEmail?.trim().toLowerCase() ?? "",
+    list: async () => (await listCardDrafts("", opts)).items,
+    photoOf: async (id) => {
+      const r = await getCardDraft(id, opts);
+      if (r.ok) return r.detail.photo;
+      if (r.reason === "not_found") return null;
+      throw new Error("photo");
+    },
+  });
 }
 
-/** 응답을 잃은 새 명함 저장을 기억해 둘 수 — 다음 저장 때 찾아 이어 써요(가장 최근 몇 개면 충분해요) */
-const LOST_MAX = 5;
+/** 자동 저장 한 번의 결과 — sent = 실제로 남긴 값(사진 · 칸을 빼고 다시 남겼을 수 있어요), photoDropped = 사진을 받지 않아 빼고 남김 */
+type AutosaveOutcome = { res: CardDraftSaveResult; sent: CardDraftInput; photoDropped: boolean };
+/** 자동 저장 한 번에 남길 것 — recreate = 이 창이 만든 명함이 없어졌을 때 새로 남길 값(F5) */
+type AutosaveItem = { id: string | null; input: CardDraftInput; recreate?: CardDraftInput };
+
 /** 자동 저장 — 입력이 멈춘 뒤 기다릴 시간(UG-451 기획 17009) */
 const AUTOSAVE_DELAY = 2000;
 
@@ -603,6 +616,8 @@ export default function AccountsPage() {
   // 「작성 중」이 100장을 넘으면 최근 100장만 받아요 — 목록 위에 한 줄
   const draftsCut = drafts.length > 0 && draftList !== null && draftList.total > draftList.items.length;
   const draftsError = draftsErrorFor === applied;
+  // 표 줄의 ⋮ 메뉴는 목록(계정 줄 · 「작성 중」 줄)이 바뀌면 닫아요
+  const listStamp = [rows, draftList] as const;
   // 다른 창이 열려 있는지 — 이어서 만들기 응답이 늦게 와도 창을 겹쳐 열지 않게(응답을 버려요)
   const modalOpen = !!creating || !!resendTarget || !!cancelTarget || !!draftDeleteTarget;
   const modalOpenRef = useRef(modalOpen);
@@ -693,7 +708,7 @@ export default function AccountsPage() {
    * lost = 응답을 잃은 새 명함 저장(앞서 닫다 실패 · 자동 저장 실패) — 서버에 남았으면 그 명함에 이어 써요(중복 「작성 중」 방지)
    */
   const keepDraft = useCallback(
-    (keep: DraftKeep, lost: readonly CardDraftInput[]): Promise<boolean> => {
+    (keep: DraftKeep, lost: LostSaves): Promise<boolean> => {
       const run = async (): Promise<boolean> => {
         if (keep.remove) {
           // 칸 · 사진을 다 비우고 닫음 — 남길 것이 없어 지워요
@@ -704,25 +719,27 @@ export default function AccountsPage() {
         }
         // 새 명함(번호 없음)을 다시 시도할 때: 앞 저장이 서버에는 남고 응답만 잃었을 수 있어요 — 같은 값의 최근 명함이 있으면 그 명함에 이어 써요
         let id = keep.id;
-        if (!id) id = await findLostDraft(lost, staffEmail);
-        let res = await saveCardDraft(id, keep.input);
-        // 찾은 명함이 그사이 없어졌으면(계정을 만들었거나 지움) 새로 남겨요
-        if (!keep.id && id && !res.ok && res.reason === "not_found") {
+        if (!id) {
+          const found = await findLostDraft(lost, staffEmail);
+          if (found.kind === "found") id = found.id;
+        }
+        let input = keep.input;
+        let res = await saveCardDraft(id, input);
+        // 찾은 명함이 그사이 없어졌으면(계정을 만들었거나 지움) 새로 남겨요.
+        // 이 창의 자동 저장이 만든 명함을 다른 직원이 지웠으면 입력이 사라지지 않게 한 번 새로 남겨요(반박 리뷰 F5) — 이어서 만든 원래 명함은 되살리지 않아요
+        if (id && !res.ok && res.reason === "not_found" && (!keep.id || keep.recreate)) {
           id = null;
-          res = await saveCardDraft(null, keep.input);
+          input = keep.recreate ?? keep.input;
+          res = await saveCardDraft(null, input);
         }
         // 칸 값을 서버가 받지 않음(PJ-101) — 칸은 상한 · 제어 문자를 이미 정리해 보냈어요. 그래도면 네 칸 없이 사진 · 칩만 한 번 더
         let kept: string | null = null;
         if (!res.ok && res.reason === "invalid") {
-          const { language, chips, photo, keepPhoto } = keep.input;
-          const hasPhoto = !!photo || !!keepPhoto;
-          if (hasPhoto || chips) {
-            res = await saveCardDraft(id, {
-              ...(language ? { language } : {}),
-              ...(chips ? { chips } : {}),
-              ...(photo ? { photo } : keepPhoto ? { keepPhoto } : {}),
-            });
-            kept = hasPhoto && chips ? "명함 사진과 읽은 줄만 남겼습니다" : hasPhoto ? "명함 사진만 남겼습니다" : "읽은 줄만 남겼습니다";
+          const lite = withoutFields(input);
+          if (lite) {
+            res = await saveCardDraft(id, lite);
+            const hasPhoto = !!lite.photo || !!lite.keepPhoto;
+            kept = hasPhoto && lite.chips ? "명함 사진과 읽은 줄만 남겼습니다" : hasPhoto ? "명함 사진만 남겼습니다" : "읽은 줄만 남겼습니다";
           }
         }
         if (res.ok) {
@@ -730,7 +747,7 @@ export default function AccountsPage() {
           if (kept) setToast({ tone: "error", title: "작성 중인 명함의 입력값을 남기지 못했습니다", detail: kept });
         } else if (res.reason === "not_found") setToast({ tone: "error", ...DRAFT_GONE });
         // 연결 · 서버 문제(오프라인 등) — 창을 닫지 않고 다시 시도하게 해요(조용히 사라지지 않게)
-        else if (res.reason === "failed") return false;
+        else if (res.reason === "failed" || res.reason === "session") return false;
         else
           setToast({
             tone: "error",
@@ -748,20 +765,44 @@ export default function AccountsPage() {
   /**
    * 「작성 중」 자동 저장(UG-451 기획 17009) — 창이 열려 있는 동안 명함 읽기 직후 · 입력이 멈출 때. 알림 · 목록 새로 고침 없이 결과만 돌려줘요.
    * 같은 명함의 앞 저장 뒤에 줄 서요. 새 명함인데 앞 저장의 응답을 잃었으면(lost) 서버에 남은 그 명함을 찾아 이어 써요.
+   * 뒤쪽 요청이라 로그인이 끊겨도 로그인 화면으로 보내지 않아요(session — 자동 저장만 꺼져요, 반박 리뷰 F7).
+   * 닫을 때 저장과 같은 대체(F7): 사진을 받지 않으면(너무 큼 · 형식) 사진 없이, 칸 값을 받지 않으면(PJ-101) 칸 없이 한 번 더.
    */
   const autosaveDraft = useCallback(
-    (id: string | null, input: CardDraftInput, lost: readonly CardDraftInput[]): Promise<CardDraftSaveResult> =>
-      queueDraftSave<CardDraftSaveResult>(
+    (id: string | null, input: CardDraftInput, lost: LostSaves): Promise<AutosaveOutcome> =>
+      queueDraftSave<AutosaveOutcome>(
         draftSaves.current,
         id,
         async () => {
-          const target = id ?? (await findLostDraft(lost, staffEmail));
-          const res = await saveCardDraft(target, input);
-          // 찾은 명함이 그사이 없어졌으면(계정을 만들었거나 지움) 새로 남겨요 — 처음부터 번호가 있던 명함은 되살리지 않아요
-          if (!id && target && !res.ok && res.reason === "not_found") return saveCardDraft(null, input);
-          return res;
+          const opts = { background: true };
+          let target = id;
+          if (!target) {
+            const found = await findLostDraft(lost, staffEmail, true);
+            if (found.kind === "found") target = found.id;
+          }
+          let sent = input;
+          let photoDropped = false;
+          let res = await saveCardDraft(target, sent, opts);
+          // 찾은 명함이 그사이 없어졌으면(계정을 만들었거나 지움) 새로 남겨요 — 처음부터 번호가 있던 명함은 여기서 되살리지 않아요(창이 정해요)
+          if (!id && target && !res.ok && res.reason === "not_found") {
+            target = null;
+            res = await saveCardDraft(null, sent, opts);
+          }
+          if (!res.ok && res.reason === "photo" && sent.photo) {
+            sent = withoutPhoto(sent);
+            photoDropped = true;
+            res = await saveCardDraft(target, sent, opts);
+          }
+          if (!res.ok && res.reason === "invalid") {
+            const lite = withoutFields(sent);
+            if (lite) {
+              sent = lite;
+              res = await saveCardDraft(target, sent, opts);
+            }
+          }
+          return { res, sent, photoDropped };
         },
-        { ok: false, reason: "failed" },
+        { res: { ok: false, reason: "failed" }, sent: input, photoDropped: false },
       ),
     [staffEmail],
   );
@@ -1097,7 +1138,11 @@ export default function AccountsPage() {
                   >
                     {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
                   </button>
-                  <RowMenu items={[{ label: "지우기", danger: true, onSelect: () => setDraftDeleteTarget(d) }]} disabled={resumingId === d.id} />
+                  <RowMenu
+                    items={[{ label: "지우기", danger: true, onSelect: () => setDraftDeleteTarget(d) }]}
+                    disabled={resumingId === d.id}
+                    resetOn={listStamp}
+                  />
                 </span>
               </span>
             </div>
@@ -1136,7 +1181,7 @@ export default function AccountsPage() {
                             메일 재발송
                           </button>
                         )}
-                        <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} />
+                        <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} resetOn={listStamp} />
                       </>
                     ) : a.status === "closing" ? (
                       // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요 — 원래 로그인 전이던 줄만 버튼이 있었어요
@@ -1147,7 +1192,7 @@ export default function AccountsPage() {
                               메일 재발송
                             </button>
                           )}
-                          <RowMenu items={[]} disabled disabledLabel={`더보기 — ${CLOSING_TIP}`} />
+                          <RowMenu items={[]} disabled disabledLabel={`더보기 — ${CLOSING_TIP}`} resetOn={listStamp} />
                         </>
                       ) : (
                         <span className="dash">—</span>
@@ -1507,9 +1552,25 @@ type RowMenuItem = { label: string; onSelect: () => void; danger?: boolean };
  * Esc 면 닫고 ⋮ 로 초점이 돌아와요. 항목을 고르면 ⋮ 에 초점을 둔 뒤 확인 창을 열어요(창을 닫으면 ⋮ 로 돌아와요).
  * 빨간 글씨(되돌릴 수 없는 동작)가 어두운 유리 위에서는 잘 안 읽혀 이 메뉴는 흰 바탕이에요.
  */
-function RowMenu({ items, disabled = false, disabledLabel }: { items: RowMenuItem[]; disabled?: boolean; disabledLabel?: string }) {
+function RowMenu({
+  items,
+  disabled = false,
+  disabledLabel,
+  resetOn,
+}: {
+  items: RowMenuItem[];
+  disabled?: boolean;
+  disabledLabel?: string;
+  /** 목록이 바뀌면(새로 불러옴 · 줄이 빠지거나 옮겨짐) 닫아요 — 메뉴가 다른 줄 옆에 떠 있지 않게(반박 리뷰 F8) */
+  resetOn: readonly unknown[];
+}) {
   const [pos, setPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const open = pos !== null;
+  const [seen, setSeen] = useState(resetOn);
+  if (seen.length !== resetOn.length || seen.some((v, i) => v !== resetOn[i])) {
+    setSeen(resetOn);
+    if (pos) setPos(null);
+  }
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
@@ -1871,9 +1932,9 @@ function CreateDialog({
    * 닫을 때 「작성 중」으로 남겨요(목록이 저장) — false 면 남기지 못해 창이 다시 시도 · 그래도 닫기를 보여 줘요.
    * lost = 응답을 잃은 새 명함 저장들(서버에 남았으면 그 명함에 이어 써요)
    */
-  onKeepDraft: (keep: DraftKeep, lost: readonly CardDraftInput[]) => Promise<boolean>;
+  onKeepDraft: (keep: DraftKeep, lost: LostSaves) => Promise<boolean>;
   /** 「작성 중」 자동 저장(UG-451 기획 17009) — 목록이 같은 명함의 저장 차례를 지켜요 */
-  onAutosave: (id: string | null, input: CardDraftInput, lost: readonly CardDraftInput[]) => Promise<CardDraftSaveResult>;
+  onAutosave: (id: string | null, input: CardDraftInput, lost: LostSaves) => Promise<AutosaveOutcome>;
   /** 창이 닫힌 뒤에 끝난 자동 저장 — 목록을 새로 고쳐요(그 명함이 목록에 보이게) */
   onAutosaveSettled: () => void;
   /** 창을 닫아요(남길 것은 이미 남겼어요) */
@@ -1898,14 +1959,20 @@ function CreateDialog({
   const [languageChosen, setLanguageChosen] = useState(!!draft?.draft.language);
   // 이어서 만든 명함의 사진(data URL)
   const [draftPhoto] = useState(() => photoFromDraft(draft?.photo ?? null));
-  // 서버에 있는 「작성 중」 명함 번호 — 이어서 만든 명함, 또는 자동 저장이 새로 남긴 명함(UG-451 기획 17009). 없으면 null
-  const draftIdRef = useRef<string | null>(draft?.draft.id ?? null);
-  // 그 명함에 지금 남아 있는 사진(data URL) — 화면 사진이 이것과 같으면 다시 올리지 않고 keepPhoto 로 남겨요(자동 저장이 한 번 올리면 그다음부터는 keepPhoto)
-  const serverPhotoRef = useRef<string | null>(draftPhoto);
-  // 응답을 잃은 새 명함 저장(서버엔 남았을 수 있어요) — 다음 저장 · 계정 만들기 · 다 쓰기 때 찾아 이어 써요(중복 「작성 중」 방지)
-  const lostRef = useRef<CardDraftInput[]>([]);
-  // 명함이 끝났는지 — 계정을 만들었거나(서버가 지움) 다시 보내기로 다 씀. 그 뒤로는 남기지 않아요(자동 저장이 되살리지 않게)
-  const draftEnded = useRef(false);
+  // 창이 기억하는 「작성 중」 명함(UG-451 기획 17009) — id = 서버 명함 번호(이어서 만든 명함 또는 자동 저장이 새로 남긴 명함),
+  // serverPhoto = 그 명함의 사진(data URL — 화면 사진이 이것과 같으면 다시 올리지 않고 keepPhoto),
+  // ended = 계정을 만들었거나(서버가 지움) 다시 보내기로 다 씀 — 그 뒤로는 남기지 않아요(자동 저장이 되살리지 않게)
+  const memRef = useRef<DraftMemory>({ id: draft?.draft.id ?? null, serverPhoto: draftPhoto, ended: false });
+  // 응답을 잃은 새 명함 저장(서버엔 남았을 수 있어요) — 다음 저장 · 계정 만들기 · 다 쓰기 때 찾아 이어 써요(중복 「작성 중」 방지).
+  // since = 이 창을 연 시각 − 시계 오차(그 전 명함은 후보가 아니에요, 반박 리뷰 F2)
+  const lostRef = useRef<LostSaves>({ since: 0, inputs: [] });
+  // 이 창의 자동 저장이 새로 만든 명함 번호들 — 다른 직원이 지웠으면 한 번 새로 남겨요(F5). 이어서 만든 원래 명함은 들지 않아요
+  const ownIdsRef = useRef(new Set<string>());
+  const recreatedRef = useRef(false);
+  // 서버가 받지 않은 사진(너무 큼 · 형식)의 표 — 자동 저장이 같은 사진을 되풀이해 올리지 않게(F7)
+  const rejectedPhotoRef = useRef<string | null>(null);
+  // 보내기(계정 만들기 · 다시 보내기) 동안의 자동 저장 멈춤 — 끝나면 풀어요
+  const submitHold = useRef<(() => void) | null>(null);
   // 「작성 중」 자동 저장 일정표(아래 「자동 저장」) — 창이 열려 있는 동안만 있어요
   const autosaveRef = useRef<Autosaver | null>(null);
   // 창이 열려 있는지 — 닫힌 뒤에 끝난 자동 저장은 목록을 새로 고쳐요
@@ -1983,8 +2050,9 @@ function CreateDialog({
    * 주소를 고치는 중(fix) · 결과 화면 · 보내는 중은 계정이 만들어졌거나 만드는 중이라 남기지 않아요.
    */
   function draftToKeep(): DraftKeep | null {
-    if (fix || mailFailure || sending || draftEnded.current) return null;
-    const id = draftIdRef.current;
+    const mem = memRef.current;
+    if (fix || mailFailure || sending || mem.ended) return null;
+    const id = mem.id;
     // 서버 상한으로 자르고 제어 문자는 공백으로(긴 칩 · 붙여 넣은 글로 저장이 통째로 실패하지 않게). 이메일은 넘으면 비워요.
     const values = {
       company: draftField(company, CARD_DRAFT_MAX.company),
@@ -1992,13 +2060,10 @@ function CreateDialog({
       email: draftField(email, CARD_DRAFT_MAX.email, true),
       phone: draftField(phone, CARD_DRAFT_MAX.phone),
     };
-    // 사진: 새로 찍어 다 읽은 사진만 보내요. 읽는 중(scanning) · 다시 읽기가 사진을 만들지 못한 경우는
-    // 서버 명함에 사진이 있으면 그대로(keepPhoto), 없으면 사진 없이 — 원래 사진을 지우는 건 직원이 지울 때뿐(지금은 그런 버튼이 없어요).
-    // 서버에 이미 올린 사진(이어서 만든 명함 · 자동 저장이 올림)과 같으면 다시 올리지 않아요.
-    const serverPhoto = serverPhotoRef.current;
-    const newPhoto = !scanning && photo && photo !== serverPhoto ? photoForDraft(photo) : null;
-    const keepPhoto = !!serverPhoto && !newPhoto;
-    if (!Object.values(values).some(Boolean) && !keepPhoto && !newPhoto) return id ? { id, remove: true } : null;
+    // 사진(draft-session.ts photoPlan): 화면 사진이 서버 명함의 사진과 같으면 keepPhoto(다시 올리지 않음), 새로 찍은 사진이면 그 사진,
+    // 읽는 중 · 다시 찍기가 사진을 만들지 못했으면 사진 없이 — 앞 명함 사진이 새 명함 칸과 함께 남지 않게(반박 리뷰 F4)
+    const plan = photoPlan(photo, mem.serverPhoto, scanning);
+    if (!Object.values(values).some(Boolean) && !plan.photo && !plan.keepPhoto) return id ? { id, remove: true } : null;
     const chips = chipsForDraft(scan);
     // 첫 로그인 전 이메일이라 메일 언어를 잠깐 바꿨으면 직원이 고른 언어로
     const lang = languageChosen ? (langBeforePending.current ?? language) : null;
@@ -2006,9 +2071,11 @@ function CreateDialog({
       ...Object.fromEntries(Object.entries(values).filter(([, v]) => v)),
       ...(lang ? { language: lang } : {}),
       ...(chips ? { chips } : {}),
-      ...(keepPhoto ? { keepPhoto: true } : newPhoto ? { photo: newPhoto } : {}),
+      ...plan,
     };
-    return { id, input };
+    // 이 창의 자동 저장이 만든 명함이면, 그사이 다른 직원이 지웠을 때 한 번 새로 남길 값(F5) — 서버에 있던 사진은 다시 올려요
+    const recreate = id && ownIdsRef.current.has(id) && !recreatedRef.current ? forNewDraft(input, mem.serverPhoto) : undefined;
+    return { id, input, ...(recreate ? { recreate } : {}) };
   }
   // 닫을 때 「작성 중」 저장 — 끝날 때까지 창을 열어 두고, 연결 문제로 실패하면 [다시 시도] [그래도 닫기](UG-451 기획 16991)
   const [keepingDraft, setKeepingDraft] = useState(false);
@@ -2019,10 +2086,10 @@ function CreateDialog({
     if (keepLock.current) return;
     keepLock.current = true;
     // 자동 저장을 멈추고, 보내는 중이면 끝난 뒤에 남겨요 — 자동 저장이 새로 남긴 명함 번호 · 올린 사진을 이어 쓰고, 두 저장이 겹치지 않게.
-    // 기다려야 할 때만 「저장하는 중」으로 잠가요(기다리는 동안 칸이 바뀌지 않게)
+    // 멈춤은 센 수라 그사이 보내기가 끝나 풀어도 이 멈춤은 남아요(반박 리뷰 F3). 기다려야 할 때만 「저장하는 중」으로 잠가요
     const autosave = autosaveRef.current;
     if (autosave?.saving) setKeepingDraft(true);
-    await autosave?.suspend();
+    const release = await autosave?.suspend();
     const keep = draftToKeep();
     if (!keep) {
       keepLock.current = false;
@@ -2036,12 +2103,12 @@ function CreateDialog({
     keepLock.current = false;
     setKeepingDraft(false);
     if (ok) return onClose();
-    if (!keep.remove && !keep.id) lostRef.current = [...lostRef.current, keep.input].slice(-LOST_MAX);
+    if (!keep.remove && !keep.id) lostRef.current = addLost(lostRef.current, keep.input);
     setKeepFailed(true);
-    // 창에 남아 계속 고칠 수 있어요 — 자동 저장도 다시 켜요(다음 변경 때 다시 남겨 봐요)
-    autosave?.resume();
+    // 창에 남아 계속 고칠 수 있어요 — 자동 저장도 다시 켜요(바뀐 것이 있을 때만 다시 남겨요)
+    release?.();
   }
-  /** [그래도 닫기] — 남기지 않고 닫아요(직원이 고른 경우만). 자동 저장이 이미 남긴 것은 그대로 「작성 중」에 남아요 */
+  /** [그래도 닫기] — 지금 값은 남기지 않고 닫아요(직원이 고른 경우만). 자동 저장이 이미 남긴 앞 값은 그대로 「작성 중」에 남아요 */
   const closeWithoutKeeping = () => {
     void autosaveRef.current?.stop();
     onClose();
@@ -2070,26 +2137,39 @@ function CreateDialog({
   function autosaveSnapshot() {
     const keep = draftToKeep();
     if (!keep || keep.remove) return null;
-    return { value: keep, key: draftContentKey(keep.input, serverPhotoRef.current) };
+    // 이메일이 이미 있는 계정(사용 중 · 해지 중 · 발급 기록 — 「계정 만들고 메일 보내기」를 못 하는 경우)이면 남기지 않아요(반박 리뷰 F6).
+    // 이미 남긴 명함은 지우지 않아요 — 직원이 이메일을 고칠 수 있어요
+    const checked = check && check.email === email.trim() ? check.result : null; // 아래 current 와 같은 값
+    if (checked && checked.status !== "new") return null;
+    const key = draftContentKey(keep.input, memRef.current.serverPhoto);
+    // 서버가 받지 않은 사진(너무 큼 · 형식)은 다시 올리지 않아요 — 바뀔 때마다 같은 큰 사진을 되풀이해 보내지 않게(F7)
+    const input = keep.input.photo && photoTag(keep.input.photo) === rejectedPhotoRef.current ? withoutPhoto(keep.input) : keep.input;
+    return { value: { id: keep.id, input, recreate: keep.recreate }, key };
   }
   /** 한 번 남기기 — 새로 남긴 명함 번호 · 올린 사진을 기억해 다음 저장이 같은 명함을 갱신하고 사진은 keepPhoto 로 보내요 */
-  async function autosaveRun(keep: { id: string | null; input: CardDraftInput }): Promise<AutosaveResult> {
+  async function autosaveRun(keep: AutosaveItem): Promise<AutosaveResult> {
     const { id, input } = keep;
-    const res = await onAutosave(id, input, lostRef.current);
-    if (!openRef.current) onAutosaveSettled();
-    if (draftEnded.current) return "stop";
-    if (res.ok) {
-      draftIdRef.current = res.draft.id;
-      lostRef.current = [];
-      if (input.photo) serverPhotoRef.current = photoFromDraft(input.photo);
-      else if (!input.keepPhoto) serverPhotoRef.current = null;
-      return "saved";
+    let posted = !id;
+    let out = await onAutosave(id, input, lostRef.current);
+    // 이 창의 자동 저장이 만든 명함을 그사이 다른 직원이 지움 — 입력이 사라지지 않게 한 번 새로 남겨요(F5).
+    // 이어서 만든 원래 명함이면 되살리지 않아요(계정을 만들었을 수 있어요)
+    if (id && keep.recreate && !out.res.ok && out.res.reason === "not_found" && !recreatedRef.current && !memRef.current.ended) {
+      recreatedRef.current = true;
+      posted = true;
+      out = await onAutosave(null, keep.recreate, { since: lostRef.current.since, inputs: [] });
     }
-    // 명함이 서버에서 없어졌어요(다른 직원이 계정을 만들었거나 지움) — 되살리지 않아요. 닫을 때 저장이 알림으로 알려 줘요
-    if (res.reason === "not_found") return "stop";
+    if (!openRef.current) onAutosaveSettled();
+    if (out.photoDropped && out.sent !== input && input.photo) rejectedPhotoRef.current = photoTag(input.photo);
+    // 번호부터 챙겨요(F1) — 그사이 명함이 끝났으면(계정을 만듦 · 다 씀) 방금 남긴 명함은 지워요
+    const { result, orphan } = recordSave(memRef.current, out.sent, out.res);
+    if (orphan) onDraftUsed(orphan);
+    if (out.res.ok && result === "saved") {
+      if (posted) ownIdsRef.current.add(out.res.draft.id);
+      lostRef.current = { ...lostRef.current, inputs: [] };
+    }
     // 새 명함 저장이 연결 · 서버 문제로 실패 — 서버엔 남았을 수 있어요(응답만 잃음). 다음 저장 때 찾아 이어 써요
-    if (!id && res.reason === "failed") lostRef.current = [...lostRef.current, input].slice(-LOST_MAX);
-    return "failed";
+    if (posted && !out.res.ok && out.res.reason === "failed") lostRef.current = addLost(lostRef.current, out.sent);
+    return result;
   }
   // 일정표는 늘 마지막 그림의 값으로 남겨요
   const autosaveSnapshotRef = useRef(autosaveSnapshot);
@@ -2099,14 +2179,16 @@ function CreateDialog({
     autosaveRunRef.current = autosaveRun;
   });
   useEffect(() => {
-    const autosave = createAutosaver<{ id: string | null; input: CardDraftInput }>({
+    const autosave = createAutosaver<AutosaveItem>({
       delayMs: AUTOSAVE_DELAY,
       snapshot: () => autosaveSnapshotRef.current(),
       save: (keep) => autosaveRunRef.current(keep),
     });
+    // 응답을 잃은 저장은 이 창을 연 뒤 생긴 명함에서만 찾아요(F2)
+    lostRef.current = { since: Date.now() - LOST_CLOCK_SKEW_MS, inputs: [] };
     // 이어서 만든 명함을 연 그대로면 다시 보내지 않아요
     const first = autosaveSnapshotRef.current();
-    if (first && draftIdRef.current) autosave.markSaved(first.key);
+    if (first && memRef.current.id) autosave.markSaved(first.key);
     autosaveRef.current = autosave;
     openRef.current = true;
     return () => {
@@ -2115,59 +2197,70 @@ function CreateDialog({
       void autosave.stop();
     };
   }, []);
-  // 칸 · 메일 언어 · 칩 연결이 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요)
+  // 칸 · 메일 언어 · 칩 연결 · 이메일 확인 결과가 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요)
   useEffect(() => {
     autosaveRef.current?.schedule();
-  }, [company, name, email, phone, language, languageChosen, scan]);
+  }, [company, name, email, phone, language, languageChosen, scan, check]);
   // 명함 읽기가 끝나면(읽지 못해도 사진은 남아요) 바로 — 사진은 이때 한 번 올리고 다음부터는 keepPhoto
   const [scanDone, setScanDone] = useState(0);
   useEffect(() => {
     if (scanDone > 0) autosaveRef.current?.saveNow();
   }, [scanDone]);
+  // 재설정 메일 확인 창(UG-421)이 떠 있는 동안은 멈춰 둬요 — 보내면 명함을 다 써서 지워요(consumeDraft, F1)
+  useEffect(() => {
+    if (!resetConfirm) return;
+    return autosaveRef.current?.hold();
+  }, [resetConfirm]);
 
-  /** 명함이 끝났어요(계정을 만듦) — 자동 저장을 끄고 더 남기지 않아요 */
+  /** 명함이 끝났어요(계정을 만듦 — 서버가 draftId 의 명함을 지웠어요) — 자동 저장을 끄고 더 남기지 않아요 */
   function endDraft() {
-    draftEnded.current = true;
-    draftIdRef.current = null;
-    serverPhotoRef.current = null;
-    lostRef.current = [];
+    const mem = memRef.current;
+    mem.ended = true;
+    mem.id = null;
+    mem.serverPhoto = null;
     void autosaveRef.current?.stop();
   }
 
   /**
-   * 이어서 만든 · 자동 저장한 명함을 다 썼어요(이미 만든 계정에 안내 메일을 다시 보냄) — 목록의 「작성 중」 줄 · 사진은 목록이 뒤에서 지워요.
-   * 자동 저장을 먼저 끄고(보내는 중이면 끝난 뒤) 지워요 — 지운 뒤 자동 저장이 명함을 되살리지 않게. 응답을 잃은 새 명함도 찾아 지워요.
+   * 이어서 만든 · 자동 저장한 명함을 다 썼어요(이미 만든 계정에 안내 메일 · 재설정 메일을 보냄) — 목록의 「작성 중」 줄 · 사진은 목록이 뒤에서 지워요.
+   * 자동 저장을 먼저 끄고(보내는 중이면 끝난 뒤 — 그 저장이 남긴 명함은 recordSave 가 지울 것으로 돌려줘요) 지워요.
+   * 응답을 잃은 새 명함도 찾아 지워요(F1 — 이미 있는 고객의 개인정보가 「작성 중」에 30일 남지 않게).
    */
   function consumeDraft() {
-    if (draftEnded.current) return;
-    draftEnded.current = true;
+    const mem = memRef.current;
+    if (mem.ended) return;
+    mem.ended = true;
     const autosave = autosaveRef.current;
-    const lost = lostRef.current;
     void (async () => {
       await autosave?.stop();
-      const id = draftIdRef.current ?? (await findLostDraft(lost, staffEmail));
-      draftIdRef.current = null;
-      serverPhotoRef.current = null;
-      lostRef.current = [];
+      let id = mem.id;
+      if (!id) {
+        const found = await findLostDraft(lostRef.current, staffEmail);
+        if (found.kind === "found") id = found.id;
+      }
+      mem.id = null;
+      mem.serverPhoto = null;
       if (id) onDraftUsed(id);
     })();
   }
 
   /**
    * 계정 만들기 요청에 붙일 「작성 중」 명함 번호 — 계정이 만들어지면 서버가 그 명함을 지워요(이어서 만든 명함 · 자동 저장이 남긴 명함).
-   * 자동 저장을 멈춘 뒤에 불러요. 새 명함 저장의 응답을 잃었으면 서버에 남은 그 명함을 찾아 붙여요(계정을 만든 뒤 「작성 중」이 남지 않게).
+   * 자동 저장을 멈춘 뒤에 불러요. 새 명함 저장의 응답을 잃었으면 서버에 남은 그 명함을 찾아 붙여요(계정을 만든 뒤 「작성 중」이 남지 않게) —
+   * 하나로 정해질 때만(F2). 찾지 못했거나 목록을 받지 못했으면 기억은 그대로 둬요(받지 못함 ≠ 없음).
    */
   async function draftIdInput(): Promise<{ draftId?: number }> {
-    if (draftEnded.current) return {};
-    if (!draftIdRef.current && lostRef.current.length > 0) {
+    const mem = memRef.current;
+    if (mem.ended) return {};
+    if (!mem.id && lostRef.current.inputs.length > 0) {
       const found = await findLostDraft(lostRef.current, staffEmail);
-      lostRef.current = [];
-      if (found) {
-        draftIdRef.current = found;
-        serverPhotoRef.current = null; // 찾은 명함의 사진은 모르니 다음 저장은 사진을 다시 올려요
+      if (found.kind === "found") {
+        mem.id = found.id;
+        mem.serverPhoto = null; // 찾은 명함의 사진은 모르니 다음 저장은 사진을 다시 올려요
+        lostRef.current = { ...lostRef.current, inputs: [] };
       }
     }
-    const n = draftIdRef.current ? Number(draftIdRef.current) : NaN;
+    const n = mem.id ? Number(mem.id) : NaN;
     return Number.isSafeInteger(n) ? { draftId: n } : {};
   }
 
@@ -2273,8 +2366,10 @@ function CreateDialog({
       await submit();
     } finally {
       busy.current = false;
-      // 보내기 전에 멈춘 자동 저장을 다시 켜요 — 계정을 만들었거나 명함을 다 썼으면 이미 꺼져 아무것도 하지 않아요
-      autosaveRef.current?.resume();
+      // 보내기 전에 멈춘 자동 저장을 풀어요 — 닫을 때 저장 등 다른 멈춤이 남아 있으면 그대로 멈춰 있어요(F3).
+      // 계정을 만들었거나 명함을 다 썼으면 이미 꺼져 아무것도 하지 않아요
+      submitHold.current?.();
+      submitHold.current = null;
     }
   }
 
@@ -2400,7 +2495,7 @@ function CreateDialog({
     setSending(true);
     // 자동 저장을 멈추고 보내는 중이면 끝날 때까지 기다려요 — 자동 저장이 새로 남긴 명함 번호까지 계정 만들기에 붙여 서버가 지우게 하고,
     // 계정을 만드는 사이에 새 「작성 중」이 생기지 않게(UG-451 기획 17009)
-    await autosaveRef.current?.suspend();
+    submitHold.current = (await autosaveRef.current?.suspend()) ?? null;
     const input = { company: company.trim(), email: trimmed, language, ...personInput(name.trim(), phone.trim()) };
     if (state.status === "pending") {
       const res = await resendGuide(state.id, language);
