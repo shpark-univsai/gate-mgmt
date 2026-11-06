@@ -15,10 +15,15 @@ const PREVIEW_QUALITY = 0.8;
 
 /**
  * 기다리는 한도. 도구가 일꾼 안에서 실패하면(CSP 가 wasm 을 막는 등) 약속이 끝나지 않아요 — 버튼이 「읽고 있습니다…」에 멈추지 않게 끊어요.
- * 처음 한 번은 전시장 인터넷으로 약 8MB 를 받으므로 넉넉히.
+ * 처음 한 번은 전시장 인터넷으로 약 8.5MB 를 받아요. 받는 중(진행 소식이 오는 동안)이면 기다림을 늘려요(UG-451 기획 16991) —
+ * 마지막 소식 뒤 LOAD_IDLE_MS 동안 아무 소식이 없거나, 모두 합쳐 LOAD_MAX_MS 가 지나면 끊어요.
  */
-const LOAD_TIMEOUT_MS = 90_000;
+const LOAD_IDLE_MS = 90_000;
+const LOAD_MAX_MS = 300_000;
 const READ_TIMEOUT_MS = 60_000;
+
+/** 읽지 못한 까닭 — tool = 글자 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과), read = 읽다가 실패 */
+export type ReadFailure = "tool" | "read";
 
 const asset = (path: string) => new URL(path, window.location.origin).href;
 
@@ -72,11 +77,13 @@ async function prepare(file: Blob): Promise<{ canvas: HTMLCanvasElement | null; 
 }
 
 type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
+type OcrLog = { status: string; progress: number };
 
-async function startWorker(): Promise<OcrWorker> {
+async function startWorker(logger: (m: OcrLog) => void): Promise<OcrWorker> {
   // 화면 묶음에는 넣지 않고 처음 누를 때 받아요(목록 화면을 무겁게 하지 않게)
   const { createWorker, OEM } = await import("tesseract.js");
   return createWorker(["kor", "eng"], OEM.LSTM_ONLY, {
+    logger,
     workerPath: asset("/ocr/worker.min.js"),
     corePath: asset("/ocr/core"),
     langPath: asset("/ocr/lang"),
@@ -98,40 +105,76 @@ const closeLater = (pending: Promise<OcrWorker>) => void pending.then((w) => w.t
 export function createCardReader() {
   let worker: Promise<OcrWorker> | null = null;
   let disposed = false;
+  // 도구를 받는 동안의 마지막 소식 시각 · 진행률을 받을 곳(읽는 동안만)
+  let lastActivity = 0;
+  let onProgress: ((percent: number) => void) | null = null;
+
+  /** 도구 받기 소식 — 엔진(core) 30% · 언어 데이터 70% 로 나눠 0~100 으로 알려요(tesseract 가 주는 단계가 굵어요: 0 · 25 · 50 …) */
+  function logger(m: OcrLog) {
+    lastActivity = Date.now();
+    if (m.status === "loading tesseract core") onProgress?.(Math.round(30 * m.progress));
+    else if (m.status === "loading language traineddata") onProgress?.(Math.round(30 + 70 * m.progress));
+  }
+
+  /** 받는 동안 소식이 오면 기다림을 늘리는 한도(LOAD_IDLE_MS · LOAD_MAX_MS) */
+  function withLoadTimeout<T>(work: Promise<T>): Promise<T> {
+    const started = Date.now();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setInterval(() => {
+        const now = Date.now();
+        if (now - Math.max(started, lastActivity) > LOAD_IDLE_MS || now - started > LOAD_MAX_MS) {
+          reject(new Error("명함 읽기 도구 받기 시간 초과"));
+        }
+      }, 1000);
+    });
+    return Promise.race([work, timeout]).finally(() => clearInterval(timer));
+  }
 
   function ready(): Promise<OcrWorker> {
     if (!worker) {
-      const starting = startWorker();
+      lastActivity = Date.now();
+      const starting = startWorker(logger);
       worker = starting;
       // 실패 · 시간 초과면 버려요(시간 초과 뒤에 뜨면 닫아요)
-      withTimeout(starting, LOAD_TIMEOUT_MS).catch(() => {
+      withLoadTimeout(starting).catch(() => {
         if (worker === starting) worker = null;
         closeLater(starting);
       });
     }
-    return withTimeout(worker, LOAD_TIMEOUT_MS);
+    return withLoadTimeout(worker);
   }
 
   /**
    * 명함 사진에서 읽은 글자(줄바꿈 포함)와 비교용 줄인 사진(data URL, 만들지 못하면 null).
-   * 읽기 도구를 받지 못했거나 읽다가 실패하면 text 가 null 이에요 — 그래도 이번 사진(preview)은 돌려줘요(앞 명함 사진이 남지 않게).
+   * 읽기 도구를 받지 못했거나 읽다가 실패하면 text 가 null 이고 failure 에 까닭이 있어요 — 그래도 이번 사진(preview)은 돌려줘요(앞 명함 사진이 남지 않게).
+   * progress = 도구를 받는 동안의 진행률(0~100). 이미 받아 둔 도구면 부르지 않아요.
    */
-  async function read(photo: Blob): Promise<{ text: string | null; preview: string | null }> {
+  async function read(
+    photo: Blob,
+    progress?: (percent: number) => void,
+  ): Promise<{ text: string | null; preview: string | null; failure: ReadFailure | null }> {
     const { canvas, preview } = await prepare(photo);
+    onProgress = progress ?? null;
     try {
-      const w = await ready();
+      let w: OcrWorker;
+      try {
+        w = await ready();
+      } catch {
+        // 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과)
+        return { text: null, preview, failure: "tool" };
+      } finally {
+        onProgress = null;
+      }
       try {
         const { data } = await withTimeout(w.recognize(canvas ?? photo), READ_TIMEOUT_MS);
-        return { text: data.text, preview };
+        return { text: data.text, preview, failure: null };
       } catch {
         // 읽다가 멈춘 일꾼은 다시 쓰지 않아요
         if (worker) closeLater(worker);
         worker = null;
-        return { text: null, preview };
+        return { text: null, preview, failure: "read" };
       }
-    } catch {
-      // 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과)
-      return { text: null, preview };
     } finally {
       // 그림판 메모리도 바로 비워요
       if (canvas) canvas.width = canvas.height = 0;
