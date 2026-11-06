@@ -179,3 +179,28 @@ test("UG-451 리뷰 · 아주 긴 줄도 앞부분만 빨리 봐요", () => {
   isSuspectEmail(long);
   assert.ok(Date.now() - t < 500);
 });
+
+test("UG-451 재확인 · 전화번호 · 대문자 낱말 조각과 법인 표시 · 누리집 줄 뒤 메일은 채워요", () => {
+  const filled: [string[], string][] = [
+    [["010-1234-5678 | kim@x.com"], "kim@x.com"],
+    [["010-1234-5678 · kim@x.com"], "kim@x.com"],
+    [["+65 9123 4567 / kim@x.com"], "kim@x.com"],
+    [["Seoul · kim@x.com"], "kim@x.com"],
+    [["UNIVS · kim@x.com"], "kim@x.com"],
+    [["Sales | sales@x.com"], "sales@x.com"],
+    [["Company-A Ltd.", "kim@x.com"], "kim@x.com"],
+    [["Company-A Inc.", "kim@x.com"], "kim@x.com"],
+    [["Ltd.", "kim@x.com"], "kim@x.com"],
+    [["Inc.", "kim@x.com"], "kim@x.com"],
+    [["Co.", "kim@x.com"], "kim@x.com"],
+    [["Pte.", "kim@x.com"], "kim@x.com"],
+    [["www.x.com.", "kim@x.com"], "kim@x.com"],
+  ];
+  for (const [lines, email] of filled) assert.equal(card(...lines).values.email, email, lines.join(" ↵ "));
+});
+
+test("UG-451 재확인 · 소문자 덩어리 조각 · 줄바꿈 잘림은 계속 의심", () => {
+  for (const lines of [["daeun.", "jung@x.co.kr"], ["daeun_", "jung@x.co.kr"], ["daeun-", "jung@x.co.kr"], ["daeun · jung@x.co.kr"], ["daeun·jung@x.co.kr"], ["daeun | jung@x.co.kr"]]) {
+    assert.equal(card(...lines).values.email, "", lines.join(" ↵ "));
+  }
+});

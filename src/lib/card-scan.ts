@@ -216,10 +216,12 @@ export function isJunkChip(line: string): boolean {
 
 // 줄을 나눈 조각이 메일로 시작하는지(「jung@…」) — 앞 조각 · 앞 줄과 이어 읽어야 할 수 있어요
 const startsWithEmail = (seg: string) => /^[A-Za-z0-9._%+-]+@/.test(seg) && extractEmail(seg) !== "";
-// 공백 없는 로마자 · 숫자 한 덩어리(「daeun」) — 메일 라벨(E · Email · Mail)은 빼요
-const isLoneChunk = (seg: string) => /^[A-Za-z0-9_%+-]+$/.test(seg) && !EMAIL_LABEL_TOKEN_RE.test(seg);
-// 줄바꿈으로 잘린 메일 앞부분(「daeun.」 「kim_」 「lee-」) — 공백 없는 한 덩어리가 . _ - 로 끝나요
-const BROKEN_LOCAL_RE = /^[A-Za-z0-9._%+-]*[A-Za-z0-9][._-]$/;
+// 메일 앞부분처럼 보이는 공백 없는 한 덩어리(「daeun」) — 로마자 소문자로 시작해요. 메일 라벨(e · email · mail)은 빼요.
+// 숫자 · - · + · 괄호만인 조각(「010-1234-5678」)과 대문자로 시작하는 낱말(「Seoul」 「UNIVS」 「Sales」)은 덩어리로 보지 않아요.
+const isLoneChunk = (seg: string) => /^[a-z][A-Za-z0-9_%+-]*$/.test(seg) && !EMAIL_LABEL_TOKEN_RE.test(seg);
+// 줄바꿈으로 잘린 메일 앞부분(「daeun.」 「daeun_」 「daeun-」) — 소문자로 시작하는 공백 없는 한 덩어리가 . _ - 로 끝나고,
+// 끝 글자 말고는 점이 없어요(「Ltd.」 「Inc.」 「Co.」 「Pte.」 「www.x.com.」은 빼요)
+const BROKEN_LOCAL_RE = /^[a-z][A-Za-z0-9_%+-]*[._-]$/;
 
 /** 칩으로 보여 줄 조각. suspect = 앞 조각 · 앞 줄과 이어 보면 잘렸을 수 있는 메일 조각(UG-451) */
 type Segment = { text: string; suspect: boolean };
