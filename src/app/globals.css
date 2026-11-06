@@ -159,6 +159,8 @@ p {
 .field-link:hover { color: var(--gray-700); }
 .field-link:disabled { cursor: default; color: var(--gray-400); }
 .field-link--underline { align-self: flex-start; text-decoration: underline; text-underline-offset: 2px; }
+/* 의심 주소 경고 아래 「명함과 같은 주소예요」(UG-451 기획 17030) — 왼쪽에 붙은 작은 테두리 버튼 */
+.suspect-confirm { align-self: flex-start; }
 .error { color: var(--danger-400); }
 /* 칸 두 개를 한 줄에(회사명 · 이름 / 고객 이메일 · 연락처) — 휴대폰은 위아래로 */
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
@@ -474,12 +476,14 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
  * 말줄임된 글자를 눌러 전체를 보는 말풍선(TapClip — PC 표 회사명 · 이메일, 휴대폰 발급 취소 카드 회사명, UG-450 기획 16995 · 17020).
  * 감싼 상자는 폭을 넘기지 않고 줄어요. 말줄임되면 글자를 테두리 없는 버튼으로 감싸요(모양은 그대로).
  * 말풍선은 화면에 고정(위치는 화면이 정해요) — 표의 옆 스크롤 상자에 잘리지 않게. 프로필 메뉴 · 더보기와 같은 어두운 유리
+ * 말풍선은 보기만 해요 — 누름은 그 아래 글자가 받아요(UG-450 기획 17028 — 아래 이메일 줄을 덮어도 한 번에 눌려요)
  */
 .tap-clip { display: flex; min-width: 0; max-width: 100%; }
 .tap-clip-button { display: flex; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .tap-tip {
   position: fixed;
   z-index: 40;
+  pointer-events: none;
   padding: 6px 10px;
   background: var(--overlay-dark-80);
   -webkit-backdrop-filter: blur(20px);

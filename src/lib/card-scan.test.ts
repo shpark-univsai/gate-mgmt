@@ -3,7 +3,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { emailHasConfusable, isJunkChip, isSuspectChip, isSuspectEmail, isSuspectValue, readLines, scanCard, tapChip } from "./card-scan.ts";
+import {
+  chipEmailAddresses,
+  confusableNote,
+  emailHasConfusable,
+  isEmailLikeChip,
+  isJunkChip,
+  isSuspectChip,
+  isSuspectEmail,
+  isSuspectValue,
+  readLines,
+  scanCard,
+  tapChip,
+} from "./card-scan.ts";
 
 /** 화면(계정 만들기 창)의 이메일 형식 검사와 같은 식 */
 const PAGE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -658,10 +670,12 @@ test("UG-451 17022 리뷰 F2 · 의심 칩 값은 형식 검사에 걸리거나 
     for (const c of r.chips.filter(isSuspectChip)) {
       suspects++;
       assert.ok(!PAGE_EMAIL_RE.test(c.value) || isSuspectValue(c.value, r.chips), `${lines.join(" ↵ ")} → ${c.value}`);
-      // 앞뒤 공백만 떼고 봐요(대소문자는 그대로 — 고치면 풀려요)
+      // 앞뒤 공백을 떼고 대소문자 없이 봐요(기획 17030) — 글자가 달라지면 풀려요
       if (PAGE_EMAIL_RE.test(c.value)) {
         assert.equal(isSuspectValue(` ${c.value} `, r.chips), true);
-        assert.equal(isSuspectValue(c.value.toLowerCase() === c.value ? `${c.value}x` : c.value.toLowerCase(), r.chips), false);
+        assert.equal(isSuspectValue(c.value.toUpperCase(), r.chips), true);
+        assert.equal(isSuspectValue(c.value.toLowerCase(), r.chips), true);
+        assert.equal(isSuspectValue(`${c.value}x`, r.chips), false);
       }
     }
   }
@@ -741,7 +755,7 @@ test("UG-451 최종 리뷰 R1 · 가운뎃점으로 이어진 덩어리는 대�
   for (const [lines, email] of filled) assert.equal(card(...lines).values.email, email, lines.join(" ↵ "));
 });
 
-test("UG-451 최종 리뷰 R3 · 의심 칩에서 뽑은 잘린 주소를 그대로 쳐도 막아요(도메인만 대소문자 없이)", () => {
+test("UG-451 최종 리뷰 R3 · 의심 칩에서 뽑은 잘린 주소를 그대로 쳐도 막아요(주소 전체 대소문자 없이 — 기획 17030)", () => {
   const cases: [string[], string][] = [
     [["tan@x.com · sg"], "tan@x.com"],
     [["daeun · jung@x.co.kr"], "jung@x.co.kr"],
@@ -754,13 +768,81 @@ test("UG-451 최종 리뷰 R3 · 의심 칩에서 뽑은 잘린 주소를 그대
     assert.equal(isSuspectValue(` ${candidate} `, chips), true, candidate);
     const at = candidate.lastIndexOf("@");
     assert.equal(isSuspectValue(candidate.slice(0, at + 1) + candidate.slice(at + 1).toUpperCase(), chips), true, `${candidate} 도메인 대문자`);
-    // 한 글자라도 다르면 풀려요(@ 앞은 대소문자 그대로)
+    // @ 앞 대소문자만 바꿔도 막아요(기획 17030 — 「Kim@acme.com」), 한 글자라도 다르면 풀려요
+    assert.equal(isSuspectValue(candidate.slice(0, at).toUpperCase() + candidate.slice(at), chips), true, `${candidate} @ 앞 대문자`);
+    assert.equal(isSuspectValue(candidate.toLowerCase(), chips), true, `${candidate} 소문자`);
     assert.equal(isSuspectValue(`x${candidate}`, chips), false, candidate);
-    assert.equal(isSuspectValue(candidate.slice(0, at).toUpperCase() + candidate.slice(at), chips), candidate.slice(0, at).toUpperCase() === candidate.slice(0, at), candidate);
   }
   // 고친 주소는 막지 않아요
   assert.equal(isSuspectValue("tan@x.com.sg", card("tan@x.com · sg").chips), false);
   assert.equal(isSuspectValue("daeun.jung@x.co.kr", card("daeun · jung@x.co.kr").chips), false);
   // 의심이 아닌 칩의 주소는 막지 않아요
   assert.equal(isSuspectValue("kim@x.com", card("kim@x.com T. 02-123-4567").chips), false);
+});
+
+test("UG-451 17030 ② 의심 주소는 대소문자만 바꿔도 막아요(「Kim@acme.com」)", () => {
+  for (const lines of [["Sales · kim@acme.com"], ["CEO · kim@acme.com"], ["Seoul · kim@acme.com"], ["Director.", "kim@acme.com"], ["kim@acme.com | sg"], ["kim@acme.com KR"]]) {
+    const { chips, values } = card(...lines);
+    assert.equal(values.email, "", lines.join(" ↵ "));
+    for (const v of ["kim@acme.com", "Kim@acme.com", "KIM@ACME.COM", "kim@Acme.Com", " Kim@acme.com "]) {
+      assert.equal(isSuspectValue(v, chips), true, `${lines.join(" ↵ ")} · ${v}`);
+    }
+    assert.equal(isSuspectValue("kim@acme.co", chips), false, lines.join(" ↵ "));
+  }
+});
+
+test("UG-451 17030 ③ 형식이 깨진 메일 모양 글자(@ 양옆 글자)도 메일 모양으로 봐요", () => {
+  const broken = card("lena@koh sg");
+  assert.equal(broken.values.email, "");
+  assert.equal(broken.chips.some(isEmailLikeChip), true);
+  assert.equal(card("Lena Koh", "lena@koh sg").chips.some(isEmailLikeChip), true);
+  assert.equal(card("1004@naver com").chips.some(isEmailLikeChip), true);
+  assert.equal(card("kim@x.com").chips.some(isEmailLikeChip), true);
+  // @ 한쪽이 비었으면 메일 모양이 아니에요(@ 앞뒤 띄어쓰기는 읽을 때 붙여요 — 「a @ b」 → 「a@b」)
+  for (const t of ["@acme", "acme@", "(@)", "Lena Koh"]) {
+    assert.equal(card(t).chips.some(isEmailLikeChip), false, t);
+  }
+});
+
+test("UG-451 17030 ④ 명함에서 채우거나 칩을 눌러 넣는 메일 주소는 전체 소문자(의심 칩은 읽은 그대로)", () => {
+  const r = card("USER1+X@EXAMPLE.COM", "010-1234-5678");
+  assert.equal(r.values.email, "user1+x@example.com");
+  const chip = r.chips.find((c) => c.kind === "email")!;
+  // 칩 글자는 읽은 그대로 보여요
+  assert.equal(chip.text, "USER1+X@EXAMPLE.COM");
+  // 칩을 눌러 넣어도 소문자
+  const tap = tapChip(chip, {}, { company: "", name: "", email: "", phone: "" }, null);
+  assert.deepEqual(tap.set, { field: "email", value: "user1+x@example.com" });
+  assert.deepEqual(chipEmailAddresses(r.chips), ["user1+x@example.com"]);
+  assert.equal(card("E. Kim.Lee@Acme.Co.Kr").values.email, "kim.lee@acme.co.kr");
+  // 잘렸을 수 있는 칩은 읽은 그대로 넣어요(명함과 견줘 고치게)
+  const suspect = card("Sales · Kim@Acme.com");
+  const sc = suspect.chips.find(isSuspectChip)!;
+  const st = tapChip(sc, {}, { company: "", name: "", email: "", phone: "" }, null);
+  assert.equal(st.set?.value, sc.value);
+  assert.notEqual(st.set?.value, st.set?.value.toLowerCase());
+});
+
+test("UG-451 반박 리뷰 M1 · 소문자로 넣은 주소의 헷갈리는 글자는 칩이 읽은 그대로로 판단 · 강조해요", () => {
+  const marks = (n: ReturnType<typeof confusableNote>) => n.parts.filter((p) => p.confusable).map((p) => p.text).join("");
+  for (const [read, chars] of [
+    ["Iee77@x.com", "i"],
+    ["yoon.jI0110@x.com", "i0110"],
+    ["kimO1@x.com", "o1"],
+  ] as const) {
+    const { values, chips } = card(read);
+    const value = values.email;
+    assert.equal(value, read.toLowerCase(), read);
+    const chip = chips.find((c) => c.kind === "email")!;
+    const note = confusableNote(value, chip.value);
+    assert.equal(note.confusable, true, read);
+    // 보여 주는 글자는 칸 값(소문자) 그대로, 강조 위치는 읽은 글자 기준
+    assert.equal(note.parts.map((p) => p.text).join(""), value, read);
+    assert.equal(marks(note), chars, read);
+  }
+  // 소문자 값만 보면 I 가 빠져 안내가 없어요 — 직원이 친 값(read 없음 · 다른 값)은 칸 값 그대로 판단
+  assert.equal(confusableNote("iee77@x.com").confusable, false);
+  assert.equal(confusableNote("iee78@x.com", "Iee77@x.com").confusable, false);
+  assert.equal(marks(confusableNote("kimo1@x.com")), "1");
+  assert.equal(confusableNote("rachel@x.com", "Rachel@x.com").confusable, false);
 });
