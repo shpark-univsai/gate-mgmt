@@ -44,7 +44,6 @@ import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
 import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
 import {
   confusableParts,
-  emailDomain,
   emailHasConfusable,
   isFilled,
   scanCard,
@@ -1145,13 +1144,13 @@ function CardPhotoViewer({ src, onClose }: { src: string; onClose: () => void })
 
 /**
  * 명함에서 읽은 이메일 칸 아래 안내 — 위아래로 쌓아 겹치지 않게.
- * 로컬 부분(@ 앞)에 헷갈리는 글자(0 · O, 1 · l · I)가 있으면 이메일을 다시 보여 주며 그 글자만 강조하고,
- * 도메인이 있으면 「도메인 — 명함과 같은지 확인해 주세요.」(도메인만 굵게, 기획 16846 — company-a.com 을 company-a.qi 로 읽는 일).
+ * 로컬 부분(@ 앞)에 숫자 · 로마자가 섞이고 헷갈리는 글자(0 · O, 1 · l · I)가 있으면 이메일을 다시 보여 주며 그 글자만 강조하고,
+ * 「이메일 전체 — 명함과 같은지 확인해 주세요.」(이메일 전체 굵게, UG-451 — 도메인만 보이면 잘린 앞부분(jung@ ← daeun.jung@)을 놓쳐요.
+ * 기획 16846 — company-a.com 을 company-a.qi 로 읽는 일도 그대로 보여요).
  */
 function ScannedEmailNotes({ email }: { email: string }) {
   const confusable = emailHasConfusable(email);
-  const domain = emailDomain(email);
-  if (!confusable && !domain) return null;
+  if (!email) return null;
   return (
     <div className="confusable">
       {confusable && (
@@ -1170,14 +1169,12 @@ function ScannedEmailNotes({ email }: { email: string }) {
           <p className="help">{CARD_PHOTO_TEXT.confusable}</p>
         </>
       )}
-      {domain && (
-        <p className="help">
-          <strong className="domain-check" translate="no">
-            {domain}
-          </strong>{" "}
-          — {CARD_PHOTO_TEXT.domainCheck}
-        </p>
-      )}
+      <p className="help">
+        <strong className="email-check" translate="no">
+          {email}
+        </strong>{" "}
+        — {CARD_PHOTO_TEXT.emailCheck}
+      </p>
     </div>
   );
 }

@@ -198,6 +198,19 @@ export function isGarbled(line: string): boolean {
 }
 
 /**
+ * 칩으로 보여 줄 필요가 없는 짧은 잡음 줄(UG-451).
+ * - 글자(한글 · 로마자) 없이 숫자 · 기호만 있는 줄 — 처음 채우기에 쓸 전화번호(phoneHits 의 rank 가 있는 번호)가 있으면 남겨요.
+ *   QR 무늬를 읽은 「11800 8083」 같은 줄이 빠져요.
+ * - 띄어쓰기 없는 한글 정확히 2글자(「대표」 「주소」 — 2글자 이름도 빠져요, 기획 결정)
+ * - 로마자 대문자만 1~3글자(「HR」 「PIE」). 「R&D 및 AI 팀」 「B 동 3 층」 같은 줄은 남아요.
+ */
+export function isJunkChip(line: string): boolean {
+  const compact = line.replace(/\s/g, "");
+  if (!/\p{L}/u.test(compact)) return !phoneHits(line).some((h) => h.rank !== null);
+  return /^[가-힣]{2}$/.test(line) || /^[A-Z]{1,3}$/.test(line);
+}
+
+/**
  * 읽은 글자 → 칩으로 보여 줄 줄(조각) 목록. 줄마다 구분자(/ · | …)와 줄 가운데 항목 라벨(T. · M. · E. · Fax …) 앞에서 나누고 정리해요.
  * 잡음 조각 · 깨진 줄(isGarbled)과 같은 조각은 빼요.
  */
@@ -210,7 +223,7 @@ export function readLines(text: string): string[] {
       .split(SEPARATOR_RE)
       .flatMap((part) => part.split(LABEL_SPLIT_RE))
       .map(cleanSegment)
-      .filter((seg) => isMeaningful(seg) && !isGarbled(seg));
+      .filter((seg) => isMeaningful(seg) && !isGarbled(seg) && !isJunkChip(seg));
     for (const seg of segs) {
       if (seen.has(seg)) continue;
       seen.add(seg);
@@ -230,34 +243,69 @@ function normalizePhone(run: string): string {
 }
 
 const digitsOf = (s: string) => s.replace(/\D/g, "");
-/** 휴대전화(010 · +82 10) — 연락처 칸에 먼저 넣어요 */
-const isMobile = (phone: string) => /^(010|8210|82010)/.test(digitsOf(phone));
+/** 번호 모양만 보고 휴대전화인지(한국 010 · +82 10, 싱가포르 +65 8 · 9) — 라벨이 없거나 Tel 라벨이어도 휴대전화 순위로 올려요 */
+const isMobile = (phone: string) => /^(010|8210|82010)/.test(digitsOf(phone)) || /^65[89]\d{7}$/.test(digitsOf(phone));
 
-type PhoneHit = { value: string; fax: boolean };
+// 번호 바로 앞 라벨(UG-451) — 휴대전화 라벨 · 전화 라벨. 번호 바로 앞(앞 번호가 끝난 뒤 ~ 이 번호 앞)의 끝에서만 봐요.
+const MOBILE_LABEL_RE = /(?:^|[^A-Za-z])(?:M|Mobile|MOBILE|Mob|HP|H\.P|Cell|CELL|C|휴대폰|휴대전화|핸드폰)\s*[.:)]?\s*$/;
+const TEL_LABEL_RE = /(?:^|[^A-Za-z])(?:T|Tel|TEL|tel|Phone|PHONE|P|Office|Direct|DID|전화|직통|대표)\s*[.:)]?\s*$/;
+// 전화번호가 아닌 번호 라벨 — 번호 앞 구간 어디에 있든 그 번호는 전화번호로 보지 않아요(싱가포르 UEN · 사업자 등록번호 · 회사 등록번호)
+const NOT_PHONE_LABEL_RE = /\b(?:UEN|Reg|Registration|GST|ABN|CRN|VAT)\b|사업자|법인/i;
+// 라벨 없이 숫자만 있는 줄(숫자 · 공백 · - · .)이 전화번호로 쓰일 모양 — 한국 0 으로 시작 9~11자리, 나라 번호(82 · 65)로 시작.
+// 9자리 미만이거나 이 모양이 아니면 QR 무늬 등 잡음(「11800 8083」)으로 봐요.
+const BARE_DIGITS_RE = /^[\d\s.-]+$/;
+const BARE_PHONE_RE = /^(?:0\d{8,10}|82\d{9,10}|65\d{8})$/;
 
-/** 줄의 전화번호들. 날짜 · 사업자 등록번호는 빼고, 번호 바로 앞 구간에 팩스 라벨이 있으면 fax. */
+/**
+ * 처음 채우기 순위(작을수록 먼저) — 0 휴대전화(라벨 Mobile · M · HP · 휴대폰 · 휴대전화 · Cell · C, 또는 번호가 휴대전화 모양),
+ * 1 전화 라벨(Tel · T · 전화 · Phone · P …), 2 라벨 없음, null = 처음 채우기에 쓰지 않음(팩스 · 라벨 없는 숫자만 줄이 전화번호 모양이 아님).
+ * null 이어도 전화 칩으로는 보여요 — 직원이 눌러 넣을 수 있어요.
+ */
+type PhoneRank = 0 | 1 | 2 | null;
+
+type PhoneHit = { value: string; fax: boolean; rank: PhoneRank };
+
+/** 줄의 전화번호들. 날짜 · 사업자 등록번호 · UEN 등 등록번호(라벨 · 끝에 붙은 글자)는 빼고, 번호 바로 앞 구간에 팩스 라벨이 있으면 fax. */
 function phoneHits(line: string): PhoneHit[] {
   const valid = (p: string) => {
     const n = digitsOf(p).length;
     return n >= 8 && n <= 15 && !BIZ_NO_RE.test(p);
   };
+  const bare = BARE_DIGITS_RE.test(line);
   const hits: PhoneHit[] = [];
   let prevEnd = 0;
   for (const m of line.matchAll(PHONE_RUN_RE)) {
     const before = line.slice(prevEnd, m.index);
-    prevEnd = m.index + m[0].length;
+    const end = m.index + m[0].length;
+    prevEnd = end;
     if (DATE_RE.test(m[0].trim())) continue;
+    if (NOT_PHONE_LABEL_RE.test(before)) continue;
+    // 숫자만 붙은 묶음 바로 뒤에 글자가 붙으면 등록번호(「201812345K」)예요
+    if (/^\d+$/.test(m[0]) && /^[A-Za-z]/.test(line.slice(end))) continue;
     const fax = FAX_BEFORE_RE.test(before);
+    const label: PhoneRank = MOBILE_LABEL_RE.test(before) ? 0 : TEL_LABEL_RE.test(before) ? 1 : 2;
     const whole = normalizePhone(m[0]);
     // 「02-123-4567 010-1234-5678」처럼 공백으로만 이어진 두 번호는 한 묶음으로 읽혀요 — 너무 길면 공백에서 나눠 봐요
-    for (const value of valid(whole) ? [whole] : whole.split(" ").filter(valid)) hits.push({ value, fax });
+    for (const value of valid(whole) ? [whole] : whole.split(" ").filter(valid)) {
+      let rank: PhoneRank = isMobile(value) ? 0 : label;
+      if (fax || (bare && !BARE_PHONE_RE.test(digitsOf(value)))) rank = null;
+      hits.push({ value, fax, rank });
+    }
   }
   return hits;
 }
 
-/** 고를 번호: 휴대전화(팩스 아님) → 팩스 아닌 번호 → 그 밖 */
+/** 고를 번호: 순위(휴대전화 → 전화 라벨 → 라벨 없음)가 가장 앞선 번호, 같으면 먼저 나온 번호. 쓸 번호가 없으면 첫 번호(칩 값) */
 function bestPhone(hits: PhoneHit[]): PhoneHit | undefined {
-  return hits.find((h) => !h.fax && isMobile(h.value)) ?? hits.find((h) => !h.fax) ?? hits[0];
+  let best: PhoneHit | undefined;
+  for (const h of hits) if (h.rank !== null && (best === undefined || h.rank < (best.rank as number))) best = h;
+  return best ?? hits[0];
+}
+
+/** 칩의 처음 채우기 순위(phoneHits 의 rank) — 전화 칩이 아니면 null */
+function phoneRank(chip: Chip): PhoneRank {
+  if (chip.kind !== "phone") return null;
+  return bestPhone(phoneHits(chip.text))?.rank ?? null;
 }
 
 /** 줄에서 전화번호를 뽑아요(여럿이면 휴대전화 먼저, 팩스는 나중). 없으면 "" */
@@ -282,10 +330,60 @@ export function extractEmail(line: string): string {
   return `${local}@${labels.join(".")}`;
 }
 
+// 메일 주소 앞에 붙어 읽혀도 잘린 주소로 보지 않는 라벨(「E john@…」 「Email. john@…」)
+const EMAIL_LABEL_TOKEN_RE = /^(?:E|E-?mail|Mail)$/i;
+// 잘못 읽은 끝 도메인(UG-451) — 실재하지 않는 최상위 도메인 중 com · net · org · kr 을 잘못 읽은 흔한 모양만(.cor · .con …)
+const TLD_TYPOS = new Set("cor con corn cpm comm coom ner nel orq ogr krr".split(" "));
+
+/** 메일 주소 앞뒤에서 본 「잘렸을 수 있는」 조각. head · tail = 읽은 그대로의 앞 덩어리 · 뒤 조각(없으면 ""), typo = 끝 도메인 오독 */
+type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean };
+
+/**
+ * 줄의 메일 주소가 잘렸을 수 있는지 살펴요(UG-451). 글자 읽기가 주소 속 「.」 를 공백 · 쉼표로 읽으면 메일 모양 꼬리만 뽑혀요
+ * (「daeun jung@…」 → jung@… · 「…@bluepeak.com. sg」 → …@bluepeak.com).
+ * - head: 주소 바로 앞에 공백 · 쉼표 · 점으로만 떨어진 로마자 · 숫자 덩어리(「daeun jung@」 「daeun,jung@」 「daeun. jung@」).
+ *   메일 라벨(E · Email · Mail)과 전화번호 끝자리(「010-1234-5678 kim@…」)는 빼요.
+ * - tail: 끝 도메인 바로 뒤에 점 · 쉼표(앞뒤 공백 허용) + 1~4글자 로마자 · 숫자 덩어리(「. kr」 「.58」 「. sg」),
+ *   또는 공백 하나 뒤 소문자 2글자로 줄이 끝남(「…co kr」). 문장 끝 점(「…com.」)은 괜찮아요.
+ * - typo: 끝 도메인이 흔한 오독 모양(TLD_TYPOS — .cor · .con 등)
+ */
+function emailSuspicion(line: string): EmailSuspicion | null {
+  const m = line.match(EMAIL_RE);
+  if (!m || m.index === undefined) return null;
+  const before = line.slice(0, m.index);
+  const after = line.slice(m.index + m[0].length);
+  let head = "";
+  const hm = before.match(/(?:^|[^A-Za-z0-9_%+-])([A-Za-z0-9_%+-]+)([ ,.]+)$/);
+  if (hm && !EMAIL_LABEL_TOKEN_RE.test(hm[1])) {
+    // 전화번호 끝자리 뒤에 띄어 쓴 주소는 잘린 게 아니에요
+    const rest = before.slice(0, before.length - hm[2].length);
+    const runs = [...rest.matchAll(PHONE_RUN_RE)];
+    const last = runs[runs.length - 1];
+    const phoneTail =
+      /^[\d+-]+$/.test(hm[1]) && last !== undefined && last.index + last[0].length === rest.length && digitsOf(last[0]).length >= 8;
+    if (!phoneTail) head = hm[1] + hm[2];
+  }
+  const tail = after.match(/^(?:\s*[.,]\s*[A-Za-z0-9]{1,4}(?![A-Za-z0-9])| [a-z]{2}$)/)?.[0] ?? "";
+  const tld = extractEmail(line).split(".").pop() ?? "";
+  return { match: m[0], head, tail, typo: TLD_TYPOS.has(tld.toLowerCase()) };
+}
+
+/** 줄의 메일 주소가 잘렸거나 잘못 읽혔을 수 있는지(UG-451) — 그런 주소는 처음 채우기에서 빼요(autoFill). */
+export function isSuspectEmail(line: string): boolean {
+  const s = emailSuspicion(line);
+  return s !== null && (s.head !== "" || s.tail !== "" || s.typo);
+}
+
 /** 한 줄의 종류와 칸에 넣을 값. 메일이 함께 있는 줄은 메일로 봐요(메일 칸이 더 중요해요 — 라벨로 나눈 뒤라 드물어요). */
 export function classifyLine(line: string): { kind: ChipKind; value: string; fax?: boolean } {
   const email = extractEmail(line);
-  if (email) return { kind: "email", value: email };
+  if (email) {
+    // 잘렸을 수 있는 주소는 앞 덩어리부터 뒤 조각까지 읽은 그대로(「daeun jung@miraero-logis.co.kr」)를 값으로 —
+    // 칩을 눌러 넣으면 형식 오류로 보여 직원이 고쳐요(잘린 꼬리가 조용히 들어가지 않게)
+    const s = emailSuspicion(line);
+    if (s && (s.head || s.tail)) return { kind: "email", value: (s.head + s.match + s.tail).trim() };
+    return { kind: "email", value: email };
+  }
   const phone = bestPhone(phoneHits(line));
   if (phone) return { kind: "phone", value: phone.value, ...(phone.fax ? { fax: true } : {}) };
   return { kind: "other", value: line };
@@ -342,7 +440,7 @@ export function chipValueFor(chip: Chip, field: ScanField): string {
 }
 
 /**
- * 처음 채우기(동작 규칙 3 · 칩 규칙 1 · 7): 모양이 정해진 메일(@ 모양) · 연락처(숫자 묶음 — 휴대전화 → 팩스 아닌 번호 → 그 밖)만 채워요.
+ * 처음 채우기(동작 규칙 3 · 칩 규칙 1 · 7): 모양이 정해진 메일(@ 모양) · 연락처(숫자 묶음 — 휴대전화 → 전화 라벨 → 라벨 없음, UG-451)만 채워요.
  * 회사명 · 이름은 비워 두고 직원이 칩을 눌러 넣어요(기획 16846 — 잘못 읽은 이름 · 회사명이 칸에 들어가 그대로 보내지지 않게).
  * 못 찾은 칸도 비워요(동작 규칙 4).
  */
@@ -355,10 +453,20 @@ export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks 
     links[field] = chip.id;
   };
 
-  put("email", chips.find((c) => c.kind === "email"));
+  // 잘렸거나 잘못 읽혔을 수 있는 주소(isSuspectEmail)는 채우지 않아요 — 칸이 비어 「메일 주소를 찾지 못했습니다」가 떠요(UG-451)
+  put("email", chips.find((c) => c.kind === "email" && !isSuspectEmail(c.text)));
 
-  const phones = chips.filter((c) => c.kind === "phone");
-  put("phone", phones.find((c) => !c.fax && isMobile(c.value)) ?? phones.find((c) => !c.fax) ?? phones[0]);
+  // 순위(phoneRank)가 가장 앞선 전화 칩, 같으면 먼저 나온 칩. 팩스 · 전화번호 모양이 아닌 숫자만 줄은 채우지 않아요(UG-451)
+  let phone: Chip | undefined;
+  let phoneBest: number = Infinity;
+  for (const c of chips) {
+    const rank = phoneRank(c);
+    if (rank !== null && rank < phoneBest) {
+      phone = c;
+      phoneBest = rank;
+    }
+  }
+  put("phone", phone);
   return { values, links };
 }
 
@@ -437,11 +545,14 @@ export function hasConfusable(text: string): boolean {
 }
 
 /**
- * 이메일 @ 앞(로컬 부분)에 헷갈리는 글자가 있는지. 도메인은 보지 않아요 — 도메인은 따로 「명함과 같은지」 안내해요(emailDomain).
+ * 이메일 @ 앞(로컬 부분)에 헷갈리는 글자가 있고, 로컬 부분에 숫자와 로마자가 섞였는지(UG-451 — 「yoon.jl0110」).
+ * 숫자가 없는 이름 주소(rachel · daniel)의 l 은 0 · 1 과 헷갈릴 일이 적어 띄우지 않아요.
+ * 도메인은 보지 않아요 — 이메일 전체를 따로 「명함과 같은지」 안내해요.
  */
 export function emailHasConfusable(email: string): boolean {
   const at = email.lastIndexOf("@");
-  return hasConfusable(at === -1 ? email : email.slice(0, at));
+  const local = at === -1 ? email : email.slice(0, at);
+  return hasConfusable(local) && /\d/.test(local) && /[A-Za-z]/.test(local);
 }
 
 /** 강조해 보여 줄 조각 — 로컬 부분(@ 앞)의 헷갈리는 글자만 한 글자씩 따로(confusable = true) */
@@ -457,10 +568,4 @@ export function confusableParts(text: string): { text: string; confusable: boole
     else parts.push({ text: ch, confusable });
   }
   return parts;
-}
-
-/** 이메일의 도메인(@ 뒤). @ 가 없거나 뒤가 비면 "" — 명함에서 읽은 이메일 칸 아래 「도메인 확인」 안내에 굵게 보여요. */
-export function emailDomain(email: string): string {
-  const at = email.lastIndexOf("@");
-  return at === -1 ? "" : email.slice(at + 1);
 }

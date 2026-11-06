@@ -212,7 +212,7 @@ p {
 /* 고정폭 글꼴 — 0 · O, 1 · l · I 가 모양으로 갈리게 */
 .confusable-email { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 20px; letter-spacing: 0.02em; color: var(--gray-900); overflow-wrap: anywhere; }
 .confusable-char { padding: 0 1px; border-radius: 2px; background: var(--gray-200); color: var(--gray-900); font-weight: 800; }
-.domain-check { font-weight: 700; color: var(--gray-900); overflow-wrap: anywhere; } /* 명함에서 읽은 이메일의 도메인 — 「명함과 같은지 확인해 주세요.」 앞 */
+.email-check { font-weight: 700; color: var(--gray-900); overflow-wrap: anywhere; } /* 명함에서 읽은 이메일 전체(UG-451) — 「명함과 같은지 확인해 주세요.」 앞 */
 
 .segmented { display: flex; gap: 8px; }
 .segmented button {
