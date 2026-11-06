@@ -108,7 +108,8 @@ const languageShort = (l: MailLanguage) => (l === "en" ? "EN" : "KO");
 // closed = 계정 해지(UG-443)가 끝나 정리된 기록 — 기획 16871 「해지됨」
 // closing = 해지 중(UG-443 기획 16908) — 계정 해지가 끝나기 전. 그동안 다시 보내기 · 발급 취소를 막아요
 const STATUS_LABEL: Record<AccountStatus, string> = {
-  pending: "첫 로그인 전",
+  // 「첫 로그인 전」 → 「로그인 전」(UG-450 기획 17007) — 요약 카드 · 칩 · 선택 상자 · 표 · 카드 · CSV 가 모두 이 이름을 따라요
+  pending: "로그인 전",
   in_use: "사용 중",
   closing: "해지 중",
   cancelled: "발급 취소",
@@ -157,7 +158,7 @@ const fmtMonthDay = (iso: string) => {
 };
 
 /**
- * 발급 취소 · 해지됨 줄의 처리 기록 — 상태 배지 오른쪽에 「11.05 14:51 · khj」(UG-450 기획 16965).
+ * 발급 취소 · 해지됨 줄의 처리 기록 「11.05 14:51 · khj」(UG-450 기획 16965) — PC 표는 상태 아래 줄(기획 17007), 휴대폰 카드는 상태 오른쪽.
  * 해지됨은 해지를 실행한 직원 · 파기 완료 시각. 직원이 없으면(시스템 정리) 시각만, 둘 다 없으면 "".
  */
 const goneRecord = (a: Account) =>
@@ -173,6 +174,78 @@ function StatusWithRecord({ account }: { account: Account }) {
       <span className="gone-record" title={record}>
         {record}
       </span>
+    </span>
+  );
+}
+
+/**
+ * PC 표의 상태 칸(UG-450 기획 17007) — 발급 취소 · 해지됨이면 두 줄: 「● 발급 취소」 아래에 처리 기록 「11.05 14:51 · khj」.
+ * 처리 기록은 점 뒤 글자 시작에 맞춰 들여 써요(13 · 회색). 휴대폰 카드는 전처럼 한 줄(StatusWithRecord).
+ */
+function StatusCell({ account }: { account: Account }) {
+  const record = isGone(account) ? goneRecord(account) : "";
+  if (!record) return <Status account={account} />;
+  return (
+    <span className="status-stack">
+      <Status account={account} />
+      <span className="gone-record status-stack-record" title={record}>
+        {record}
+      </span>
+    </span>
+  );
+}
+
+/** 표의 메일 언어 — 고객 칸 이메일 뒤 「 · 영문」(UG-450 기획 17007). CSV · 계정 만들기 창은 전처럼 English · 한국어 */
+const LANGUAGE_TAG: Record<MailLanguage, string> = { en: "영문", ko: "국문" };
+
+/**
+ * 한 줄 말줄임 글자. 잘렸을 때만 마우스를 올리면 전체 글자(title) — 잘렸는지는 올리는 순간 재요(표 폭 · 글꼴이 바뀌어도 맞게).
+ * 말줄임은 눈에만 그래요 — 낭독기는 전체 글자를 읽어요.
+ */
+function ClipText({ text, query, className }: { text: string; query: string; className: string }) {
+  return (
+    <span
+      className={className}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget;
+        if (isTextTruncated(el)) el.title = text;
+        else el.removeAttribute("title");
+      }}
+    >
+      <Highlight text={text} query={query} />
+    </span>
+  );
+}
+
+/**
+ * PC 표의 고객 칸(UG-450 기획 17007) — 위 회사명(13 · 본문색), 아래 고객 이메일 + 「 · 영문」(13 · 회색).
+ * 회사명 · 이메일은 따로 말줄임(마우스를 올리면 전체). 이메일이 길어도 이메일만 줄고 「 · 영문」은 늘 보여요.
+ * 하나만 남았으면 그 한 줄, 둘 다 비었으면 발급 취소 · 해지됨은 「삭제됨」(13 · 회색), 그 밖은 「—」.
+ * language 가 없으면(「작성 중」 명함에서 고르지 않음) 언어를 붙이지 않아요.
+ */
+function CustomerCell({
+  company,
+  email,
+  language,
+  gone,
+  query,
+}: {
+  company: string | null;
+  email: string | null;
+  language: MailLanguage | null;
+  gone: boolean;
+  query: string;
+}) {
+  if (!company && !email) return gone ? <span className="gone-company">삭제됨</span> : <span className="dash">—</span>;
+  return (
+    <span className="customer">
+      {company && <ClipText className="customer-company" text={company} query={query} />}
+      {email && (
+        <span className="customer-email">
+          <ClipText className="customer-email-addr" text={email} query={query} />
+          {language && <span className="customer-email-lang">{` · ${LANGUAGE_TAG[language]}`}</span>}
+        </span>
+      )}
     </span>
   );
 }
@@ -839,7 +912,7 @@ export default function AccountsPage() {
           />
           <Metric
             id="pending"
-            label="첫 로그인 전"
+            label={STATUS_LABEL.pending}
             value={metrics?.pending}
             sub="고객이 아직 로그인하지 않음"
             pressed={applied.status === "pending"}
@@ -898,7 +971,7 @@ export default function AccountsPage() {
             options={[
               // 요약 카드와 같은 차례(UG-450 기획 16957) — 카드가 없는 「해지 중」 · 「해지됨」은 맨 뒤
               { value: "all", label: "상태 전체" },
-              { value: "pending", label: "첫 로그인 전" },
+              { value: "pending", label: STATUS_LABEL.pending },
               { value: "in_use", label: "사용 중" },
               { value: "cancelled", label: "발급 취소" },
               { value: "closed_all", label: "해지 (해지 중 · 해지됨)" },
@@ -924,7 +997,7 @@ export default function AccountsPage() {
             {(
               [
                 ["all", "전체", metrics?.total],
-                ["pending", "첫 로그인 전", metrics?.pending],
+                ["pending", STATUS_LABEL.pending, metrics?.pending],
                 ["in_use", "사용 중", metrics?.inUse],
                 ["cancelled", "발급 취소", metrics?.cancelled],
                 // 해지(UG-450) = 해지 중 + 해지됨 한 칩 — 서버 closed_all 로 둘 다 걸러요. 예전 서버라 둘 중 하나라도 없으면 숫자 없이
@@ -958,10 +1031,10 @@ export default function AccountsPage() {
           </div>
         )}
 
-        {/* PC: 표 */}
-        <div className="table" role="table" aria-label="발급한 계정">
+        {/* PC: 표 — 5칸(UG-450 기획 17007): 회사명 · 고객 이메일 · 메일 언어를 「고객」 한 칸에 두 줄로. 칸 폭은 globals.css .table--accounts */}
+        <div className="table table--accounts" role="table" aria-label="발급한 계정">
           <div className="tr th" role="row">
-            {["회사명", "고객 이메일", "메일 언어", "상태", "생성자", "생성일시", "관리"].map((h) => (
+            {["고객", "상태", "생성자", "생성일시", "관리"].map((h) => (
               <span key={h} role="columnheader">
                 {h}
               </span>
@@ -970,28 +1043,27 @@ export default function AccountsPage() {
           {/* 「작성 중」 명함(UG-431 기획 16864) — 첫 페이지 맨 위. 못 채운 칸 · 메일 언어는 「—」, 명함 사진은 넣지 않아요 */}
           {drafts.map((d) => (
             <div key={`draft-${d.id}`} className={`tr${freshId === `draft:${d.id}` ? " is-new" : ""}`} role="row">
-              <span role="cell">{draftTitle(d) ? <Highlight text={draftTitle(d)} query={applied.keyword} /> : <span className="dash">—</span>}</span>
-              <span role="cell">{d.email ? <Highlight text={d.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
-              <span role="cell">{d.language ? languageName(d.language) : <span className="dash">—</span>}</span>
+              <span role="cell">
+                <CustomerCell company={draftTitle(d) || null} email={d.email} language={d.language} gone={false} query={applied.keyword} />
+              </span>
               <span role="cell">
                 <DraftStatus />
               </span>
               <span role="cell">{d.createdBy ? handle(d.createdBy) : <span className="dash">—</span>}</span>
               <span role="cell">{d.createdAt ? fmtFull(d.createdAt) : <span className="dash">—</span>}</span>
               <span role="cell">
+                {/* 계정 줄과 같은 모양: 자주 쓰는 「이어서 만들기」만 보이고 「지우기」는 ⋮ 안에(휴대폰 카드와 같게) */}
                 <span className="row-actions">
                   <button
                     type="button"
-                    className="btn btn-outline btn-sm"
+                    className="btn btn-outline btn-xs"
                     onClick={() => resumeDraft(d)}
                     disabled={resumingId !== null}
                     aria-busy={resumingId === d.id || undefined}
                   >
                     {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
                   </button>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => setDraftDeleteTarget(d)} disabled={resumingId === d.id}>
-                    지우기
-                  </button>
+                  <RowMenu items={[{ label: "지우기", danger: true, onSelect: () => setDraftDeleteTarget(d) }]} disabled={resumingId === d.id} />
                 </span>
               </span>
             </div>
@@ -1009,12 +1081,10 @@ export default function AccountsPage() {
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
                 <span role="cell">
-                  <CompanyCell account={a} query={applied.keyword} />
+                  <CustomerCell company={a.company || null} email={a.email || null} language={a.language} gone={isGone(a)} query={applied.keyword} />
                 </span>
-                <span role="cell">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
-                <span role="cell">{languageName(a.language)}</span>
                 <span role="cell">
-                  <StatusWithRecord account={a} />
+                  <StatusCell account={a} />
                 </span>
                 <span role="cell">{a.createdBy ? handle(a.createdBy) : <span className="dash">—</span>}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
@@ -1024,29 +1094,26 @@ export default function AccountsPage() {
                     className={`row-actions${a.status === "closing" ? " is-closing" : ""}`}
                     title={a.status === "closing" ? CLOSING_TIP : undefined}
                   >
+                    {/* 「메일 재발송」 + ⋮(발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로 */}
                     {a.status === "pending" ? (
                       <>
                         {canResend(a) && (
-                          <button type="button" className="btn btn-outline btn-sm" onClick={() => setResendTarget(a)}>
-                            안내 메일 다시 보내기
+                          <button type="button" className="btn btn-outline btn-xs" onClick={() => setResendTarget(a)}>
+                            메일 재발송
                           </button>
                         )}
-                        <button type="button" className="btn btn-outline btn-sm" onClick={() => setCancelTarget(a)}>
-                          발급 취소
-                        </button>
+                        <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} />
                       </>
                     ) : a.status === "closing" ? (
-                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요 — 원래 첫 로그인 전이던 줄만 버튼이 있었어요
+                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요 — 원래 로그인 전이던 줄만 버튼이 있었어요
                       a.statusBeforeClosing === "pending" ? (
                         <>
                           {a.resendBlocked || a.mailFailureReason === "address" ? null : (
-                            <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`안내 메일 다시 보내기 — ${CLOSING_TIP}`}>
-                              안내 메일 다시 보내기
+                            <button type="button" className="btn btn-outline btn-xs" disabled aria-label={`메일 재발송 — ${CLOSING_TIP}`}>
+                              메일 재발송
                             </button>
                           )}
-                          <button type="button" className="btn btn-outline btn-sm" disabled aria-label={`발급 취소 — ${CLOSING_TIP}`}>
-                            발급 취소
-                          </button>
+                          <RowMenu items={[]} disabled disabledLabel={`더보기 — ${CLOSING_TIP}`} />
                         </>
                       ) : (
                         <span className="dash">—</span>
@@ -1138,7 +1205,7 @@ export default function AccountsPage() {
                   {canResend(a) && (
                     <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
                       <IcReload size={14} />
-                      재발송
+                      메일 재발송
                     </button>
                   )}
                 </div>
@@ -1391,6 +1458,145 @@ function CardMore({ label, onSelect, disabled = false }: { label: string; onSele
         </div>
       )}
     </div>
+  );
+}
+
+type RowMenuItem = { label: string; onSelect: () => void; danger?: boolean };
+
+/**
+ * PC 표 줄의 더보기(⋮) — 「발급 취소」 · 「작성 중」의 「지우기」(UG-450 기획 17007). 테두리 없는 28px 버튼.
+ * 메뉴는 화면에 고정(position: fixed)해 표의 옆 스크롤 상자에 잘리지 않게 하고, 그래서 스크롤 · 창 크기 바뀜이면 닫아요.
+ * 바깥 누르기 · Esc · 화면 이동(뒤로 가기)에도 닫혀요. 키보드: 열면 첫 항목에 초점, ↑↓ · Home · End 로 이동, Enter · Space 로 고르기,
+ * Esc 면 닫고 ⋮ 로 초점이 돌아와요. 항목을 고르면 ⋮ 에 초점을 둔 뒤 확인 창을 열어요(창을 닫으면 ⋮ 로 돌아와요).
+ * 빨간 글씨(되돌릴 수 없는 동작)가 어두운 유리 위에서는 잘 안 읽혀 이 메뉴는 흰 바탕이에요.
+ */
+function RowMenu({ items, disabled = false, disabledLabel }: { items: RowMenuItem[]; disabled?: boolean; disabledLabel?: string }) {
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const open = pos !== null;
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+
+  function openMenu() {
+    const r = buttonRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const right = Math.max(8, window.innerWidth - r.right);
+    // 아래 자리가 모자라면(마지막 줄 · 화면 아래 끝) 위로 열어요 — 항목 32 + 위아래 여백
+    const need = items.length * 32 + 16;
+    setPos(window.innerHeight - r.bottom < need ? { bottom: window.innerHeight - r.top + 4, right } : { top: r.bottom + 4, right });
+  }
+
+  function close(refocus: boolean) {
+    setPos(null);
+    if (refocus) buttonRef.current?.focus({ preventScroll: true });
+  }
+
+  // 열리면 첫 항목에 초점(마우스로 열어도 — 이어서 키보드로 고를 수 있게)
+  useEffect(() => {
+    if (open) menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
+  }, [open]);
+
+  // 줄이 꺼지면(해지 중으로 바뀜 · 여는 중) 열린 메뉴를 닫아요 — 렌더 중에 바로 맞춰요
+  if (open && disabled) setPos(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const inside = (t: EventTarget | null) => !!t && (menuRef.current?.contains(t as Node) || buttonRef.current?.contains(t as Node));
+    const onDown = (e: PointerEvent) => {
+      if (!inside(e.target)) setPos(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setPos(null);
+      buttonRef.current?.focus({ preventScroll: true });
+    };
+    // 화면 · 표가 밀리면 메뉴가 ⋮ 에서 떨어져 보여요 — 닫아요
+    const onScroll = (e: Event) => {
+      if (!inside(e.target)) setPos(null);
+    };
+    const onLeave = () => setPos(null);
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onLeave);
+    window.addEventListener("popstate", onLeave);
+    window.addEventListener("blur", onLeave);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onLeave);
+      window.removeEventListener("popstate", onLeave);
+      window.removeEventListener("blur", onLeave);
+    };
+  }, [open]);
+
+  /** 메뉴 안 화살표 이동 */
+  function onMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const list = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    if (list.length === 0) return;
+    const at = list.indexOf(document.activeElement as HTMLElement);
+    let next = -1;
+    if (e.key === "ArrowDown") next = (at + 1) % list.length;
+    else if (e.key === "ArrowUp") next = (at - 1 + list.length) % list.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = list.length - 1;
+    else if (e.key === "Tab") return close(false); // 초점은 다음 칸으로 그대로 넘어가요
+    if (next < 0) return;
+    e.preventDefault();
+    list[next].focus({ preventScroll: true });
+  }
+
+  return (
+    <span className="row-more">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="row-more-button"
+        aria-label={disabled && disabledLabel ? disabledLabel : "더보기"}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        disabled={disabled}
+        onClick={() => (open ? close(false) : openMenu())}
+        onKeyDown={(e) => {
+          // ↓ · ↑ 로도 열어요(메뉴 버튼 관례) — 열리면 첫 항목에 초점
+          if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !open) {
+            e.preventDefault();
+            openMenu();
+          }
+        }}
+      >
+        <IcMoreVert size={18} />
+      </button>
+      {open && (
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="row-menu"
+          role="menu"
+          aria-label="더보기"
+          style={{ top: pos.top, bottom: pos.bottom, right: pos.right }}
+          onKeyDown={onMenuKey}
+        >
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className={`row-menu-item${item.danger ? " is-danger" : ""}`}
+              onClick={() => {
+                close(true); // 확인 창을 닫으면 ⋮ 로 초점이 돌아오게(창이 연 버튼을 기억해요)
+                item.onSelect();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }
 
