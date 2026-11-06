@@ -2363,7 +2363,7 @@ function ResetLinkDialog({
 
   return (
     <Dialog title="비밀번호 재설정 메일을 보내시겠습니까?" onClose={back} closable={!sending}>
-      <div className="summary">
+      <div className="summary reset-summary">
         <dl className="summary-rows">
           <div>
             <dt>이메일 주소</dt>
@@ -2402,7 +2402,8 @@ function ResetLinkDialog({
         </p>
       )}
       <div className="dialog-actions">
-        <button ref={cancelRef} type="button" className="btn btn-outline" onClick={back} disabled={sending}>
+        {/* 처음 초점은 「취소」 — Enter 한 번에 실제 메일이 나가지 않게(UG-421 기획 16987) */}
+        <button ref={cancelRef} type="button" className="btn btn-outline" onClick={back} disabled={sending} data-autofocus>
           취소
         </button>
         {!final && (

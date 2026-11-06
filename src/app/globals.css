@@ -682,6 +682,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
   .scrim { padding: 60px 16px 16px; }
   .dialog { padding: 16px; gap: 16px; }
   .dialog-title { font-size: 18px; line-height: 28px; }
+  .dialog .reset-summary { margin: 12px 0 8px; } /* 재설정 메일 확인 창(MD2): 제목 ↔ 표 28 · 표 ↔ 버튼 24 (창 간격 16 + 12 · 8, UG-421 기획 16987) */
   .dialog-form { gap: 16px; }
   .dialog-form .field { gap: 6px; }
   .dialog-form .field-row { grid-template-columns: 1fr; gap: 16px; }
