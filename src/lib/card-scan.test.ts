@@ -91,8 +91,20 @@ test("UG-451 ③ UEN · 사업자 · Reg · 팩스 번호는 쓰지 않아요", 
   assert.equal(card("Fax 02-123-4569", "T 02-123-4567").values.phone, "02-123-4567");
 });
 
-test("UG-451 ③ 라벨 없는 숫자만 줄은 전화번호 모양(0 시작 9~11자리 · 82 · 65 나라 번호)일 때만", () => {
+test("UG-451 ③ 라벨 없는 숫자만 줄은 전화번호 모양(KR 0 시작 9~11자리 · 대표번호 · SG 8자리 · 82 · 65 나라 번호)일 때만", () => {
   assert.equal(card("11800 8083").values.phone, "");
+  assert.equal(readLines("11800 8083").length, 0);
+  // SG 8자리(3 · 6 · 8 · 9 시작) — 8 · 9 는 휴대전화 순위라 앞 줄의 6 번호보다 먼저
+  assert.equal(card("9123 4567").values.phone, "9123 4567");
+  assert.equal(card("6123 4567").values.phone, "6123 4567");
+  assert.equal(card("6123 4567", "9123 4567").values.phone, "9123 4567");
+  assert.equal(card("T. +65 6234 5678", "9123 4567").values.phone, "9123 4567");
+  assert.equal(card("6123 4567", "T. +65 6234 5678").values.phone, "+65 6234 5678");
+  assert.deepEqual(readLines("9123 4567\n6123 4567"), ["9123 4567", "6123 4567"]);
+  // KR 대표번호 15xx · 16xx · 18xx 8자리
+  assert.equal(card("1588-1234").values.phone, "1588-1234");
+  assert.equal(card("1644 1234").values.phone, "1644 1234");
+  assert.equal(card("1800 1234").values.phone, "1800 1234");
   assert.equal(card("1234 5678").values.phone, "");
   assert.equal(card("02 123 4567").values.phone, "02 123 4567");
   assert.equal(card("010 1234 5678").values.phone, "010 1234 5678");

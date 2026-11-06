@@ -243,18 +243,19 @@ function normalizePhone(run: string): string {
 }
 
 const digitsOf = (s: string) => s.replace(/\D/g, "");
-/** 번호 모양만 보고 휴대전화인지(한국 010 · +82 10, 싱가포르 +65 8 · 9) — 라벨이 없거나 Tel 라벨이어도 휴대전화 순위로 올려요 */
-const isMobile = (phone: string) => /^(010|8210|82010)/.test(digitsOf(phone)) || /^65[89]\d{7}$/.test(digitsOf(phone));
+/** 번호 모양만 보고 휴대전화인지(한국 010 · +82 10, 싱가포르 8 · 9 로 시작하는 8자리 · +65 8 · 9) — 라벨이 없거나 Tel 라벨이어도 휴대전화 순위로 올려요 */
+const isMobile = (phone: string) => /^(010|8210|82010)/.test(digitsOf(phone)) || /^(?:65)?[89]\d{7}$/.test(digitsOf(phone));
 
 // 번호 바로 앞 라벨(UG-451) — 휴대전화 라벨 · 전화 라벨. 번호 바로 앞(앞 번호가 끝난 뒤 ~ 이 번호 앞)의 끝에서만 봐요.
 const MOBILE_LABEL_RE = /(?:^|[^A-Za-z])(?:M|Mobile|MOBILE|Mob|HP|H\.P|Cell|CELL|C|휴대폰|휴대전화|핸드폰)\s*[.:)]?\s*$/;
 const TEL_LABEL_RE = /(?:^|[^A-Za-z])(?:T|Tel|TEL|tel|Phone|PHONE|P|Office|Direct|DID|전화|직통|대표)\s*[.:)]?\s*$/;
 // 전화번호가 아닌 번호 라벨 — 번호 앞 구간 어디에 있든 그 번호는 전화번호로 보지 않아요(싱가포르 UEN · 사업자 등록번호 · 회사 등록번호)
 const NOT_PHONE_LABEL_RE = /\b(?:UEN|Reg|Registration|GST|ABN|CRN|VAT)\b|사업자|법인/i;
-// 라벨 없이 숫자만 있는 줄(숫자 · 공백 · - · .)이 전화번호로 쓰일 모양 — 한국 0 으로 시작 9~11자리, 나라 번호(82 · 65)로 시작.
-// 9자리 미만이거나 이 모양이 아니면 QR 무늬 등 잡음(「11800 8083」)으로 봐요.
+// 라벨 없이 숫자만 있는 줄(숫자 · 공백 · - · .)이 전화번호로 쓰일 모양 — 한국 0 으로 시작 9~11자리 · 대표번호 15xx · 16xx · 18xx 8자리,
+// 싱가포르 3 · 6 · 8 · 9 로 시작하는 8자리, 나라 번호로 시작(82 + 9~10자리 · 65 + 8자리).
+// 이 모양이 아니면 QR 무늬 등 잡음(「11800 8083」 — 9자리 · 1 로 시작)으로 봐요.
 const BARE_DIGITS_RE = /^[\d\s.-]+$/;
-const BARE_PHONE_RE = /^(?:0\d{8,10}|82\d{9,10}|65\d{8})$/;
+const BARE_PHONE_RE = /^(?:0\d{8,10}|1[568]\d{6}|[3689]\d{7}|82\d{9,10}|65\d{8})$/;
 
 /**
  * 처음 채우기 순위(작을수록 먼저) — 0 휴대전화(라벨 Mobile · M · HP · 휴대폰 · 휴대전화 · Cell · C, 또는 번호가 휴대전화 모양),
