@@ -263,6 +263,14 @@ test("UG-451 markSaved — 이어서 만든 명함을 그대로 열면 보내지
   assert.equal(saver.calls.length, 0);
 });
 
+test("UG-451 리뷰 F3 forget — 남긴 명함을 지웠으면 같은 내용이어도 다음에 새로 남겨요", () => {
+  const { saver, autosave } = setup();
+  autosave.markSaved("a");
+  autosave.forget();
+  autosave.saveNow();
+  assert.equal(saver.calls.length, 1);
+});
+
 test("UG-451 내용 열쇠 — 한 번 올린 사진을 keepPhoto 로 보내도 같은 내용이에요", () => {
   const photo = "data:image/jpeg;base64,QUJDREVGR0g=";
   const first = draftContentKey({ company: "company-a", photo: "QUJDREVGR0g=" }, null);

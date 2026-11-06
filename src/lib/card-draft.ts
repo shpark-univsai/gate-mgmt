@@ -32,10 +32,11 @@ export function scanFromDraft(json: unknown): ScanState | null {
   const chips: Chip[] = [];
   for (const c of o.chips as unknown[]) {
     if (!c || typeof c !== "object") return null;
-    const { id, text, kind, value, fax } = c as Record<string, unknown>;
+    const { id, text, kind, value, fax, suspect } = c as Record<string, unknown>;
     if (typeof id !== "number" || typeof text !== "string" || typeof value !== "string") return null;
     if (typeof kind !== "string" || !CHIP_KINDS.includes(kind)) return null;
-    chips.push({ id, text, kind: kind as ChipKind, value, ...(fax === true ? { fax: true } : {}) });
+    // suspect = 잘렸을 수 있는 메일 칩 — 이어서 만들어도 칸 값 경고가 이어지게 남겨요(UG-451 반박 리뷰 F2)
+    chips.push({ id, text, kind: kind as ChipKind, value, ...(fax === true ? { fax: true } : {}), ...(suspect === true ? { suspect: true } : {}) });
   }
   const ids = new Set(chips.map((c) => c.id));
   const links: ScanLinks = {};

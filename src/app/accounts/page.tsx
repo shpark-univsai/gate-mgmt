@@ -49,7 +49,11 @@ import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type A
 import {
   LOST_CLOCK_SKEW_MS,
   addLost,
+  chipEmailsState,
+  draftSaveGate,
   forNewDraft,
+  gateAtClose,
+  ownDraftToDiscard,
   photoPlan,
   recordSave,
   resolveLostDraft,
@@ -60,9 +64,12 @@ import {
   type LostSaves,
 } from "@/lib/draft-session";
 import {
+  chipEmailAddresses,
   confusableParts,
   emailHasConfusable,
   isFilled,
+  isSuspectChip,
+  isSuspectValue,
   scanCard,
   tapChip,
   unlink,
@@ -104,6 +111,8 @@ const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있
 const SCAN_FAILED = "명함을 읽지 못했습니다. 다시 찍거나 직접 입력해 주세요.";
 // 글자 읽기 도구(약 8.5MB)를 받지 못함(인터넷 없음 · 시간 초과) — 다시 찍어도 같으니 직접 입력 안내(UG-451 기획 16991)
 const SCAN_TOOL_FAILED = "글자 읽기 도구를 받지 못했습니다. 직접 입력해 주세요.";
+// 도구 받기를 이 페이지에서 여러 번 실패해 저절로 다시 받지 않을 때(UG-451 기획 17022 — 실패한 일꾼은 닫을 수 없어 쌓여요)
+const SCAN_TOOL_RELOAD = "글자 읽기 도구를 받지 못했습니다. 페이지를 새로 고친 뒤 다시 찍어 주세요.";
 // 아이폰 HEIC · HEIF 사진을 읽지 못함 — 브라우저가 열지 못하는 형식이라 다시 찍게 해요(UG-451 기획 16991)
 const SCAN_FORMAT_FAILED = "이 사진 형식은 읽을 수 없습니다. 다시 찍어 주세요.";
 /** HEIC · HEIF 사진인지(형식 · 확장자) */
@@ -232,8 +241,145 @@ function ClipText({ text, query, className }: { text: string; query: string; cla
 }
 
 /**
+ * 말줄임되면 눌러서 전체 글자를 작은 말풍선으로 보는 한 줄 글자(UG-450 기획 16995 · 17020) — 휴대폰 카드의 회사명, PC 표의 회사명 · 이메일.
+ * 아이패드(전시장 기기) · 휴대폰은 마우스를 올릴 수 없어 title 이 보이지 않아요 — 눌러서 봐요. 마우스로는 전처럼 올리면 전체 글자(title).
+ * 말줄임되지 않은 글자는 그냥 글자(누를 것이 없어요). 말줄임 여부는 상자 · 글자 폭이 바뀔 때마다 다시 재요(isTextTruncated).
+ * 말풍선은 화면에 고정(position: fixed)해 표의 옆 스크롤 상자에 잘리지 않게 하고, 바깥 누르기 · Esc · 스크롤 · 창 크기 바뀜 · 화면 이동(뒤로 가기) ·
+ * 다른 곳으로 초점이 가면 닫혀요. 목록을 새로 받으면(resetOn — RowMenu 와 같게) 닫고, 줄이 사라지면 말풍선도 함께 없어져요(이 컴포넌트 안에 그려요).
+ * 키보드: Tab 으로 가서 Enter · Space(버튼).
+ * text = 말풍선 · title 의 전체 글자, children = 보이는 글자(검색 강조 등), className = 말줄임 글자의 클래스, wrapClassName = 감싸는 상자의 클래스
+ */
+function TapClip({
+  text,
+  children,
+  className,
+  wrapClassName,
+  strong = false,
+  watch,
+  resetOn,
+}: {
+  text: string;
+  children: React.ReactNode;
+  className: string;
+  wrapClassName: string;
+  strong?: boolean;
+  /** 바뀌면 말줄임을 다시 재요(보이는 글자 · 검색어 — 상자 폭은 그대로인데 글자 폭만 바뀌는 경우) */
+  watch: readonly unknown[];
+  /** 목록이 바뀌면(새로 불러옴 · 줄이 빠지거나 옮겨짐) 열린 말풍선을 닫아요(반박 리뷰 F6) */
+  resetOn: readonly unknown[];
+}) {
+  const [textEl, setTextEl] = useState<HTMLElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxWidth: number } | null>(null);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const tipId = useId();
+  const shown = pos !== null && truncated;
+  const watchKey = JSON.stringify(watch);
+  const [seen, setSeen] = useState(resetOn);
+  if (seen.length !== resetOn.length || seen.some((v, i) => v !== resetOn[i])) {
+    setSeen(resetOn);
+    if (pos) setPos(null);
+  }
+
+  // 상자 폭이 바뀌면(화면 회전 · 표 칸 폭) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
+  // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴 · 글자 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
+  // 말줄임이 풀리면 열린 말풍선도 닫아요 — 다시 잘려도 저절로 열리지 않게.
+  useEffect(() => {
+    if (!textEl) return;
+    let alive = true;
+    const measure = () => {
+      if (!alive) return;
+      // 1px 보다 덜 넘쳐도 「…」가 그려져요 — 소수점 폭으로 재요(UG-450 기획 17003)
+      const cut = isTextTruncated(textEl);
+      setTruncated(cut);
+      if (!cut) setPos(null);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(textEl);
+    document.fonts?.ready.then(measure).catch(() => {});
+    return () => {
+      alive = false;
+      ro.disconnect();
+    };
+  }, [textEl, watchKey]);
+
+  useEffect(() => {
+    if (!shown) return;
+    const close = () => setPos(null);
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    // 화면 · 표가 밀리면 말풍선이 글자에서 떨어져 보여요 — 닫아요
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("popstate", close);
+    window.addEventListener("blur", close);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("popstate", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [shown]);
+
+  /** 글자 바로 아래(화면 아래 끝이면 위)에 띄워요 — 폭은 감싼 상자 폭(좁으면 240)까지, 화면 밖으로 나가지 않게 */
+  function toggle() {
+    if (pos) return setPos(null);
+    const r = wrapRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const margin = 8;
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - margin - 240));
+    const maxWidth = Math.max(Math.min(Math.max(r.width, 240), window.innerWidth - left - margin), 120);
+    // 말풍선 높이는 대개 한두 줄(30~48) — 아래 자리가 모자라면 위로
+    setPos(window.innerHeight - r.bottom < 72 ? { left, bottom: window.innerHeight - r.top + 4, maxWidth } : { left, top: r.bottom + 4, maxWidth });
+  }
+
+  const Tag = strong ? "strong" : "span";
+  const inner = (
+    <Tag ref={setTextEl} className={className}>
+      {children}
+    </Tag>
+  );
+  return (
+    <span className={`tap-clip ${wrapClassName}`} ref={wrapRef}>
+      {truncated ? (
+        <button
+          type="button"
+          className="tap-clip-button"
+          // 마우스로는 올리면 전체 글자(UG-450 기획 17007) — 눌러도 말풍선이 떠요
+          title={text}
+          aria-describedby={shown ? tipId : undefined}
+          onClick={toggle}
+          // Tab 으로 다른 곳에 가면 닫아요(반박 리뷰)
+          onBlur={(e) => {
+            if (!wrapRef.current?.contains(e.relatedTarget as Node | null)) setPos(null);
+          }}
+        >
+          {inner}
+        </button>
+      ) : (
+        inner
+      )}
+      {shown && (
+        <span role="tooltip" id={tipId} className="tap-tip" style={{ left: pos.left, top: pos.top, bottom: pos.bottom, maxWidth: pos.maxWidth }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
  * PC 표의 고객 칸(UG-450 기획 17007) — 위 회사명(13 · 본문색), 아래 고객 이메일 + 「 · 영문」(13 · 회색).
- * 회사명 · 이메일은 따로 말줄임(마우스를 올리면 전체). 이메일이 길어도 이메일만 줄고 「 · 영문」은 늘 보여요.
+ * 회사명 · 이메일은 따로 말줄임 — 마우스를 올리거나(title) 눌러서(말풍선 — 아이패드, 기획 17020) 전체를 봐요(TapClip).
+ * 이메일이 길어도 이메일만 줄고 「 · 영문」은 늘 보여요.
  * 하나만 남았으면 그 한 줄, 둘 다 비었으면 발급 취소 · 해지됨은 「삭제됨」(13 · 회색), 그 밖은 「—」.
  * language 가 없으면(「작성 중」 명함에서 고르지 않음) 언어를 붙이지 않아요.
  */
@@ -243,20 +389,28 @@ function CustomerCell({
   language,
   gone,
   query,
+  resetOn,
 }: {
   company: string | null;
   email: string | null;
   language: MailLanguage | null;
   gone: boolean;
   query: string;
+  resetOn: readonly unknown[];
 }) {
   if (!company && !email) return gone ? <span className="gone-company">삭제됨</span> : <span className="dash">—</span>;
   return (
     <span className="customer">
-      {company && <ClipText className="customer-company" text={company} query={query} />}
+      {company && (
+        <TapClip text={company} className="customer-company" wrapClassName="customer-line" watch={[company, query]} resetOn={resetOn}>
+          <Highlight text={company} query={query} />
+        </TapClip>
+      )}
       {email && (
         <span className="customer-email">
-          <ClipText className="customer-email-addr" text={email} query={query} />
+          <TapClip text={email} className="customer-email-addr" wrapClassName="customer-email-clip" watch={[email, query]} resetOn={resetOn}>
+            <Highlight text={email} query={query} />
+          </TapClip>
           {language && <span className="customer-email-lang">{` · ${LANGUAGE_TAG[language]}`}</span>}
         </span>
       )}
@@ -272,84 +426,20 @@ function CompanyCell({ account, query }: { account: Account; query: string }) {
 
 /**
  * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 — 회사명(또는 「삭제됨」)이 카드 폭을 다 써요(UG-450 기획 16995).
- * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(휴대폰은 마우스를 올릴 수 없어 title 이 보이지 않아요).
- * 말줄임되지 않은 이름은 그냥 글자 — 누를 것이 없어요. 바깥을 누르거나 Esc 면 닫혀요.
+ * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(TapClip — PC 표의 회사명 · 이메일과 같은 말풍선).
  */
-function GoneCardCompany({ account, query }: { account: Account; query: string }) {
-  const [textEl, setTextEl] = useState<HTMLElement | null>(null);
-  const [truncated, setTruncated] = useState(false);
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const tipId = useId();
-  const shown = open && truncated;
-
-  // 카드 폭이 바뀌면(화면 회전 등) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
-  // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴로 바뀜 · 회사명 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
-  // 말줄임이 풀리면 열린 말풍선도 닫아요 — 다시 잘려도 저절로 열리지 않게.
-  useEffect(() => {
-    if (!textEl) return;
-    let alive = true;
-    const measure = () => {
-      if (!alive) return;
-      // 1px 보다 덜 넘쳐도 「…」가 그려져요 — 소수점 폭으로 재요(UG-450 기획 17003)
-      const cut = isTextTruncated(textEl);
-      setTruncated(cut);
-      if (!cut) setOpen(false);
-    };
-    const ro = new ResizeObserver(measure);
-    ro.observe(textEl);
-    document.fonts?.ready.then(measure).catch(() => {});
-    return () => {
-      alive = false;
-      ro.disconnect();
-    };
-  }, [textEl, account.company, query]);
-
-  useEffect(() => {
-    if (!shown) return;
-    const onDown = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [shown]);
-
-  const text = (
-    <strong ref={setTextEl} className="card-company card-company-line">
-      <CompanyCell account={account} query={query} />
-    </strong>
-  );
+function GoneCardCompany({ account, query, resetOn }: { account: Account; query: string; resetOn: readonly unknown[] }) {
   return (
-    <div className="card-company-full" ref={wrapRef}>
-      {truncated ? (
-        <button
-          type="button"
-          className="card-company-tap"
-          aria-describedby={shown ? tipId : undefined}
-          onClick={() => setOpen((v) => !v)}
-          // Tab 으로 다른 곳에 가면 닫아요(반박 리뷰)
-          onBlur={(e) => {
-            if (!wrapRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
-          }}
-        >
-          {text}
-        </button>
-      ) : (
-        text
-      )}
-      {shown && (
-        <span role="tooltip" id={tipId} className="card-company-tip">
-          {account.company || "삭제됨"}
-        </span>
-      )}
-    </div>
+    <TapClip
+      text={account.company || "삭제됨"}
+      className="card-company card-company-line"
+      wrapClassName="card-company-full"
+      strong
+      watch={[account.company, query]}
+      resetOn={resetOn}
+    >
+      <CompanyCell account={account} query={query} />
+    </TapClip>
   );
 }
 
@@ -385,6 +475,8 @@ const DRAFTS_LOAD_FAILED = "작성 중인 명함을 불러오지 못했습니다
 const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다", detail: "다른 직원이 계정을 만들었거나 지웠습니다" };
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+// 이메일 칸 값이 명함에서 잘렸거나 잘못 읽었을 수 있는 주소와 똑같을 때(UG-451 반박 리뷰 F2) — 고칠 때까지 보내지 않아요
+const SUSPECT_EMAIL = "명함에서 잘못 읽었을 수 있는 주소입니다. 명함과 한 글자씩 비교해 고쳐 주세요.";
 // 보내기를 눌렀는데 이메일 확인이 네트워크 · 서버 문제(응답 없음 · 5xx · 시간 초과)로 실패 — 버튼 위에 남겨요(UG-451 기획 16991)
 const NETWORK_FAILED = "연결이 불안정해 확인하지 못했습니다. 다시 눌러 주세요.";
 // 계정 만들기 요청이 네트워크 · 서버 문제로 실패 — 서버가 만들었는지 알 수 없어요. 다시 누르면 이미 만든 계정이면 「이미 만든 계정입니다」로 보여요.
@@ -480,6 +572,11 @@ type AutosaveItem = { id: string | null; input: CardDraftInput; recreate?: CardD
 
 /** 자동 저장 — 입력이 멈춘 뒤 기다릴 시간(UG-451 기획 17009) */
 const AUTOSAVE_DELAY = 2000;
+/**
+ * 응답을 잃은 저장을 찾을 때 후보로 볼 명함의 시작 시각 — 창을 연 시각 − 시계 오차(F2). 창을 여는 효과 안에서만 불러요
+ * (함수로 둔 까닭: React 컴파일러 검사가 효과 안의 Date.now 를 그리는 중으로 잘못 보는 일이 있어요)
+ */
+const lostSince = () => Date.now() - LOST_CLOCK_SKEW_MS;
 
 /**
  * 같은 명함의 저장 · 지우기는 차례대로 — 앞 저장(닫을 때 저장 · 자동 저장)이 끝난 뒤에 해요(차례가 바뀌어 옛 값이 남거나 지운 명함이 되살아나지 않게).
@@ -1120,7 +1217,7 @@ export default function AccountsPage() {
           {drafts.map((d) => (
             <div key={`draft-${d.id}`} className={`tr${freshId === `draft:${d.id}` ? " is-new" : ""}`} role="row">
               <span role="cell">
-                <CustomerCell company={draftTitle(d) || null} email={d.email} language={d.language} gone={false} query={applied.keyword} />
+                <CustomerCell company={draftTitle(d) || null} email={d.email} language={d.language} gone={false} query={applied.keyword} resetOn={listStamp} />
               </span>
               <span role="cell">
                 <DraftStatus />
@@ -1128,7 +1225,7 @@ export default function AccountsPage() {
               <span role="cell">{d.createdBy ? handle(d.createdBy) : <span className="dash">—</span>}</span>
               <span role="cell">{d.createdAt ? fmtFull(d.createdAt) : <span className="dash">—</span>}</span>
               <span role="cell">
-                {/* 계정 줄과 같은 모양: 자주 쓰는 「이어서 만들기」만 보이고 「지우기」는 ⋮ 안에(휴대폰 카드와 같게) */}
+                {/* 계정 줄과 같은 모양: 자주 쓰는 「이어서 만들기」만 보이고 「지우기」는 ⋮ 안에(휴대폰 카드와 같게) — ⋮ 는 칸 오른쪽 끝(기획 17020) */}
                 <span className="row-actions">
                   <button
                     type="button"
@@ -1161,7 +1258,7 @@ export default function AccountsPage() {
             visible.map((a) => (
               <div key={a.id} className={`tr${a.id === freshId ? " is-new" : ""}`} role="row">
                 <span role="cell">
-                  <CustomerCell company={a.company || null} email={a.email || null} language={a.language} gone={isGone(a)} query={applied.keyword} />
+                  <CustomerCell company={a.company || null} email={a.email || null} language={a.language} gone={isGone(a)} query={applied.keyword} resetOn={listStamp} />
                 </span>
                 <span role="cell">
                   <StatusCell account={a} />
@@ -1169,40 +1266,26 @@ export default function AccountsPage() {
                 <span role="cell">{a.createdBy ? handle(a.createdBy) : <span className="dash">—</span>}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
-                  {/* 해지 중(UG-443 기획 16908)이면 동작을 꺼 둬요 — 꺼진 버튼은 마우스를 못 받아 툴팁은 감싼 칸에 */}
-                  <span
-                    className={`row-actions${a.status === "closing" ? " is-closing" : ""}`}
-                    title={a.status === "closing" ? CLOSING_TIP : undefined}
-                  >
-                    {/* 「메일 재발송」 + ⋮(발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로 */}
-                    {a.status === "pending" ? (
-                      <>
-                        {canResend(a) && (
-                          <button type="button" className="btn btn-outline btn-xs" onClick={() => setResendTarget(a)}>
-                            메일 재발송
-                          </button>
-                        )}
-                        <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} resetOn={listStamp} />
-                      </>
-                    ) : a.status === "closing" ? (
-                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요 — 원래 로그인 전이던 줄만 버튼이 있었어요
-                      a.statusBeforeClosing === "pending" ? (
-                        <>
-                          {a.resendBlocked || a.mailFailureReason === "address" ? null : (
-                            <button type="button" className="btn btn-outline btn-xs" disabled aria-label={`메일 재발송 — ${CLOSING_TIP}`}>
-                              메일 재발송
-                            </button>
-                          )}
-                          <RowMenu items={[]} disabled disabledLabel={`더보기 — ${CLOSING_TIP}`} resetOn={listStamp} />
-                        </>
-                      ) : (
-                        <span className="dash">—</span>
-                      )
-                    ) : (
-                      // 버튼이 없는 줄(사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
-                      <span className="dash">—</span>
-                    )}
-                  </span>
+                  {a.status === "pending" ? (
+                    // 「메일 재발송」 + ⋮(발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로.
+                    // ⋮ 는 칸 오른쪽 끝 같은 자리, 글자 버튼은 그 왼쪽(기획 17020) — 버튼이 없는 줄(주소 오류 · 막힘)도 ⋮ 는 같은 자리
+                    <span className="row-actions">
+                      {canResend(a) && (
+                        <button type="button" className="btn btn-outline btn-xs" onClick={() => setResendTarget(a)}>
+                          메일 재발송
+                        </button>
+                      )}
+                      <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} resetOn={listStamp} />
+                    </span>
+                  ) : a.status === "closing" ? (
+                    // 해지 중(UG-443 기획 16908) — 원래 로그인 전이던 줄도 꺼진 버튼 없이 「—」(기획 17020). 마우스를 올리면 까닭
+                    <span className="dash" title={CLOSING_TIP}>
+                      —
+                    </span>
+                  ) : (
+                    // 버튼이 없는 줄(사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
+                    <span className="dash">—</span>
+                  )}
                 </span>
               </div>
             ))
@@ -1260,7 +1343,7 @@ export default function AccountsPage() {
               // 상태 배지 + 처리 기록(「● 발급 취소 11.04 14:51 · khj」) — 카드 높이는 그대로, 메일 언어 · 만든 정보 줄은 전처럼 없어요
               <li key={a.id} className={`card-row is-cancelled${a.id === freshId ? " is-new" : ""}`}>
                 <div className="card-line">
-                  <GoneCardCompany account={a} query={applied.keyword} />
+                  <GoneCardCompany account={a} query={applied.keyword} resetOn={listStamp} />
                 </div>
                 <div className="card-line">
                   <span className="card-status card-status--record">
@@ -1556,12 +1639,10 @@ type RowMenuItem = { label: string; onSelect: () => void; danger?: boolean };
 function RowMenu({
   items,
   disabled = false,
-  disabledLabel,
   resetOn,
 }: {
   items: RowMenuItem[];
   disabled?: boolean;
-  disabledLabel?: string;
   /** 목록이 바뀌면(새로 불러옴 · 줄이 빠지거나 옮겨짐) 닫아요 — 메뉴가 다른 줄 옆에 떠 있지 않게(반박 리뷰 F8) */
   resetOn: readonly unknown[];
 }) {
@@ -1595,7 +1676,7 @@ function RowMenu({
     if (open) menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
   }, [open]);
 
-  // 줄이 꺼지면(해지 중으로 바뀜 · 여는 중) 열린 메뉴를 닫아요 — 렌더 중에 바로 맞춰요
+  // 줄이 꺼지면(「작성 중」 줄을 여는 중) 열린 메뉴를 닫아요 — 렌더 중에 바로 맞춰요
   if (open && disabled) setPos(null);
 
   useEffect(() => {
@@ -1653,7 +1734,7 @@ function RowMenu({
         ref={buttonRef}
         type="button"
         className="row-more-button"
-        aria-label={disabled && disabledLabel ? disabledLabel : "더보기"}
+        aria-label="더보기"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -1989,7 +2070,7 @@ function CreateDialog({
   // 이메일 미리 조회 중. 버튼은 잠그지 않아요 — 칸을 벗어나며 시작된 조회 때문에 첫 클릭이 사라졌어요.
   // 대신 보내기는 진행 중인 조회를 기다려 같은 결과를 써요(조회를 두 번 하지 않고, busy 로 두 번 만들지도 않아요).
   const [checking, setChecking] = useState(false);
-  const inflight = useRef<{ key: string; result: Promise<EmailCheck | null> } | null>(null);
+  const inflight = useRef<{ key: string; result: Promise<EmailCheck | null>; quiet: boolean } | null>(null);
   // 마지막 이메일 확인이 실패한 까닭 — network = 응답 없음 · 5xx · 시간 초과(버튼 위에 「연결이 불안정해…」), other = 그 밖
   const checkFailure = useRef<"network" | "other" | null>(null);
   const busy = useRef(false);
@@ -2028,10 +2109,12 @@ function CreateDialog({
   const [scanFailed, setScanFailed] = useState<ScanFailure | null>(null);
   // 글자 읽기 도구를 받는 중의 진행률(받지 않으면 null)
   const [scanProgress, setScanProgress] = useState<number | null>(null);
-  const scanFailedText = scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
+  const scanFailedText =
+    scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "tool_reload" ? SCAN_TOOL_RELOAD : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
   const scanWaitText = scanProgress !== null && scanProgress < 100 ? scanDownloading(scanProgress) : SCAN_WAIT;
-  // 명함에서 메일 주소를 찾지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요.
-  const [emailMissing, setEmailMissing] = useState(false);
+  // 명함에서 메일 주소를 채우지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요(UG-451 기획 17022).
+  // none = 메일 모양 글자를 하나도 읽지 못함, unsure = 메일 칩은 있지만 잘렸을 수 있어 채우지 않음(읽은 줄에서 고르거나 직접 입력)
+  const [emailMissing, setEmailMissing] = useState<"none" | "unsure" | null>(null);
   // 비교용 명함 사진(줄인 JPEG data URL). 기기에는 저장하지 않아요(기획 16841). 계정을 만들면 바로 지우고,
   // 주소 오류로 고치는 동안(fix)에는 남겨 두며, 만들지 않고 닫으면 「작성 중」 명함과 함께 서버에 남겨요(기획 16864 — 계정을 만들거나 30일이면 서버가 지워요).
   const [photo, setPhoto] = useState<string | null>(draftPhoto);
@@ -2045,6 +2128,129 @@ function CreateDialog({
   });
   // 명함 읽기가 자동으로 채운 값(칸별). 칸 값이 이것과 같으면 직원이 손대지 않은 것으로 보고 다시 찍을 때 바꿔요(UG-451 기획 16991)
   const autoFilled = useRef<Partial<Record<ScanField, string>>>({});
+
+  const trimmed = email.trim();
+  // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
+  const key = trimmed;
+  const current = check && check.email === key ? check.result : null;
+  // 이 창에서 확인한 이메일(적힌 그대로) → 결과 — 칸 이메일 · 명함 칩의 메일 주소 모두(UG-451 반박 리뷰 F3)
+  const [known, setKnown] = useState<Record<string, EmailCheck["status"]>>({});
+  const remember = (address: string, status: EmailCheck["status"] | null) =>
+    setKnown((k) => {
+      if ((k[address] ?? null) === status) return k;
+      const next = { ...k };
+      if (status === null) delete next[address];
+      else next[address] = status;
+      return next;
+    });
+  /** 칸 이메일의 확인 결과를 바꿔요(칸 아래 안내) — 확인한 이메일 기억(known)도 함께. result = null 이면 다시 확인할 것으로 */
+  function setChecked(address: string, result: EmailCheck | null) {
+    setCheck(result ? { email: address, result } : null);
+    remember(address, result?.status ?? null);
+  }
+  // 명함 칩의 메일 주소들(잘렸을 수 있는 칩은 뽑은 꼬리 주소) — 이미 있는 계정이면 이 명함은 「작성 중」으로 남기지 않아요(F3)
+  const chipEmails = scan ? chipEmailAddresses(scan.chips) : [];
+  // 「작성 중」으로 남겨도 되는지(UG-451 기획 17022 · 반박 리뷰 F3 · F4, draftSaveGate) — 칸 이메일이 「새 계정」으로 확인됐거나,
+  // 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소가 모두 새 주소일 때만. 확인 전이면 wait, 있는 계정이면 existing
+  // 칸 값이 잘렸을 수 있는 메일 칩의 값 · 그 칩에서 뽑은 잘린 주소와 같음 — 경고하고 보내기를 막아요(반박 리뷰 F2 · 최종 리뷰 R3, 고치면 풀려요)
+  const suspectValue = !!scan && isSuspectValue(trimmed, scan.chips);
+  const emailGate = draftSaveGate({
+    email: trimmed,
+    checkable: EMAIL_RE.test(trimmed),
+    fieldStatus: current?.status ?? null,
+    chipEmails,
+    known,
+    suspectChips: !!scan && scan.chips.some(isSuspectChip),
+    fieldSuspect: suspectValue,
+  });
+
+  /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
+  function pickPendingLanguage(l: MailLanguage) {
+    if (langBeforePending.current === null) langBeforePending.current = language;
+    setLanguage(l);
+  }
+
+  /**
+   * 이메일 확인 — target = 확인할 이메일(기본은 칸 값, 명함이 방금 채운 값은 아직 이 그림에 없어 따로 받아요).
+   * quiet = 직원이 부르지 않은 확인(명함이 채움 · 「작성 중」 저장 전 확인, UG-451 기획 17022) — 실패해도 칸 아래 안내를 띄우지 않아요.
+   * 같은 이메일을 확인하는 중이면 그 결과를 같이 기다려요 — 직원이 부른 쪽(칸을 벗어남)이면 실패 안내는 띄워요.
+   */
+  function runCheck(target: string = trimmed, quiet = false): Promise<EmailCheck | null> {
+    if (!EMAIL_RE.test(target)) return Promise.resolve(null);
+    if (check && check.email === target) return Promise.resolve(check.result);
+    if (inflight.current?.key === target) {
+      const joined = inflight.current.result;
+      if (!quiet && inflight.current.quiet) {
+        void joined.then((r) => {
+          if (r === null && checkFailure.current && emailRef.current?.value.trim() === target) setEmailError(CHECK_FAILED);
+        });
+      }
+      return joined;
+    }
+    const result = lookup(target, quiet);
+    inflight.current = { key: target, result, quiet };
+    void result.finally(() => {
+      if (inflight.current?.result === result) inflight.current = null;
+    });
+    return result;
+  }
+
+  async function lookup(asked: string, quiet: boolean): Promise<EmailCheck | null> {
+    let result: EmailCheck;
+    setChecking(true);
+    try {
+      result = await checkEmail(asked);
+      checkFailure.current = null;
+    } catch (e) {
+      checkFailure.current = isNetworkError(e) ? "network" : "other";
+      if (!quiet && emailRef.current?.value.trim() === asked) setEmailError(CHECK_FAILED);
+      return null;
+    } finally {
+      setChecking(false);
+    }
+    // 확인한 결과는 기억해요(명함 칩 주소 판정에도 써요) — 조회하는 사이 이메일을 고쳤으면 칸 아래 안내에는 쓰지 않아요.
+    remember(asked, result.status);
+    if (emailRef.current?.value.trim() !== asked) return null;
+    setChecked(asked, result);
+    if (result.status === "pending") {
+      pickPendingLanguage(result.language);
+    }
+    return result;
+  }
+
+  // 명함 칩 메일 주소 확인 중인 것 — 같은 주소를 두 번 묻지 않게(닫을 때는 이 결과를 같이 기다려요)
+  const chipChecks = useRef(new Map<string, Promise<EmailCheck["status"] | null>>());
+  /**
+   * 명함 칩의 메일 주소를 조용히 확인해요(UG-451 반박 리뷰 F3) — 칸에 들어가지 않은 주소(잘렸을 수 있어 채우지 않음 등)도
+   * 이미 있는 계정이면 이 명함은 「작성 중」으로 남기지 않아요. 실패한 주소는 모름으로 두고 다음 변경 · 닫을 때 다시 물어요.
+   * 결과(주소 → 상태, 실패는 빠짐)를 돌려줘요 — 닫을 때는 아직 이 그림에 없는 결과로 다시 정해요.
+   */
+  async function checkChipEmails(addresses: readonly string[]): Promise<Record<string, EmailCheck["status"]>> {
+    const out: Record<string, EmailCheck["status"]> = {};
+    await Promise.all(
+      addresses.map(async (address) => {
+        let pending = chipChecks.current.get(address);
+        if (!pending) {
+          // 칸 이메일로 확인 중이면 그 결과를 같이 기다려요
+          const field = inflight.current?.key === address ? inflight.current.result : null;
+          pending = field
+            ? field.then((r) => r?.status ?? null)
+            : checkEmail(address).then(
+                (r) => {
+                  remember(address, r.status);
+                  return r.status;
+                },
+                () => null,
+              );
+          chipChecks.current.set(address, pending);
+          void pending.finally(() => chipChecks.current.delete(address));
+        }
+        const status = await pending;
+        if (status) out[address] = status;
+      }),
+    );
+    return out;
+  }
 
   /**
    * 닫을 때 「작성 중」으로 남길 것. 명함을 찍었거나 네 칸 중 하나라도 채웠을 때만(서버도 빈 명함은 받지 않아요 — PJ-101).
@@ -2100,6 +2306,31 @@ function CreateDialog({
     }
     // 다시 시도하는 동안에는 실패 안내 · 버튼(「저장하는 중…」)을 그대로 둬요
     setKeepingDraft(true);
+    // 이미 있는 계정(사용 중 · 해지 중 · 첫 로그인 전)의 이메일이면 — 칸이든 명함 칩이든 — 남기지 않아요(UG-451 기획 17022 · 반박 리뷰 F3).
+    // 확인 전 · 확인 실패였으면 한 번 더 확인해 다시 정하고, 그래도 모르면 전처럼 남겨요(gateAtClose).
+    // 이 창의 자동 저장이 이미 남긴 명함은 지워요 — 이어서 만든 원래 명함은 그대로(ownDraftToDiscard)
+    if (!keep.remove) {
+      let gate = emailGate;
+      if (gate === "wait") {
+        const field = EMAIL_RE.test(trimmed) && !current ? await runCheck(trimmed, true) : null;
+        const chips = await checkChipEmails(chipEmails.filter((address) => known[address] === undefined));
+        gate = draftSaveGate({
+          email: trimmed,
+          checkable: EMAIL_RE.test(trimmed),
+          fieldStatus: field?.status ?? current?.status ?? null,
+          chipEmails,
+          known: { ...known, ...chips },
+          suspectChips: !!scan && scan.chips.some(isSuspectChip),
+          fieldSuspect: suspectValue,
+        });
+      }
+      if (gateAtClose(gate) === "existing") {
+        keepLock.current = false;
+        setKeepingDraft(false);
+        consumeDraft(true);
+        return onClose();
+      }
+    }
     // 새 명함인데 앞 저장(닫기 · 자동 저장)의 응답을 잃었으면 목록이 서버에 남은 그 명함을 찾아 이어 써요(중복 「작성 중」 방지)
     const ok = await onKeepDraft(keep, lostRef.current);
     keepLock.current = false;
@@ -2135,14 +2366,18 @@ function CreateDialog({
   // 새로고침 뒤에는 목록의 「작성 중」 줄에서 이어서 만들어요. 화면에는 아무것도 띄우지 않아요(칸도 잠그지 않아요) —
   // 실패하면 다음 변경 때 다시 하고, 닫을 때 저장(실패하면 「저장하지 못했습니다」)이 그대로 마지막 안전망이에요.
   // 남길 것은 닫을 때와 같은 draftToKeep — 주소를 고치는 중 · 결과 화면 · 보내는 중 · 계정을 만든 뒤에는 남기지 않고, 칸을 다 비우면(지울 것) 건너뛰어요.
-  /** 지금 남길 것과 내용 열쇠 */
-  function autosaveSnapshot() {
+  /**
+   * 지금 남길 것과 내용 열쇠. anyEmail = 이메일 확인과 상관없이(이어서 만든 명함을 연 그대로인지 볼 때만)
+   * 남겨도 되는지는 emailGate(draftSaveGate)가 open 일 때만이에요(반박 리뷰 F6 · UG-451 기획 17022 · 반박 리뷰 F3 · F4):
+   * 칸 이메일 확인이 「새 계정」으로 끝나기 전 · 이미 있는 계정이면 남기지 않고, 칸이 비었거나 형식이 아니어도 명함 칩의 메일 주소를
+   * 아직 확인하지 못했거나 그중 하나가 이미 있는 계정이면 남기지 않아요(명함을 읽은 바로 뒤 사진만 먼저 남던 것 포함).
+   * 이어서 만든 명함도 그동안은 고쳐 쓰지 않아요(PUT 없음). 막히기 전에 이미 고쳐 쓴 이어서 만든 명함은 그대로 둬요 — 직원이 목록에서 정해요.
+   * 이 창의 자동 저장이 만든 명함은 명함 칩 주소가 있는 계정으로 드러나면 바로(discardOwnDrafts), 칸 이메일만 있는 계정이면 닫을 때(close) 지워요.
+   */
+  function autosaveSnapshot(anyEmail = false) {
     const keep = draftToKeep();
     if (!keep || keep.remove) return null;
-    // 이메일이 이미 있는 계정(사용 중 · 해지 중 · 발급 기록 — 「계정 만들고 메일 보내기」를 못 하는 경우)이면 남기지 않아요(반박 리뷰 F6).
-    // 이미 남긴 명함은 지우지 않아요 — 직원이 이메일을 고칠 수 있어요
-    const checked = check && check.email === email.trim() ? check.result : null; // 아래 current 와 같은 값
-    if (checked && checked.status !== "new") return null;
+    if (!anyEmail && emailGate !== "open") return null;
     const key = draftContentKey(keep.input, memRef.current.serverPhoto);
     // 서버가 받지 않은 사진(너무 큼 · 형식)은 다시 올리지 않아요 — 바뀔 때마다 같은 큰 사진을 되풀이해 보내지 않게(F7)
     const input = keep.input.photo && photoTag(keep.input.photo) === rejectedPhotoRef.current ? withoutPhoto(keep.input) : keep.input;
@@ -2174,12 +2409,48 @@ function CreateDialog({
     if (posted && !out.res.ok && out.res.reason === "failed") lostRef.current = addLost(lostRef.current, out.sent);
     return result;
   }
+  /**
+   * 명함 칩의 메일 주소가 이미 있는 계정이라 이 창의 자동 저장이 남긴 명함을 바로 지워요(UG-451 반박 리뷰 F3) — 창은 그대로 쓰고,
+   * 나중에 칸 이메일이 「새 계정」으로 확인되면 새 명함으로 다시 남겨요. 이어서 만든 원래 명함은 지우지 않아요(ownDraftToDiscard).
+   * 보내는 중인 자동 저장이 끝난 뒤에 지워요(지운 뒤 그 저장이 되살리지 않게). 응답을 잃은 새 명함도 찾아 지워요.
+   */
+  async function discardOwnDrafts() {
+    const autosave = autosaveRef.current;
+    if (!autosave || autosave.stopped) return;
+    const release = await autosave.suspend();
+    try {
+      const mem = memRef.current;
+      if (mem.ended) return;
+      let id = ownDraftToDiscard(mem.id, ownIdsRef.current);
+      if (!mem.id && lostRef.current.inputs.length > 0) {
+        const found = await findLostDraft(lostRef.current, staffEmail, true);
+        if (found.kind === "found") id = found.id;
+        if (found.kind === "found" || found.kind === "none") lostRef.current = { ...lostRef.current, inputs: [] };
+      }
+      if (!id) return;
+      if (mem.id === id) {
+        mem.id = null;
+        mem.serverPhoto = null;
+      }
+      autosave.forget(); // 지운 명함의 내용 — 다시 남길 때 같은 내용이어도 새로 남겨요
+      onDraftUsed(id);
+    } finally {
+      release();
+    }
+  }
+
   // 일정표는 늘 마지막 그림의 값으로 남겨요
   const autosaveSnapshotRef = useRef(autosaveSnapshot);
   const autosaveRunRef = useRef(autosaveRun);
+  const runCheckRef = useRef(runCheck);
+  const checkChipEmailsRef = useRef(checkChipEmails);
+  const discardOwnDraftsRef = useRef(discardOwnDrafts);
   useEffect(() => {
     autosaveSnapshotRef.current = autosaveSnapshot;
     autosaveRunRef.current = autosaveRun;
+    runCheckRef.current = runCheck;
+    checkChipEmailsRef.current = checkChipEmails;
+    discardOwnDraftsRef.current = discardOwnDrafts;
   });
   useEffect(() => {
     const autosave = createAutosaver<AutosaveItem>({
@@ -2188,9 +2459,9 @@ function CreateDialog({
       save: (keep) => autosaveRunRef.current(keep),
     });
     // 응답을 잃은 저장은 이 창을 연 뒤 생긴 명함에서만 찾아요(F2)
-    lostRef.current = { since: Date.now() - LOST_CLOCK_SKEW_MS, inputs: [] };
-    // 이어서 만든 명함을 연 그대로면 다시 보내지 않아요
-    const first = autosaveSnapshotRef.current();
+    lostRef.current = { since: lostSince(), inputs: [] };
+    // 이어서 만든 명함을 연 그대로면 다시 보내지 않아요 — 이메일 확인 전이라도(확인이 끝난 뒤 같은 값을 다시 보내지 않게)
+    const first = autosaveSnapshotRef.current(true);
     if (first && memRef.current.id) autosave.markSaved(first.key);
     autosaveRef.current = autosave;
     openRef.current = true;
@@ -2200,10 +2471,26 @@ function CreateDialog({
       void autosave.stop();
     };
   }, []);
-  // 칸 · 메일 언어 · 칩 연결 · 이메일 확인 결과가 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요)
+  // 칸 · 메일 언어 · 칩 연결 · 이메일 확인 결과가 바뀌면 — 2초 동안 더 바뀌지 않으면 남겨요(같은 내용이면 보내지 않아요).
+  // 이메일 확인을 기다리는 중(확인 전 · 실패)이면 같은 때 확인도 다시 해요(조용히) — 확인이 끝나면(check) 다시 여기로 와 남겨요(UG-451 기획 17022).
+  // 확인이 실패해도 check · 칸이 그대로라 저절로 되풀이하지 않아요 — 다음 변경 · 칸을 벗어날 때 · 닫을 때 다시 해요
+  // 명함 칩의 메일 주소 중 아직 모르는 것(확인 실패 포함)도 같은 때 다시 물어요(반박 리뷰 F3)
+  const unknownChipEmails = chipEmails.filter((address) => known[address] === undefined).join("\n");
   useEffect(() => {
     autosaveRef.current?.schedule();
-  }, [company, name, email, phone, language, languageChosen, scan, check]);
+    if (emailGate !== "wait" || fix || mailFailure) return;
+    const timer = setTimeout(() => {
+      if (EMAIL_RE.test(trimmed)) void runCheckRef.current(trimmed, true);
+      if (unknownChipEmails) void checkChipEmailsRef.current(unknownChipEmails.split("\n"));
+    }, AUTOSAVE_DELAY);
+    return () => clearTimeout(timer);
+  }, [company, name, email, phone, language, languageChosen, scan, check, known, emailGate, trimmed, unknownChipEmails, fix, mailFailure]);
+  // 명함 칩의 메일 주소가 이미 있는 계정으로 드러나면(칸을 지워도 사진 · 칩에 남아요) 이 창의 자동 저장이 만든 명함을 바로 지워요(반박 리뷰 F3).
+  // 칸 이메일이 「새 계정」으로 확인되면 다시 남겨요(draftSaveGate) — 지운 뒤에는 새 명함으로
+  const chipsExisting = emailGate !== "open" && chipEmailsState(chipEmails, known) === "existing";
+  useEffect(() => {
+    if (chipsExisting) void discardOwnDraftsRef.current();
+  }, [chipsExisting]);
   // 명함 읽기가 끝나면(읽지 못해도 사진은 남아요) 바로 — 사진은 이때 한 번 올리고 다음부터는 keepPhoto
   const [scanDone, setScanDone] = useState(0);
   useEffect(() => {
@@ -2228,16 +2515,17 @@ function CreateDialog({
    * 이어서 만든 · 자동 저장한 명함을 다 썼어요(이미 만든 계정에 안내 메일 · 재설정 메일을 보냄) — 목록의 「작성 중」 줄 · 사진은 목록이 뒤에서 지워요.
    * 자동 저장을 먼저 끄고(보내는 중이면 끝난 뒤 — 그 저장이 남긴 명함은 recordSave 가 지울 것으로 돌려줘요) 지워요.
    * 응답을 잃은 새 명함도 찾아 지워요(F1 — 이미 있는 고객의 개인정보가 「작성 중」에 30일 남지 않게).
+   * ownOnly = 이미 있는 계정의 이메일이라 남기지 않고 닫음(UG-451 기획 17022) — 이 창의 자동 저장이 만든 명함만 지우고 이어서 만든 원래 명함은 그대로
    */
-  function consumeDraft() {
+  function consumeDraft(ownOnly = false) {
     const mem = memRef.current;
     if (mem.ended) return;
     mem.ended = true;
     const autosave = autosaveRef.current;
     void (async () => {
       await autosave?.stop();
-      let id = mem.id;
-      if (!id) {
+      let id = ownOnly ? ownDraftToDiscard(mem.id, ownIdsRef.current) : mem.id;
+      if (!mem.id) {
         const found = await findLostDraft(lostRef.current, staffEmail, true);
         if (found.kind === "found") id = found.id;
       }
@@ -2267,10 +2555,6 @@ function CreateDialog({
     return Number.isSafeInteger(n) ? { draftId: n } : {};
   }
 
-  const trimmed = email.trim();
-  // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
-  const key = trimmed;
-  const current = check && check.email === key ? check.result : null;
   const pending = current?.status === "pending" ? current : null;
   const inUse = current?.status === "in_use";
   // 해지 중인 계정(UG-443 기획 16908) — 사용 중처럼 막되 까닭을 다르게
@@ -2290,12 +2574,6 @@ function CreateDialog({
     }
   }, [pending]);
 
-  /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
-  function pickPendingLanguage(l: MailLanguage) {
-    if (langBeforePending.current === null) langBeforePending.current = language;
-    setLanguage(l);
-  }
-
   /**
    * 실패 결과 · 발급 취소 창에 넘길 대상(첫 로그인 전 발급 기록). 회사명은 기록의 것 —
    * 입력 칸 값을 쓰면 다른 이름이 그 계정 이름처럼 보여요. 서버가 아직 회사명을 주지 않으면 이메일만 보여요.
@@ -2312,46 +2590,11 @@ function CreateDialog({
     ...(p.mailFailureReason ? { mailFailureReason: p.mailFailureReason } : {}),
   });
 
-  function runCheck(): Promise<EmailCheck | null> {
-    if (!EMAIL_RE.test(trimmed)) return Promise.resolve(null);
-    if (current) return Promise.resolve(current);
-    if (inflight.current?.key === key) return inflight.current.result;
-    const result = lookup();
-    inflight.current = { key, result };
-    void result.finally(() => {
-      if (inflight.current?.result === result) inflight.current = null;
-    });
-    return result;
-  }
-
-  async function lookup(): Promise<EmailCheck | null> {
-    const asked = key;
-    let result: EmailCheck;
-    setChecking(true);
-    try {
-      result = await checkEmail(trimmed);
-      checkFailure.current = null;
-    } catch (e) {
-      checkFailure.current = isNetworkError(e) ? "network" : "other";
-      if (emailRef.current?.value.trim() === asked) setEmailError(CHECK_FAILED);
-      return null;
-    } finally {
-      setChecking(false);
-    }
-    // 조회하는 사이 이메일을 고쳤으면 버려요.
-    if (emailRef.current?.value.trim() !== asked) return null;
-    setCheck({ email: asked, result });
-    if (result.status === "pending") {
-      pickPendingLanguage(result.language);
-    }
-    return result;
-  }
-
   /** 만들기 · 재발송이 「이미 있음」으로 막힌 뒤 다시 조회해 칸 아래에 보여 줘요. 네트워크 · 서버 문제면 버튼 위 안내. */
   async function recheck() {
     try {
       const result = await checkEmail(trimmed);
-      setCheck({ email: key, result });
+      setChecked(key, result);
       if (result.status === "pending") pickPendingLanguage(result.language);
     } catch (e) {
       if (isNetworkError(e)) setFormError(NETWORK_FAILED);
@@ -2445,6 +2688,8 @@ function CreateDialog({
   }
 
   async function submit() {
+    // 명함에서 잘못 읽었을 수 있는 주소 그대로면 보내지 않아요 — 칸 아래 경고가 이미 떠 있어요(반박 리뷰 F2)
+    if (suspectValue) return emailRef.current?.focus();
     if (fix) return submitFix(fix);
     let eError = "";
     if (!trimmed) eError = "고객 이메일을 입력해 주세요.";
@@ -2516,9 +2761,9 @@ function CreateDialog({
         return onResendMailFailed();
       }
       setFormError(resendErrorText(res.reason));
-      if (res.reason === "in_use" || res.reason === "not_found") setCheck(null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
+      if (res.reason === "in_use" || res.reason === "not_found") setChecked(key, null); // 상태가 바뀌었어요 — 칸을 벗어나면 다시 조회해요
       // 그사이 해지가 시작됐어요(UG-443) — 이 이메일을 해지 중으로 바꿔 보내기 버튼을 꺼요
-      if (res.reason === "closing") setCheck({ email: key, result: { status: "closing" } });
+      if (res.reason === "closing") setChecked(key, { status: "closing" });
       return;
     }
     const res = await createAccount({ ...input, ...(await draftIdInput()) });
@@ -2574,7 +2819,7 @@ function CreateDialog({
     // 이메일이 바뀌면 재설정 확인 창의 전제(그 이메일이 사용 중)가 깨져요 — 직원이 다시 누를 때까지 열지 않아요
     setResetConfirm(false);
     setResetReturned(false);
-    if (value.trim()) setEmailMissing(false);
+    if (value.trim()) setEmailMissing(null);
   }
 
   /** 칸마다 값 넣기(명함 · 칩). 그 칸의 오류 안내는 지워요. */
@@ -2678,10 +2923,10 @@ function CreateDialog({
       }
       setScan(null);
       cursor.current = null;
-      setEmailMissing(false);
+      setEmailMissing(null);
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
       // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저)
-      return setScanFailed(failure === "tool" ? "tool" : isHeic(file) ? "format" : (failure ?? "read"));
+      return setScanFailed(failure === "tool" || failure === "tool_reload" ? failure : isHeic(file) ? "format" : (failure ?? "read"));
     }
     // 처음 채우기는 이메일 · 연락처만(회사명 · 이름은 직원이 칩을 눌러 넣어요, 기획 16846) — 회사명 · 이름 칸은 건드리지 않아요
     const links: ScanLinks = {};
@@ -2702,12 +2947,19 @@ function CreateDialog({
     setScan({ chips: result.chips, links });
     cursor.current = null;
     // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
-    // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 「메일 주소를 찾지 못했습니다」가 따로 떠요.
+    // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 이메일 칸 아래 안내가 따로 떠요.
     // 칩이 생겼으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 위 안내와 겹치지 않게 칸 아래 안내 · 커서는 찾은 경우만.
     const found = result.values.phone !== "" || result.chips.some((c) => c.kind === "email");
     const missing = found && emailFilled && !result.values.email;
-    setEmailMissing(missing);
+    // 메일 칩(또는 @ 가 든 줄)은 있는데 채우지 않음 = 잘렸을 수 있어 확인하지 못함, 메일 모양 글자가 하나도 없음 = 찾지 못함(UG-451 기획 17022)
+    const emailLike = result.chips.some((c) => c.kind === "email" || c.text.includes("@"));
+    setEmailMissing(missing ? (emailLike ? "unsure" : "none") : null);
     if (!found) setScanFailed("read");
+    // 명함이 채운 이메일은 바로 확인해요 — 이미 있는 계정이면 직원이 일찍 알고, 확인이 「새 계정」으로 끝나기 전에는 「작성 중」으로 남기지 않아요(기획 17022)
+    if (emailFilled && result.values.email && EMAIL_RE.test(result.values.email)) void runCheck(result.values.email, true);
+    // 칸에 넣지 않은 칩 메일 주소(잘렸을 수 있어 채우지 않음 · 두 번째 주소)도 한 번 조용히 확인해요 — 끝나기 전에는 사진도 남기지 않아요(반박 리뷰 F3)
+    const others = chipEmailAddresses(result.chips).filter((address) => address !== result.values.email);
+    if (others.length > 0) void checkChipEmails(others);
     setScanDone((n) => n + 1); // 읽은 값 · 사진을 바로 「작성 중」에 남겨요(UG-451 기획 17009)
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
     if (missing) emailRef.current?.focus();
@@ -2716,7 +2968,7 @@ function CreateDialog({
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   const scannedEmail = scan?.links.email !== undefined;
   // 칸 아래 안내가 「이미 사용 중인 계정입니다」일 때만(다른 오류 · 해지 중 · 주소 고치는 중이 아닐 때) 재설정 메일 링크를 보여 줘요
-  const offerReset = inUse && !fix && !emailError && !closing;
+  const offerReset = inUse && !fix && !emailError && !closing && !suspectValue;
 
   // 확인 창의 전제(사용 중 이메일 · 링크를 보일 수 있는 상태)가 깨지면 닫힌 것으로 되돌려요 — 조건이 다시 맞아도 저절로 열리지 않게.
   // 렌더 중에 바로 맞춰요(React 의 「렌더 중 상태 조정」 방식) — 깨진 상태로 한 번도 그리지 않아요.
@@ -2732,8 +2984,8 @@ function CreateDialog({
           setResetConfirm(false);
           setResetReturned(true);
           // 그사이 계정이 없어졌거나 해지가 시작됐어요 — 칸 아래 안내를 바꿔요(없어졌으면 다시 조회해 새로 만들 수 있게)
-          if (reason === "not_found") setCheck(null);
-          if (reason === "closing") setCheck({ email: key, result: { status: "closing" } });
+          if (reason === "not_found") setChecked(key, null);
+          if (reason === "closing") setChecked(key, { status: "closing" });
         }}
         onSent={(result) => {
           // 이미 있는 계정에 메일을 보냈어요 — 이어서 만든 명함은 다 썼고, 명함 사진은 지워요(다시 보내기와 같게)
@@ -2903,7 +3155,7 @@ function CreateDialog({
             <label htmlFor="email" className="t-body-200-b">
               고객 이메일
             </label>
-            <div className={`input-box${emailError || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
+            <div className={`input-box${emailError || suspectValue || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
               <input
                 ref={emailRef}
                 id="email"
@@ -2921,13 +3173,16 @@ function CreateDialog({
                   onFieldBlur("email", e.timeStamp);
                   void runCheck();
                 }}
-                aria-invalid={!!emailError || inUse || closing || fixSame || fixTaken}
+                aria-invalid={!!emailError || suspectValue || inUse || closing || fixSame || fixTaken}
                 aria-describedby="email-note"
               />
             </div>
             <div id="email-note" role="status" aria-live="polite">
               {emailError ? (
                 <p className="error">{emailError}</p>
+              ) : suspectValue ? (
+                // 잘렸을 수 있는 메일 칩 값 그대로(눌러 넣음 · 직접 침 · 붙여 넣음) — 고칠 때까지 떠 있고 보내기를 막아요(반박 리뷰 F2)
+                <p className="error">{SUSPECT_EMAIL}</p>
               ) : fix && cancelError ? (
                 <p className="error">{cancelErrorText(cancelError)}</p>
               ) : fixSame ? (
@@ -2946,13 +3201,17 @@ function CreateDialog({
                   이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}).
                 </p>
               ) : pending ? (
-                // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「안내 메일 다시 보내기」
+                // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「메일 재발송」
                 <p className="help">
                   이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
                 </p>
               ) : emailMissing ? (
-                // 명함에서 메일 주소를 못 읽음(N4) — 막힌 게 아니라 회색(C 와 같은 모양)
-                <p className="help">메일 주소를 찾지 못했습니다. 직접 입력해 주세요.</p>
+                // 명함에서 메일 주소를 채우지 못함(N4) — 막힌 게 아니라 회색(C 와 같은 모양). 메일 칩이 있었으면(잘렸을 수 있음) 고르라고(UG-451 기획 17022)
+                <p className="help">
+                  {emailMissing === "unsure"
+                    ? "메일 주소를 확인하지 못했습니다. 읽은 줄에서 고르거나 직접 입력해 주세요."
+                    : "메일 주소를 찾지 못했습니다. 직접 입력해 주세요."}
+                </p>
               ) : (
                 <p className="help">주소가 틀리면 다른 사람이 계정을 받습니다.</p>
               )}
@@ -2971,7 +3230,8 @@ function CreateDialog({
               </button>
             )}
             {/* 명함에서 읽은 이메일의 헷갈리는 글자 · 도메인 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
-            {scannedEmail && <ScannedEmailNotes email={trimmed} />}
+            {/* 잘렸을 수 있는 주소면 「명함과 같은지 확인」 줄은 띄우지 않아요 — 확인된 것처럼 보이지 않게(반박 리뷰 F2) */}
+            {scannedEmail && !suspectValue && <ScannedEmailNotes email={trimmed} />}
           </div>
 
           <div className="field">
@@ -3082,7 +3342,7 @@ function CreateDialog({
                 </button>
               )
             ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || sending || scanning} aria-busy={sending || checking || undefined}>
+              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectValue || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -3104,8 +3364,9 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={close} disabled={sending}>
               취소
             </button>
-            <button type="submit" className="btn btn-dark" disabled={inUse || closing || sending || scanning} aria-busy={sending || checking || undefined}>
-              {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
+            <button type="submit" className="btn btn-dark" disabled={inUse || closing || suspectValue || sending || scanning} aria-busy={sending || checking || undefined}>
+              {/* 첫 로그인 전 이메일이면 목록 줄과 같은 이름 「메일 재발송」(UG-450 기획 17020) — 확인 창 제목은 그대로 */}
+              {sending ? "보내는 중…" : pending ? "메일 재발송" : "계정 만들고 메일 보내기"}
             </button>
           </div>
         )}

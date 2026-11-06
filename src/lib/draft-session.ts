@@ -2,7 +2,8 @@
 // - 사진을 어떻게 보낼지(photoPlan)
 // - 응답을 잃은 새 명함 저장을 서버 목록에서 찾기(resolveLostDraft) — 다른 명함을 잘못 잇지 않게 엄격하게
 // - 저장 결과를 창의 기억(번호 · 서버 사진)에 반영하는 차례(recordSave)
-import type { CardDraft, CardDraftInput, CardDraftSaveResult } from "./api";
+// - 이메일 확인 결과로 남겨도 되는지(draftEmailGate · draftSaveGate · gateAtClose · ownDraftToDiscard — 이미 있는 계정의 이메일은 남기지 않아요, 기획 17022)
+import type { CardDraft, CardDraftInput, CardDraftSaveResult, EmailCheck } from "./api";
 // 값 import 는 .ts 까지 적어요 — `npm test`(Node 가 타입만 지우고 바로 실행)가 확장자 없는 경로를 찾지 못해요
 import { photoForDraft, photoFromDraft } from "./card-draft.ts";
 import { photoTag, type AutosaveResult } from "./draft-autosave.ts";
@@ -149,4 +150,84 @@ export function withoutPhoto(input: CardDraftInput): CardDraftInput {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 사진만 빼요
   const { photo, keepPhoto, ...rest } = input;
   return rest;
+}
+
+/**
+ * 이메일 칸 값으로 본 「작성 중」 저장 가능 여부(UG-451 기획 17022 — 이미 있는 계정의 이메일은 「작성 중」으로 남기지 않아요).
+ * - open = 남겨도 돼요: 이메일이 없거나 · 조회할 수 없는 모양(형식 오류 — 잘렸을 수 있는 메일 칩을 넣은 「tan@x.com · sg」 등)이거나 · 조회가 「새 계정」
+ * - wait = 아직 몰라요: 조회 전 · 조회 중 · 조회 실패(연결 문제 등) — 자동 저장은 하지 않고 다음 변경 때 다시 조회해요
+ * - existing = 이미 있는 계정(사용 중 · 해지 중 · 첫 로그인 전 발급 기록) — 자동 저장도 닫을 때 저장도 하지 않아요
+ * email = 앞뒤 공백 뗀 칸 값, checkable = 조회할 수 있는 모양인지(화면의 EMAIL_RE), checked = 이 이메일(그대로 같은 글자)의 조회 결과 상태
+ */
+export type DraftEmailGate = "open" | "wait" | "existing";
+
+export function draftEmailGate(email: string, checkable: boolean, checked: EmailCheck["status"] | null): DraftEmailGate {
+  if (!email || !checkable) return "open";
+  if (checked === null) return "wait";
+  return checked === "new" ? "open" : "existing";
+}
+
+type CheckStatus = EmailCheck["status"];
+
+/** 명함 칩의 메일 주소들을 확인한 결과 — clear = 모두 새 주소, unknown = 아직 확인하지 못한 주소가 있음, existing = 이미 있는 계정의 주소가 있음 */
+export type ChipEmailsState = "clear" | "unknown" | "existing";
+
+/** known = 이 창에서 확인한 이메일(적힌 그대로) → 결과 */
+export function chipEmailsState(emails: readonly string[], known: Readonly<Record<string, CheckStatus>>): ChipEmailsState {
+  let unknown = false;
+  for (const e of emails) {
+    const s = known[e];
+    if (s === undefined) unknown = true;
+    else if (s !== "new") return "existing";
+  }
+  return unknown ? "unknown" : "clear";
+}
+
+/**
+ * 「작성 중」으로 남겨도 되는지 — 이메일 칸과 명함 칩의 메일 주소를 함께 봐요(UG-451 기획 17022 · 반박 리뷰 F3 · F4).
+ * 1. 이메일 칸(draftEmailGate): 확인 전 · 실패면 wait, 이미 있는 계정이면 existing
+ * 2. 칸 이메일이 「새 계정」으로 확인됐으면 open — 명함에 다른 주소가 있어도 직원이 고른 주소예요
+ * 3. 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소로: 하나라도 이미 있는 계정이면 existing(이 명함은 있는 고객 것 — 칸을 지워도
+ *    사진 · 칩에 그 주소가 남아요), 아직 확인 못 한 주소가 있으면 wait, 모두 새 주소면 open
+ *    (2 의 칸 이메일이 의심 칩 값 · 잘린 꼬리 주소면(fieldSuspect) 「새 계정」이어도 3 으로 가요)
+ * fieldStatus = 칸 이메일의 확인 결과(없으면 known 에서 찾아요), chipEmails = 명함 칩의 메일 주소(chipEmailAddresses)
+ */
+export function draftSaveGate(args: {
+  email: string;
+  checkable: boolean;
+  fieldStatus: CheckStatus | null;
+  chipEmails: readonly string[];
+  known: Readonly<Record<string, CheckStatus>>;
+  /** 명함에 잘렸을 수 있는 메일 칩이 있는지(isSuspectChip) */
+  suspectChips?: boolean;
+  /** 칸 값이 의심 칩 값 · 그 칩에서 뽑은 잘린 주소와 같은지(isSuspectValue) */
+  fieldSuspect?: boolean;
+}): DraftEmailGate {
+  const fieldStatus = args.fieldStatus ?? args.known[args.email] ?? null;
+  const field = draftEmailGate(args.email, args.checkable, fieldStatus);
+  if (field !== "open") return field;
+  const fieldNew = !!args.email && args.checkable && !args.fieldSuspect && fieldStatus === "new";
+  if (fieldNew) return "open";
+  const chips = chipEmailsState(args.chipEmails, args.known);
+  if (chips === "existing") return "existing";
+  // 4. 잘렸을 수 있는 메일 칩이 있으면 잘린 꼬리 주소의 확인 결과로 정하지 않아요(최종 리뷰 R2) —
+  //    칸에 의심이 아닌 주소가 「새 계정」으로 확인될 때까지 기다려요(닫을 때는 gateAtClose 가 전처럼 남겨요)
+  if (args.suspectChips) return "wait";
+  return chips === "unknown" ? "wait" : "open";
+}
+
+/**
+ * 닫을 때 — 기다리던 확인을 한 번 더 해 다시 정한 뒤에도 모르면(확인 실패) 전처럼 남겨요 —
+ * 직원이 찍고 친 값이 사라지는 쪽이 더 나빠서예요(연결이 끊겼으면 남기기도 실패해 [다시 시도] [그래도 닫기]가 떠요).
+ */
+export function gateAtClose(gate: DraftEmailGate): "open" | "existing" {
+  return gate === "existing" ? "existing" : "open";
+}
+
+/**
+ * 이미 있는 계정의 이메일이라 닫을 때 지울 명함 — 이 창의 자동 저장이 새로 만든 명함(own)만이에요.
+ * 이어서 만들기로 연 원래 명함은 그대로 둬요(직원이 목록에서 정해요).
+ */
+export function ownDraftToDiscard(id: string | null, own: ReadonlySet<string>): string | null {
+  return id !== null && own.has(id) ? id : null;
 }
