@@ -232,8 +232,136 @@ function ClipText({ text, query, className }: { text: string; query: string; cla
 }
 
 /**
+ * 말줄임되면 눌러서 전체 글자를 작은 말풍선으로 보는 한 줄 글자(UG-450 기획 16995 · 17020) — 휴대폰 카드의 회사명, PC 표의 회사명 · 이메일.
+ * 아이패드(전시장 기기) · 휴대폰은 마우스를 올릴 수 없어 title 이 보이지 않아요 — 눌러서 봐요. 마우스로는 전처럼 올리면 전체 글자(title).
+ * 말줄임되지 않은 글자는 그냥 글자(누를 것이 없어요). 말줄임 여부는 상자 · 글자 폭이 바뀔 때마다 다시 재요(isTextTruncated).
+ * 말풍선은 화면에 고정(position: fixed)해 표의 옆 스크롤 상자에 잘리지 않게 하고, 바깥 누르기 · Esc · 스크롤 · 창 크기 바뀜 · 화면 이동(뒤로 가기) ·
+ * 다른 곳으로 초점이 가면 닫혀요. 키보드: Tab 으로 가서 Enter · Space(버튼).
+ * text = 말풍선 · title 의 전체 글자, children = 보이는 글자(검색 강조 등), className = 말줄임 글자의 클래스, wrapClassName = 감싸는 상자의 클래스
+ */
+function TapClip({
+  text,
+  children,
+  className,
+  wrapClassName,
+  strong = false,
+  watch,
+}: {
+  text: string;
+  children: React.ReactNode;
+  className: string;
+  wrapClassName: string;
+  strong?: boolean;
+  /** 바뀌면 말줄임을 다시 재요(보이는 글자 · 검색어 — 상자 폭은 그대로인데 글자 폭만 바뀌는 경우) */
+  watch: readonly unknown[];
+}) {
+  const [textEl, setTextEl] = useState<HTMLElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxWidth: number } | null>(null);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const tipId = useId();
+  const shown = pos !== null && truncated;
+  const watchKey = JSON.stringify(watch);
+
+  // 상자 폭이 바뀌면(화면 회전 · 표 칸 폭) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
+  // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴 · 글자 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
+  // 말줄임이 풀리면 열린 말풍선도 닫아요 — 다시 잘려도 저절로 열리지 않게.
+  useEffect(() => {
+    if (!textEl) return;
+    let alive = true;
+    const measure = () => {
+      if (!alive) return;
+      // 1px 보다 덜 넘쳐도 「…」가 그려져요 — 소수점 폭으로 재요(UG-450 기획 17003)
+      const cut = isTextTruncated(textEl);
+      setTruncated(cut);
+      if (!cut) setPos(null);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(textEl);
+    document.fonts?.ready.then(measure).catch(() => {});
+    return () => {
+      alive = false;
+      ro.disconnect();
+    };
+  }, [textEl, watchKey]);
+
+  useEffect(() => {
+    if (!shown) return;
+    const close = () => setPos(null);
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    // 화면 · 표가 밀리면 말풍선이 글자에서 떨어져 보여요 — 닫아요
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("popstate", close);
+    window.addEventListener("blur", close);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("popstate", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [shown]);
+
+  /** 글자 바로 아래(화면 아래 끝이면 위)에 띄워요 — 폭은 감싼 상자 폭(좁으면 240)까지, 화면 밖으로 나가지 않게 */
+  function toggle() {
+    if (pos) return setPos(null);
+    const r = wrapRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const margin = 8;
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - margin - 240));
+    const maxWidth = Math.max(Math.min(Math.max(r.width, 240), window.innerWidth - left - margin), 120);
+    // 말풍선 높이는 대개 한두 줄(30~48) — 아래 자리가 모자라면 위로
+    setPos(window.innerHeight - r.bottom < 72 ? { left, bottom: window.innerHeight - r.top + 4, maxWidth } : { left, top: r.bottom + 4, maxWidth });
+  }
+
+  const Tag = strong ? "strong" : "span";
+  const inner = (
+    <Tag ref={setTextEl} className={className}>
+      {children}
+    </Tag>
+  );
+  return (
+    <span className={`tap-clip ${wrapClassName}`} ref={wrapRef}>
+      {truncated ? (
+        <button
+          type="button"
+          className="tap-clip-button"
+          // 마우스로는 올리면 전체 글자(UG-450 기획 17007) — 눌러도 말풍선이 떠요
+          title={text}
+          aria-describedby={shown ? tipId : undefined}
+          onClick={toggle}
+          // Tab 으로 다른 곳에 가면 닫아요(반박 리뷰)
+          onBlur={(e) => {
+            if (!wrapRef.current?.contains(e.relatedTarget as Node | null)) setPos(null);
+          }}
+        >
+          {inner}
+        </button>
+      ) : (
+        inner
+      )}
+      {shown && (
+        <span role="tooltip" id={tipId} className="tap-tip" style={{ left: pos.left, top: pos.top, bottom: pos.bottom, maxWidth: pos.maxWidth }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
  * PC 표의 고객 칸(UG-450 기획 17007) — 위 회사명(13 · 본문색), 아래 고객 이메일 + 「 · 영문」(13 · 회색).
- * 회사명 · 이메일은 따로 말줄임(마우스를 올리면 전체). 이메일이 길어도 이메일만 줄고 「 · 영문」은 늘 보여요.
+ * 회사명 · 이메일은 따로 말줄임 — 마우스를 올리거나(title) 눌러서(말풍선 — 아이패드, 기획 17020) 전체를 봐요(TapClip).
+ * 이메일이 길어도 이메일만 줄고 「 · 영문」은 늘 보여요.
  * 하나만 남았으면 그 한 줄, 둘 다 비었으면 발급 취소 · 해지됨은 「삭제됨」(13 · 회색), 그 밖은 「—」.
  * language 가 없으면(「작성 중」 명함에서 고르지 않음) 언어를 붙이지 않아요.
  */
@@ -253,10 +381,16 @@ function CustomerCell({
   if (!company && !email) return gone ? <span className="gone-company">삭제됨</span> : <span className="dash">—</span>;
   return (
     <span className="customer">
-      {company && <ClipText className="customer-company" text={company} query={query} />}
+      {company && (
+        <TapClip text={company} className="customer-company" wrapClassName="customer-line" watch={[company, query]}>
+          <Highlight text={company} query={query} />
+        </TapClip>
+      )}
       {email && (
         <span className="customer-email">
-          <ClipText className="customer-email-addr" text={email} query={query} />
+          <TapClip text={email} className="customer-email-addr" wrapClassName="customer-email-clip" watch={[email, query]}>
+            <Highlight text={email} query={query} />
+          </TapClip>
           {language && <span className="customer-email-lang">{` · ${LANGUAGE_TAG[language]}`}</span>}
         </span>
       )}
@@ -272,84 +406,19 @@ function CompanyCell({ account, query }: { account: Account; query: string }) {
 
 /**
  * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 — 회사명(또는 「삭제됨」)이 카드 폭을 다 써요(UG-450 기획 16995).
- * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(휴대폰은 마우스를 올릴 수 없어 title 이 보이지 않아요).
- * 말줄임되지 않은 이름은 그냥 글자 — 누를 것이 없어요. 바깥을 누르거나 Esc 면 닫혀요.
+ * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(TapClip — PC 표의 회사명 · 이메일과 같은 말풍선).
  */
 function GoneCardCompany({ account, query }: { account: Account; query: string }) {
-  const [textEl, setTextEl] = useState<HTMLElement | null>(null);
-  const [truncated, setTruncated] = useState(false);
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const tipId = useId();
-  const shown = open && truncated;
-
-  // 카드 폭이 바뀌면(화면 회전 등) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
-  // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴로 바뀜 · 회사명 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
-  // 말줄임이 풀리면 열린 말풍선도 닫아요 — 다시 잘려도 저절로 열리지 않게.
-  useEffect(() => {
-    if (!textEl) return;
-    let alive = true;
-    const measure = () => {
-      if (!alive) return;
-      // 1px 보다 덜 넘쳐도 「…」가 그려져요 — 소수점 폭으로 재요(UG-450 기획 17003)
-      const cut = isTextTruncated(textEl);
-      setTruncated(cut);
-      if (!cut) setOpen(false);
-    };
-    const ro = new ResizeObserver(measure);
-    ro.observe(textEl);
-    document.fonts?.ready.then(measure).catch(() => {});
-    return () => {
-      alive = false;
-      ro.disconnect();
-    };
-  }, [textEl, account.company, query]);
-
-  useEffect(() => {
-    if (!shown) return;
-    const onDown = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [shown]);
-
-  const text = (
-    <strong ref={setTextEl} className="card-company card-company-line">
-      <CompanyCell account={account} query={query} />
-    </strong>
-  );
   return (
-    <div className="card-company-full" ref={wrapRef}>
-      {truncated ? (
-        <button
-          type="button"
-          className="card-company-tap"
-          aria-describedby={shown ? tipId : undefined}
-          onClick={() => setOpen((v) => !v)}
-          // Tab 으로 다른 곳에 가면 닫아요(반박 리뷰)
-          onBlur={(e) => {
-            if (!wrapRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
-          }}
-        >
-          {text}
-        </button>
-      ) : (
-        text
-      )}
-      {shown && (
-        <span role="tooltip" id={tipId} className="card-company-tip">
-          {account.company || "삭제됨"}
-        </span>
-      )}
-    </div>
+    <TapClip
+      text={account.company || "삭제됨"}
+      className="card-company card-company-line"
+      wrapClassName="card-company-full"
+      strong
+      watch={[account.company, query]}
+    >
+      <CompanyCell account={account} query={query} />
+    </TapClip>
   );
 }
 
@@ -1128,7 +1197,7 @@ export default function AccountsPage() {
               <span role="cell">{d.createdBy ? handle(d.createdBy) : <span className="dash">—</span>}</span>
               <span role="cell">{d.createdAt ? fmtFull(d.createdAt) : <span className="dash">—</span>}</span>
               <span role="cell">
-                {/* 계정 줄과 같은 모양: 자주 쓰는 「이어서 만들기」만 보이고 「지우기」는 ⋮ 안에(휴대폰 카드와 같게) */}
+                {/* 계정 줄과 같은 모양: 자주 쓰는 「이어서 만들기」만 보이고 「지우기」는 ⋮ 안에(휴대폰 카드와 같게) — ⋮ 는 칸 오른쪽 끝(기획 17020) */}
                 <span className="row-actions">
                   <button
                     type="button"
@@ -1169,40 +1238,26 @@ export default function AccountsPage() {
                 <span role="cell">{a.createdBy ? handle(a.createdBy) : <span className="dash">—</span>}</span>
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
-                  {/* 해지 중(UG-443 기획 16908)이면 동작을 꺼 둬요 — 꺼진 버튼은 마우스를 못 받아 툴팁은 감싼 칸에 */}
-                  <span
-                    className={`row-actions${a.status === "closing" ? " is-closing" : ""}`}
-                    title={a.status === "closing" ? CLOSING_TIP : undefined}
-                  >
-                    {/* 「메일 재발송」 + ⋮(발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로 */}
-                    {a.status === "pending" ? (
-                      <>
-                        {canResend(a) && (
-                          <button type="button" className="btn btn-outline btn-xs" onClick={() => setResendTarget(a)}>
-                            메일 재발송
-                          </button>
-                        )}
-                        <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} resetOn={listStamp} />
-                      </>
-                    ) : a.status === "closing" ? (
-                      // 해지가 끝나거나 철회될 때까지 발급 쪽 동작을 꺼 둬요 — 원래 로그인 전이던 줄만 버튼이 있었어요
-                      a.statusBeforeClosing === "pending" ? (
-                        <>
-                          {a.resendBlocked || a.mailFailureReason === "address" ? null : (
-                            <button type="button" className="btn btn-outline btn-xs" disabled aria-label={`메일 재발송 — ${CLOSING_TIP}`}>
-                              메일 재발송
-                            </button>
-                          )}
-                          <RowMenu items={[]} disabled disabledLabel={`더보기 — ${CLOSING_TIP}`} resetOn={listStamp} />
-                        </>
-                      ) : (
-                        <span className="dash">—</span>
-                      )
-                    ) : (
-                      // 버튼이 없는 줄(사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
-                      <span className="dash">—</span>
-                    )}
-                  </span>
+                  {a.status === "pending" ? (
+                    // 「메일 재발송」 + ⋮(발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로.
+                    // ⋮ 는 칸 오른쪽 끝 같은 자리, 글자 버튼은 그 왼쪽(기획 17020) — 버튼이 없는 줄(주소 오류 · 막힘)도 ⋮ 는 같은 자리
+                    <span className="row-actions">
+                      {canResend(a) && (
+                        <button type="button" className="btn btn-outline btn-xs" onClick={() => setResendTarget(a)}>
+                          메일 재발송
+                        </button>
+                      )}
+                      <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} resetOn={listStamp} />
+                    </span>
+                  ) : a.status === "closing" ? (
+                    // 해지 중(UG-443 기획 16908) — 원래 로그인 전이던 줄도 꺼진 버튼 없이 「—」(기획 17020). 마우스를 올리면 까닭
+                    <span className="dash" title={CLOSING_TIP}>
+                      —
+                    </span>
+                  ) : (
+                    // 버튼이 없는 줄(사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
+                    <span className="dash">—</span>
+                  )}
                 </span>
               </div>
             ))
@@ -1556,12 +1611,10 @@ type RowMenuItem = { label: string; onSelect: () => void; danger?: boolean };
 function RowMenu({
   items,
   disabled = false,
-  disabledLabel,
   resetOn,
 }: {
   items: RowMenuItem[];
   disabled?: boolean;
-  disabledLabel?: string;
   /** 목록이 바뀌면(새로 불러옴 · 줄이 빠지거나 옮겨짐) 닫아요 — 메뉴가 다른 줄 옆에 떠 있지 않게(반박 리뷰 F8) */
   resetOn: readonly unknown[];
 }) {
@@ -1653,7 +1706,7 @@ function RowMenu({
         ref={buttonRef}
         type="button"
         className="row-more-button"
-        aria-label={disabled && disabledLabel ? disabledLabel : "더보기"}
+        aria-label="더보기"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -2946,7 +2999,7 @@ function CreateDialog({
                   이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}).
                 </p>
               ) : pending ? (
-                // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「안내 메일 다시 보내기」
+                // 오류가 아니라 할 일이 바뀐 경우: 회색 안내 + 실행 버튼이 「메일 재발송」
                 <p className="help">
                   이미 만든 계정입니다({handle(pending.createdBy)} · {fmtMonthDay(pending.createdAt)}). 로그인 전이라 다시 보낼 수 있습니다.
                 </p>
@@ -3105,7 +3158,8 @@ function CreateDialog({
               취소
             </button>
             <button type="submit" className="btn btn-dark" disabled={inUse || closing || sending || scanning} aria-busy={sending || checking || undefined}>
-              {sending ? "보내는 중…" : pending ? "안내 메일 다시 보내기" : "계정 만들고 메일 보내기"}
+              {/* 첫 로그인 전 이메일이면 목록 줄과 같은 이름 「메일 재발송」(UG-450 기획 17020) — 확인 창 제목은 그대로 */}
+              {sending ? "보내는 중…" : pending ? "메일 재발송" : "계정 만들고 메일 보내기"}
             </button>
           </div>
         )}
