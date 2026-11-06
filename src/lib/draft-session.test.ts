@@ -21,6 +21,7 @@ import {
   type DraftMemory,
   type LostSaves,
 } from "./draft-session.ts";
+import { chipEmailAddresses, isSuspectChip, isUnconfirmedSuspect, scanCard } from "./card-scan.ts";
 
 const JPEG = "data:image/jpeg;base64,";
 const ME = "sales.kim@example.com";
@@ -252,4 +253,32 @@ test("UG-451 최종 리뷰 R2 · 잘렸을 수 있는 메일 칩이 있으면 �
   assert.equal(gate("", null, { [TAIL]: "in_use" }), "existing");
   // 닫을 때는 기다림을 전처럼 남김으로
   assert.equal(gateAtClose(gate("", null, { [TAIL]: "new" })), "open");
+});
+
+test("UG-451 17030 · 「명함과 같은 주소예요」로 확인한 의심 값은 의심이 아닌 주소처럼 「새 계정」이면 남겨요", () => {
+  const { chips } = scanCard("Sales · kim@acme.com");
+  // 이 창에서 따로 확인한 주소는 없어요 — 칸 주소의 확인 결과(fieldStatus)만으로 정해지게
+  const known: Record<string, "new" | "in_use"> = {};
+  const gate = (email: string, fieldStatus: "new" | "in_use" | null, confirmed: string | null) =>
+    draftSaveGate({
+      email,
+      checkable: true,
+      fieldStatus,
+      chipEmails: chipEmailAddresses(chips),
+      known,
+      suspectChips: chips.some(isSuspectChip),
+      fieldSuspect: isUnconfirmedSuspect(email, chips, confirmed),
+    });
+  // 확인 전: 「새 계정」이어도 기다려요
+  assert.equal(gate("kim@acme.com", "new", null), "wait");
+  // 확인 후: 「새 계정」으로 확인되면 남겨요(대소문자 · 앞뒤 공백 없이 같은 값), 확인 전이면 기다려요
+  assert.equal(gate("kim@acme.com", "new", "kim@acme.com"), "open");
+  assert.equal(gate("Kim@acme.com", "new", "kim@ACME.com "), "open");
+  assert.equal(gate("kim@acme.com", null, "kim@acme.com"), "wait");
+  // 이미 있는 계정이면 전처럼 existing(남기지 않고 이 창의 자동 저장 명함은 지워요)
+  assert.equal(gate("kim@acme.com", "in_use", "kim@acme.com"), "existing");
+  // 다른 값을 확인했으면(칸이 바뀜) 확인이 아니에요
+  assert.equal(gate("kim@acme.com", "new", "lee@acme.com"), "wait");
+  assert.equal(isUnconfirmedSuspect("kim@acme.com", chips, "lee@acme.com"), true);
+  assert.equal(isUnconfirmedSuspect("lee@acme.com", chips, null), false);
 });

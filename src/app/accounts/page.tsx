@@ -70,7 +70,7 @@ import {
   isEmailLikeChip,
   isFilled,
   isSuspectChip,
-  isSuspectValue,
+  isUnconfirmedSuspect,
   scanCard,
   tapChip,
   unlink,
@@ -2174,12 +2174,12 @@ function CreateDialog({
   // 「작성 중」으로 남겨도 되는지(UG-451 기획 17022 · 반박 리뷰 F3 · F4, draftSaveGate) — 칸 이메일이 「새 계정」으로 확인됐거나,
   // 칸이 비었거나 형식이 아니면 명함 칩의 메일 주소가 모두 새 주소일 때만. 확인 전이면 wait, 있는 계정이면 existing
   // 칸 값이 잘렸을 수 있는 메일 칩의 값 · 그 칩에서 뽑은 잘린 주소와 같음 — 경고하고 보내기를 막아요(반박 리뷰 F2 · 최종 리뷰 R3, 고치면 풀려요)
-  const suspectValue = !!scan && isSuspectValue(trimmed, scan.chips);
   // 직원이 「명함과 같은 주소예요」로 확인한 칸 값(UG-451 기획 17030) — 맞는 주소인데 의심으로 막히는 경우(「Sales · kim@acme.com」 등)를 풀어요.
   // 확인한 그 값 그대로일 때만 풀리고, 칸이 조금이라도 바뀌거나(changeEmail) 명함을 다시 찍으면 지워요. 서버 · 「작성 중」에는 남기지 않아요(이어서 열면 다시 경고)
   const [confirmedEmail, setConfirmedEmail] = useState<string | null>(null);
-  // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때
-  const suspectBlocked = suspectValue && confirmedEmail !== email;
+  // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때.
+  // 「작성 중」 저장 판단도 같아요 — 확인한 값은 의심이 아닌 주소처럼 「새 계정」으로 확인되면 남겨요(기획 17030 결정)
+  const suspectBlocked = !!scan && isUnconfirmedSuspect(trimmed, scan.chips, confirmedEmail);
   // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 옮겨요(confirmSuspect)
   const focusAfterConfirm = useRef(false);
   useEffect(() => {
@@ -2195,7 +2195,7 @@ function CreateDialog({
     chipEmails,
     known,
     suspectChips: !!scan && scan.chips.some(isSuspectChip),
-    fieldSuspect: suspectValue,
+    fieldSuspect: suspectBlocked,
   });
 
   /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
@@ -2355,7 +2355,7 @@ function CreateDialog({
           chipEmails,
           known: { ...known, ...chips },
           suspectChips: !!scan && scan.chips.some(isSuspectChip),
-          fieldSuspect: suspectValue,
+          fieldSuspect: suspectBlocked,
         });
       }
       if (gateAtClose(gate) === "existing") {

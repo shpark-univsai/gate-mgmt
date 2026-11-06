@@ -730,6 +730,16 @@ export function isSuspectValue(value: string, chips: readonly Chip[]): boolean {
   });
 }
 
+/**
+ * 칸 값이 의심 값이고(isSuspectValue) 직원이 「명함과 같은 주소예요」로 확인하지 않았는지(UG-451 기획 17030).
+ * confirmed = 직원이 확인한 칸 값(없으면 null) — 앞뒤 공백을 떼고 대소문자 없이 같으면 확인한 것으로 봐요.
+ * 화면의 경고 · 보내기 막음과 「작성 중」 저장 판단(draftSaveGate 의 fieldSuspect)이 같이 써요.
+ */
+export function isUnconfirmedSuspect(value: string, chips: readonly Chip[], confirmed: string | null): boolean {
+  if (!isSuspectValue(value, chips)) return false;
+  return confirmed === null || confirmed.trim().toLowerCase() !== value.trim().toLowerCase();
+}
+
 /** 명함 칩의 메일 주소들(뽑은 주소, 겹치지 않게) — 잘렸을 수 있는 칩도 뽑은 꼬리 주소로(「daeun · jung@x.co.kr」 → jung@x.co.kr) */
 export function chipEmailAddresses(chips: readonly Chip[]): string[] {
   const out = new Set<string>();
