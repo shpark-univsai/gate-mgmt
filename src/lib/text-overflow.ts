@@ -2,7 +2,9 @@
 //
 // scrollWidth · clientWidth 는 정수로 반올림돼요 — 글자가 1px 보다 덜 넘치면(예: 글자 358.25px · 상자 358px)
 // 브라우저는 「…」를 그리는데 scrollWidth(358) > clientWidth(358) 는 거짓이라 말줄임을 놓쳐요.
-// 그래서 소수점까지 재는 getBoundingClientRect 로 글자 본래 폭(Range)과 상자 안쪽 폭을 견줘요. 정수 비교는 보조로 함께 봐요.
+// 그래서 소수점까지 재는 getBoundingClientRect 로 글자 본래 폭과 상자 안쪽 폭을 견줘요. 정수 비교는 보조로 함께 봐요.
+// 글자 본래 폭은 보이지 않는 복제본(말줄임 · 폭 제한 없음)으로 재요 — 말줄임된 글자를 Range 로 재면
+// 엔진에 따라(WebKit · 아이폰 Safari) 잘린 자리까지만 잡힐 수 있어 엔진과 상관없는 방법을 써요(반박 리뷰).
 
 /** 이보다 덜 넘치면 반올림 오차로 봐요(px) — 브라우저가 소수 폭을 1/64px 단위로 다뤄 그보다 작게 잡아요. */
 const OVERFLOW_EPSILON = 0.01;
@@ -10,24 +12,49 @@ const OVERFLOW_EPSILON = 0.01;
 /** 글자 폭이 상자 안쪽 폭을 넘는지(소수점 폭 그대로). */
 export const exceedsBox = (textWidth: number, boxWidth: number) => textWidth - boxWidth > OVERFLOW_EPSILON;
 
+/** 복제본을 글자 본래 폭으로 펴는 스타일 — 같은 클래스(글꼴 · 자간)는 그대로 두고, 폭 제한 · 말줄임 · 여백 · 테두리만 풀어요. */
+const NATURAL_STYLE: Partial<CSSStyleDeclaration> = {
+  position: "absolute",
+  top: "0",
+  left: "0",
+  visibility: "hidden",
+  pointerEvents: "none",
+  whiteSpace: "nowrap",
+  width: "max-content",
+  minWidth: "0",
+  maxWidth: "none",
+  overflow: "visible",
+  textOverflow: "clip",
+  padding: "0",
+  border: "0",
+  margin: "0",
+};
+
 /**
  * 한 줄 말줄임(white-space: nowrap · overflow: hidden · text-overflow: ellipsis) 요소의 글자가 잘렸는지.
- * 글자 본래 폭 = 요소 안 글자 전체를 감싼 Range 의 폭(말줄임 · overflow 로 가려도 줄 배치 폭은 그대로예요),
+ * 글자 본래 폭 = 요소 바로 옆(같은 부모 — 물려받는 글꼴이 같아요)에 잠깐 붙인 보이지 않는 복제본의 폭(재고 바로 떼요),
  * 상자 안쪽 폭 = 요소 폭 - 좌우 안쪽 여백 · 테두리.
  */
 export function isTextTruncated(el: HTMLElement): boolean {
   if (el.scrollWidth > el.clientWidth) return true;
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  const textWidth = range.getBoundingClientRect().width;
-  range.detach();
-  const style = getComputedStyle(el);
-  const px = (v: string) => parseFloat(v) || 0;
-  const inner =
-    el.getBoundingClientRect().width -
-    px(style.paddingLeft) -
-    px(style.paddingRight) -
-    px(style.borderLeftWidth) -
-    px(style.borderRightWidth);
-  return exceedsBox(textWidth, inner);
+  if (!el.parentNode) return false;
+  const clone = el.cloneNode(true) as HTMLElement;
+  clone.removeAttribute("id");
+  clone.setAttribute("aria-hidden", "true");
+  Object.assign(clone.style, NATURAL_STYLE);
+  el.after(clone);
+  try {
+    const textWidth = clone.getBoundingClientRect().width;
+    const style = getComputedStyle(el);
+    const px = (v: string) => parseFloat(v) || 0;
+    const inner =
+      el.getBoundingClientRect().width -
+      px(style.paddingLeft) -
+      px(style.paddingRight) -
+      px(style.borderLeftWidth) -
+      px(style.borderRightWidth);
+    return exceedsBox(textWidth, inner);
+  } finally {
+    clone.remove();
+  }
 }
