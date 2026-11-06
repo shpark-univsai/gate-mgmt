@@ -247,8 +247,14 @@ function ClipText({ text, query, className }: { text: string; query: string; cla
  * 말풍선은 화면에 고정(position: fixed)해 표의 옆 스크롤 상자에 잘리지 않게 하고, 바깥 누르기 · Esc · 스크롤 · 창 크기 바뀜 · 화면 이동(뒤로 가기) ·
  * 다른 곳으로 초점이 가면 닫혀요. 목록을 새로 받으면(resetOn — RowMenu 와 같게) 닫고, 줄이 사라지면 말풍선도 함께 없어져요(이 컴포넌트 안에 그려요).
  * 키보드: Tab 으로 가서 Enter · Space(버튼).
+ * 말풍선이 열린 채 다른 말줄임 글자를 누르면 한 번에 그 글자의 말풍선으로 바뀌어요(UG-450 기획 17028 — 전에는 닫히기만 해 두 번 눌러야 했어요).
+ * 말풍선은 보기만 하는 것이라 누름을 받지 않고(pointer-events: none) 그 아래 글자가 받아요 — 회사명 말풍선이 아래 이메일 줄을 덮어도 이메일을 누를 수 있어요.
+ * 다른 말줄임 글자를 누를 때는 바깥 누르기로 닫지 않고, 그 글자가 열리면서 앞 말풍선을 닫아요(openTapClip) — 누르는 도중에 화면이 바뀌지 않게.
  * text = 말풍선 · title 의 전체 글자, children = 보이는 글자(검색 강조 등), className = 말줄임 글자의 클래스, wrapClassName = 감싸는 상자의 클래스
  */
+/** 지금 열린 말풍선(한 번에 하나) — 다른 TapClip 이 열리면 이것을 닫아요(UG-450 기획 17028) */
+let openTapClip: { id: string; close: () => void } | null = null;
+
 function TapClip({
   text,
   children,
@@ -306,8 +312,14 @@ function TapClip({
   useEffect(() => {
     if (!shown) return;
     const close = () => setPos(null);
+    openTapClip = { id: tipId, close };
     const onDown = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) close();
+      const target = e.target as Node | null;
+      if (wrapRef.current?.contains(target)) return;
+      // 다른 말줄임 글자를 누름 — 여기서 닫지 않아요. 그 글자의 click 이 열리면서 이 말풍선을 닫아요(toggle → openTapClip).
+      // 누르기 시작(pointerdown)에 화면을 바꾸면 아이패드가 이어지는 click 을 버릴 수 있어요(기획 17028 — 두 번 눌러야 했어요)
+      if (target instanceof Element && target.closest(".tap-clip-button")) return;
+      close();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
@@ -320,6 +332,7 @@ function TapClip({
     window.addEventListener("popstate", close);
     window.addEventListener("blur", close);
     return () => {
+      if (openTapClip?.id === tipId) openTapClip = null;
       document.removeEventListener("pointerdown", onDown);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", close, true);
@@ -327,13 +340,15 @@ function TapClip({
       window.removeEventListener("popstate", close);
       window.removeEventListener("blur", close);
     };
-  }, [shown]);
+  }, [shown, tipId]);
 
   /** 글자 바로 아래(화면 아래 끝이면 위)에 띄워요 — 폭은 감싼 상자 폭(좁으면 240)까지, 화면 밖으로 나가지 않게 */
   function toggle() {
     if (pos) return setPos(null);
     const r = wrapRef.current?.getBoundingClientRect();
     if (!r) return;
+    // 다른 말풍선이 열려 있으면 닫고 이것을 열어요 — 한 번 눌러 바로 바뀌어요(기획 17028)
+    if (openTapClip && openTapClip.id !== tipId) openTapClip.close();
     const margin = 8;
     const left = Math.max(margin, Math.min(r.left, window.innerWidth - margin - 240));
     const maxWidth = Math.max(Math.min(Math.max(r.width, 240), window.innerWidth - left - margin), 120);
