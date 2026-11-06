@@ -268,6 +268,33 @@ const offersCancel = (reason: MailFailureReason | "blocked") => reason === "addr
 // 이메일 주소 오류(받는 도메인이 메일을 못 받음)는 다시 보내도 또 실패해요 — 처음부터 발급 취소만(올바른 주소로 새로 만들기)
 const canResend = (a: Account) => a.status === "pending" && !a.resendBlocked && a.mailFailureReason !== "address";
 
+/**
+ * 새 명함의 저장을 다시 시도하기 전에, 앞 저장(응답만 잃음)이 서버에 남았는지 찾아요 — 「작성 중」 목록에서
+ * 네 칸 값 · 사진 유무가 같고 최근(10분 안)에 생긴 명함(가장 최근 것). 없거나 목록을 받지 못하면 null(새로 남겨요).
+ * 목록은 검색어 없이 최근 100장 — 검색어가 어느 칸을 보는지에 기대지 않아요.
+ */
+async function findLostDraft(input: CardDraftInput): Promise<string | null> {
+  try {
+    const { items } = await listCardDrafts();
+    const same = (a: string | null | undefined, b: string | undefined) => (a ?? "") === (b ?? "");
+    const since = Date.now() - 10 * 60_000;
+    const hit = items
+      .filter(
+        (d) =>
+          same(d.company, input.company) &&
+          same(d.name, input.name) &&
+          same(d.email, input.email) &&
+          same(d.phone, input.phone) &&
+          d.hasPhoto === !!input.photo &&
+          Date.parse(d.createdAt) >= since,
+      )
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+    return hit?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default function AccountsPage() {
   const router = useRouter();
   const staff = useStaff();
@@ -474,7 +501,7 @@ export default function AccountsPage() {
    * 이어서 만든 명함이 그사이 없어졌으면(MGMT-109 — 계정을 만들었거나 다른 직원이 지움) 새로 남기지 않고 목록만 새로 고쳐요.
    */
   const keepDraft = useCallback(
-    (keep: DraftKeep): Promise<boolean> => {
+    (keep: DraftKeep, retry: boolean): Promise<boolean> => {
       const run = async (): Promise<boolean> => {
         if (keep.remove) {
           // 칸 · 사진을 다 비우고 닫음 — 남길 것이 없어 지워요
@@ -483,14 +510,22 @@ export default function AccountsPage() {
           reload();
           return true;
         }
-        let res = await saveCardDraft(keep.id, keep.input);
+        // 새 명함(번호 없음)을 다시 시도할 때: 앞 저장이 서버에는 남고 응답만 잃었을 수 있어요 — 같은 값의 최근 명함이 있으면 그 명함에 이어 써요
+        let id = keep.id;
+        if (!id && retry) id = await findLostDraft(keep.input);
+        let res = await saveCardDraft(id, keep.input);
+        // 찾은 명함이 그사이 없어졌으면(계정을 만들었거나 지움) 새로 남겨요
+        if (!keep.id && id && !res.ok && res.reason === "not_found") {
+          id = null;
+          res = await saveCardDraft(null, keep.input);
+        }
         // 칸 값을 서버가 받지 않음(PJ-101) — 칸은 상한 · 제어 문자를 이미 정리해 보냈어요. 그래도면 네 칸 없이 사진 · 칩만 한 번 더
         let kept: string | null = null;
         if (!res.ok && res.reason === "invalid") {
           const { language, chips, photo, keepPhoto } = keep.input;
           const hasPhoto = !!photo || !!keepPhoto;
           if (hasPhoto || chips) {
-            res = await saveCardDraft(keep.id, {
+            res = await saveCardDraft(id, {
               ...(language ? { language } : {}),
               ...(chips ? { chips } : {}),
               ...(photo ? { photo } : keepPhoto ? { keepPhoto } : {}),
@@ -1338,6 +1373,8 @@ function MailFailureResult({
   onClose,
   onCancelled,
   onResent,
+  onMailFailed,
+  onBusyChange,
 }: {
   account: Account;
   reason: MailFailureReason | "blocked";
@@ -1345,6 +1382,10 @@ function MailFailureResult({
   onCancelled: () => void;
   /** 다시 보내기가 성공함 — 목록의 다시 보내기 성공과 같게 */
   onResent: () => void;
+  /** 다시 보냈지만 또 메일이 가지 않음 — 목록만 새로 고쳐요(창은 그대로) */
+  onMailFailed: () => void;
+  /** 보내는 중 · 취소하는 중 — 감싼 창이 Esc · 바깥 클릭으로 닫히지 않게(closable) */
+  onBusyChange: (busy: boolean) => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const { cancelling, cancelError, cancelNow } = useCancelNow(onCancelled);
@@ -1360,11 +1401,17 @@ function MailFailureResult({
     const res = await resendGuide(account.id, account.language);
     setResending(false);
     if (res.ok) return onResent();
-    if (isMailFailure(res.reason)) return setReason(res.reason);
+    if (isMailFailure(res.reason)) {
+      setReason(res.reason);
+      return onMailFailed();
+    }
     setResendError(resendErrorText(res.reason));
     if (res.reason === "in_use" || res.reason === "not_found" || res.reason === "closing") setResendDone(true);
   }
   const busy = cancelling || resending;
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
   // 입력 칸 · 보내기 버튼이 사라지므로 초점을 「닫기」로 옮겨요.
   useEffect(() => {
     closeRef.current?.focus();
@@ -1461,8 +1508,11 @@ function CreateDialog({
   draft: CardDraftDetail | null;
   /** 이어서 만든 명함을 다 씀(이미 만든 계정에 안내 메일을 다시 보냄) — 목록이 뒤에서 지워요 */
   onDraftUsed: (id: string) => void;
-  /** 닫을 때 「작성 중」으로 남겨요(목록이 저장) — false 면 남기지 못해 창이 다시 시도 · 그래도 닫기를 보여 줘요 */
-  onKeepDraft: (keep: DraftKeep) => Promise<boolean>;
+  /**
+   * 닫을 때 「작성 중」으로 남겨요(목록이 저장) — false 면 남기지 못해 창이 다시 시도 · 그래도 닫기를 보여 줘요.
+   * retry = 앞 저장이 실패한 뒤 [다시 시도] · 다시 닫기
+   */
+  onKeepDraft: (keep: DraftKeep, retry: boolean) => Promise<boolean>;
   /** 창을 닫아요(남길 것은 이미 남겼어요) */
   onClose: () => void;
   onCreated: (a: Account) => void;
@@ -1505,6 +1555,8 @@ function CreateDialog({
   // 첫 로그인 전 이메일이라 메일 언어를 자동으로 바꿨으면, 그 전 언어(다른 이메일로 고치면 되돌려요)
   const langBeforePending = useRef<MailLanguage | null>(null);
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
+  // 실패 결과에서 다시 보내는 중 · 취소하는 중 — 창이 Esc · 바깥 클릭으로 닫히지 않게
+  const [resultBusy, setResultBusy] = useState(false);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
   // 명함 읽기가 끝났을 때 고치는 모드인지 보려고(읽는 동안 바뀔 수 있어요)
@@ -1586,13 +1638,18 @@ function CreateDialog({
   // 닫을 때 「작성 중」 저장 — 끝날 때까지 창을 열어 두고, 연결 문제로 실패하면 [다시 시도] [그래도 닫기](UG-451 기획 16991)
   const [keepingDraft, setKeepingDraft] = useState(false);
   const [keepFailed, setKeepFailed] = useState(false);
+  // 잠금은 ref 로 — Esc 와 클릭이 같은 틈에 겹쳐도 저장을 한 번만 해요(상태는 다음 렌더에야 바뀌어요)
+  const keepLock = useRef(false);
   async function close() {
-    if (keepingDraft) return;
+    if (keepLock.current) return;
     const keep = draftToKeep();
     if (!keep) return onClose();
+    keepLock.current = true;
     // 다시 시도하는 동안에는 실패 안내 · 버튼(「저장하는 중…」)을 그대로 둬요
     setKeepingDraft(true);
-    const ok = await onKeepDraft(keep);
+    // retry = 앞 저장이 실패한 뒤 — 새 명함이면 목록이 앞 저장이 실은 남았는지 보고 이어 써요(중복 「작성 중」 방지)
+    const ok = await onKeepDraft(keep, keepFailed);
+    keepLock.current = false;
     setKeepingDraft(false);
     if (ok) return onClose();
     setKeepFailed(true);
@@ -1721,7 +1778,8 @@ function CreateDialog({
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     // 명함을 읽는 동안에는 보내지 않아요 — 읽은 값이 보낸 뒤에 칸을 바꾸지 않게
-    if (busy.current || scanning) return;
+    // 「작성 중」 저장을 기다리는 동안에도 보내지 않아요(Enter 포함)
+    if (busy.current || scanning || keepingDraft) return;
     busy.current = true;
     try {
       await submit();
@@ -1993,7 +2051,7 @@ function CreateDialog({
     if (!file) return;
     // 보내는 중이거나 주소를 고치는 중(fix)에 늦게 온 사진은 받지 않아요 — 고치는 동안 보던 사진을 지우거나,
     // 결과 화면 뒤에 사진이 메모리에 남지 않게
-    if (sending || fix || fixRef.current) return;
+    if (sending || fix || fixRef.current || keepingDraft) return;
     // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
@@ -2016,10 +2074,23 @@ function CreateDialog({
     // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교)
     setPhoto(preview);
     const result = text === null ? null : scanCard(text);
-    if (!result || result.chips.length === 0) return setScanFailed(failure ?? "read");
-    // 처음 채우기는 이메일 · 연락처만(회사명 · 이름은 직원이 칩을 눌러 넣어요, 기획 16846) — 회사명 · 이름 칸은 건드리지 않아요
     const now = latestValues.current;
     const replaceable = (field: ScanField) => !now[field].trim() || autoFilled.current[field] === now[field];
+    if (!result || result.chips.length === 0) {
+      // 다시 찍은 명함(B)을 읽지 못함 — 사진은 B 인데 앞 명함(A)이 자동으로 채운 주소 · 번호로 보내지지 않게(UG-451 반박 리뷰)
+      // A 가 채우고 직원이 손대지 않은 칸은 비우고 A 의 칩도 지워요. 직원이 친 · 고친 값 · 칩을 눌러 넣은 값은 그대로예요.
+      for (const field of ["email", "phone"] as const) {
+        if (autoFilled.current[field] === undefined || !replaceable(field)) continue;
+        delete autoFilled.current[field];
+        if (field === "email") changeEmail("", now.company);
+        else putField.phone("");
+      }
+      setScan(null);
+      cursor.current = null;
+      setEmailMissing(false);
+      return setScanFailed(failure ?? "read");
+    }
+    // 처음 채우기는 이메일 · 연락처만(회사명 · 이름은 직원이 칩을 눌러 넣어요, 기획 16846) — 회사명 · 이름 칸은 건드리지 않아요
     const links: ScanLinks = {};
     const fill = (field: "email" | "phone") => {
       if (!replaceable(field)) return false;
@@ -2077,15 +2148,25 @@ function CreateDialog({
 
   if (mailFailure) {
     return (
-      <Dialog title="Gate 계정 만들기" onClose={close}>
-        <MailFailureResult account={mailFailure.account} reason={mailFailure.reason} onClose={close} onCancelled={onCancelled} onResent={onResent} />
+      <Dialog title="Gate 계정 만들기" onClose={close} closable={!resultBusy}>
+        <MailFailureResult
+          account={mailFailure.account}
+          reason={mailFailure.reason}
+          onClose={close}
+          onCancelled={onCancelled}
+          onResent={onResent}
+          onMailFailed={onResendMailFailed}
+          onBusyChange={setResultBusy}
+        />
       </Dialog>
     );
   }
 
   return (
     <Dialog title="Gate 계정 만들기" onClose={close} closable={!sending && !keepingDraft} wide>
-      <form className="dialog-form" onSubmit={onSubmit} noValidate>
+      <form onSubmit={onSubmit} noValidate>
+        {/* 「작성 중」 저장을 기다리는 동안(keepingDraft)은 칸 · 버튼 · 칩 · 사진을 모두 잠가요 — 저장한 값과 화면 값이 달라지지 않게(UG-451 반박 리뷰) */}
+        <fieldset className="dialog-form" disabled={keepingDraft}>
         {/* 찍은 명함 — 읽은 줄(칩)이 있으면 칩 왼쪽(N7), 없거나 주소를 고치는 동안(fix)이면 여기. 누르면 크게 */}
         {photo && (fix || !scan) && <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />}
         {/* 명함 찍어서 채우기(N1~N4) — 주소를 고치는 중(fix)에는 다른 명함을 읽을 일이 없어 숨겨요 */}
@@ -2431,6 +2512,7 @@ function CreateDialog({
         )}
         {/* 아이패드 · 휴대폰은 카메라가 바로 열려요(capture). 폼 끝에 둬요 — 창이 열릴 때 초점이 회사명 칸에 가게(Dialog 는 첫 input 에 초점) */}
         <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onPhoto} />
+        </fieldset>
       </form>
       {viewingPhoto && photo && <CardPhotoViewer src={photo} onClose={() => setViewingPhoto(false)} />}
     </Dialog>
@@ -2585,6 +2667,8 @@ function ResendDialog({
   const [final, setFinal] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [mailFailure, setMailFailure] = useState<MailFailureReason | "blocked" | null>(null);
+  // 실패 결과에서 다시 보내는 중 · 취소하는 중 — 창이 Esc · 바깥 클릭으로 닫히지 않게
+  const [resultBusy, setResultBusy] = useState(false);
 
   useEffect(() => {
     if (final) closeRef.current?.focus();
@@ -2606,8 +2690,16 @@ function ResendDialog({
 
   if (mailFailure) {
     return (
-      <Dialog title="안내 메일 다시 보내기" onClose={onClose}>
-        <MailFailureResult account={account} reason={mailFailure} onClose={onClose} onCancelled={onCancelled} onResent={onResent} />
+      <Dialog title="안내 메일 다시 보내기" onClose={onClose} closable={!resultBusy}>
+        <MailFailureResult
+          account={account}
+          reason={mailFailure}
+          onClose={onClose}
+          onCancelled={onCancelled}
+          onResent={onResent}
+          onMailFailed={onMailFailed}
+          onBusyChange={setResultBusy}
+        />
       </Dialog>
     );
   }

@@ -16,9 +16,10 @@ const PREVIEW_QUALITY = 0.8;
 /**
  * 기다리는 한도. 도구가 일꾼 안에서 실패하면(CSP 가 wasm 을 막는 등) 약속이 끝나지 않아요 — 버튼이 「읽고 있습니다…」에 멈추지 않게 끊어요.
  * 처음 한 번은 전시장 인터넷으로 약 8.5MB 를 받아요. 받는 중(진행 소식이 오는 동안)이면 기다림을 늘려요(UG-451 기획 16991) —
- * 마지막 소식 뒤 LOAD_IDLE_MS 동안 아무 소식이 없거나, 모두 합쳐 LOAD_MAX_MS 가 지나면 끊어요.
+ * 마지막 소식 뒤 LOAD_IDLE_MS(150초) 동안 아무 소식이 없거나, 모두 합쳐 LOAD_MAX_MS 가 지나면 끊어요.
  */
-const LOAD_IDLE_MS = 90_000;
+// tesseract 는 파일 단위로만 소식을 줘요 — 큰 파일(언어 데이터)을 받는 동안에는 소식이 없어 넉넉히(UG-451 반박 리뷰)
+const LOAD_IDLE_MS = 150_000;
 const LOAD_MAX_MS = 300_000;
 const READ_TIMEOUT_MS = 60_000;
 
