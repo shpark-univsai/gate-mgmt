@@ -509,3 +509,35 @@ test("UG-451 17005 재리뷰 · 메일 라벨 끝은 대소문자 · 전각 기�
     assert.equal(card(line).values.email, "", line);
   }
 });
+
+test("UG-451 17005 최종 확인 · co · ne · or 뒤에 띄어 쓴 1~2글자 토막이 오면 비워요", () => {
+  for (const line of [
+    "kim@x.co rn",
+    "kim@x.co rm",
+    "kim@x.co om",
+    "kim@x.ne tt",
+    "kim@x.or g",
+    "kim@x.co rn 010-1234-5678",
+    "kim@x.co · rn",
+    "kim@x.co / om",
+    "kim@x.co|rn",
+    "kim@x.co (rn)",
+  ]) {
+    assert.equal(card(line).values.email, "", line);
+  }
+  // 다음 줄이 토막 하나뿐 — co · ne · or 로 끝난 주소만
+  for (const lines of [["kim@x.co", "rn"], ["kim@x.co", "m"], ["kim@x.ne", "t."], ["kim@x.or", "(g)"]]) {
+    assert.equal(card(...lines).values.email, "", lines.join(" ↵ "));
+  }
+  for (const lines of [["kim@x.com", "rn"], ["kim@x.co.kr", "M"], ["kim@x.co", "Tel 02-123-4567"], ["kim@x.co", "www.x.co"]]) {
+    assert.equal(card(...lines).values.email, lines[0], lines.join(" ↵ "));
+  }
+  const filled: [string, string][] = [
+    ["kim@x.co.kr rn", "kim@x.co.kr"],
+    ["kim@x.com rn", "kim@x.com"],
+    ["kim@x.com Dr", "kim@x.com"],
+    ["kim@x.co Tel 02-123-4567", "kim@x.co"],
+    ["kim@x.net Fax 02-123-4568", "kim@x.net"],
+  ];
+  for (const [line, email] of filled) assert.equal(card(line).values.email, email, line);
+});

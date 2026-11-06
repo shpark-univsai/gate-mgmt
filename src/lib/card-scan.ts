@@ -529,27 +529,35 @@ function emailSuspicion(text: string): EmailSuspicion | null {
 }
 
 /**
- * 끝 도메인이 co · ne · or 로 끝나고 바로 뒤(공백 하나까지)에 m · t · g 한 글자가 따로 읽혔는지(「…co m」 「…co M 010-…」 「…ne T 02-…」) —
- * .com · .net · .org 의 끝 글자가 떨어져 읽힌 것일 수 있어요(반박 리뷰). 「…co.kr」 같은 다른 끝 도메인은 보지 않아요.
+ * 끝 도메인이 co · ne · or 로 끝나고 뒤에(공백 · 구분자 다음) 로마자 1~2글자 토막이 따로 읽혔는지
+ * (「…co m」 「…co rn」 「…co om」 「…ne tt」 「…co M 010-…」 「…ne T 02-…」) — .com · .net · .org 의 끝 글자가 떨어져 · 잘못 읽힌 것일 수 있어요
+ * (반박 리뷰 · 최종 확인 — rn 은 m 을 잘못 읽은 흔한 모양). 여는 괄호 뒤(「…co (rn)」)도 같아요. 토막 뒤에 로마자가 더 이어지면(「…co Tel 02-…」) 보지 않아요.
+ * 다음 줄이 이런 토막 하나뿐인 것(「…co」 ↵ 「rn」)은 lineHasEmailFragment 가 봐요.
+ * 「…co.kr」 「…com」 같은 다른 끝 도메인도 보지 않아요(「…co.kr rn」 「…com Dr」는 채워요).
  */
 function cutTldLetterAfter(address: string, after: string): boolean {
   const tld = address.slice(address.lastIndexOf(".") + 1);
-  return CUT_TLD_RE.test(tld) && /^\s?[mtg](?![A-Za-z])/i.test(after);
+  return CUT_TLD_RE.test(tld) && /^[\s·・•/|,;:.([（［]+[A-Za-z]{1,2}(?![A-Za-z])/.test(after);
 }
 
 /**
  * 읽은 줄(칩으로 나누기 전)에서 메일 주소 뒤에 떨어져 읽힌 나라 도메인 꼬리가 있는지(UG-451 기획 17005 반박 리뷰).
  * 칩은 구분자(· / | …)로 나뉘고 1~2글자 토막은 잡음으로 빠져 칩만 봐서는 몰라요.
- * - 같은 줄: 주소 뒤에 남은 것이 1~2글자 로마자 토막뿐(「tan@x.com · sg」 「tan@x.com|sg」)
- * - 다음 줄: 주소가 줄 끝(맺음 기호만 뒤에)이고 다음 줄이 1~2글자 로마자 토막 한두 개뿐(「sg」 「.sg」 「m.sg」)
- *   — 다음 줄이 「HR」 같은 짧은 낱말이어도 비워요(잘린 주소를 채우는 쪽이 더 나빠요)
+ * - 같은 줄: 주소 뒤에 남은 것이 나라 도메인 꼬리뿐(ccFragmentOnly — 「tan@x.com · sg」 「tan@x.com|sg」 「…com s」),
+ *   또는 co · ne · or 로 끝난 주소 뒤에 1~2글자 토막(cutTldLetterAfter — 「…co rn」 「…co | rn」)
+ * - 다음 줄: 주소가 줄 끝(맺음 기호만 뒤에)이고 다음 줄이 나라 도메인 꼬리 한두 토막뿐(「sg」 「.sg」 「m.sg」 「S G」),
+ *   또는 co · ne · or 로 끝난 주소 다음 줄이 1~2글자 토막 하나뿐(「rn」 「m」). 「HR」 「M」 「KT」 같은 짧은 낱말은 그 밖에는 채워요
  */
 function lineHasEmailFragment(line: string, next: string): boolean {
   for (const m of line.matchAll(EMAIL_RE_G)) {
     const after = line.slice(m.index + m[0].length);
     if (ccFragmentOnly(after, true) || cutTldLetterAfter(m[0], after)) return true;
     const rest = after.trim();
-    if ((rest === "" || GLUED_OK_RE.test(rest)) && next !== "" && ccFragmentOnly(next) && next.split(/\s+/).length <= 2) return true;
+    if ((rest === "" || GLUED_OK_RE.test(rest)) && next !== "") {
+      if (ccFragmentOnly(next) && next.split(/\s+/).length <= 2) return true;
+      // co · ne · or 로 끝난 주소 다음 줄이 로마자 1~2글자 토막 하나뿐(「rn」 「m」 「om」) — .com · .net · .org 의 끝이 떨어졌을 수 있어요
+      if (cutTldLetterAfter(m[0], ` ${next}`) && /^[.(（]?[A-Za-z]{1,2}[.)）]?$/.test(next)) return true;
+    }
   }
   return false;
 }
