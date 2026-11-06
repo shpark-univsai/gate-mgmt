@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import {
   chipEmailAddresses,
+  confusableNote,
   emailHasConfusable,
   isEmailLikeChip,
   isJunkChip,
@@ -820,4 +821,28 @@ test("UG-451 17030 ④ 명함에서 채우거나 칩을 눌러 넣는 메일 주
   const st = tapChip(sc, {}, { company: "", name: "", email: "", phone: "" }, null);
   assert.equal(st.set?.value, sc.value);
   assert.notEqual(st.set?.value, st.set?.value.toLowerCase());
+});
+
+test("UG-451 반박 리뷰 M1 · 소문자로 넣은 주소의 헷갈리는 글자는 칩이 읽은 그대로로 판단 · 강조해요", () => {
+  const marks = (n: ReturnType<typeof confusableNote>) => n.parts.filter((p) => p.confusable).map((p) => p.text).join("");
+  for (const [read, chars] of [
+    ["Iee77@x.com", "i"],
+    ["yoon.jI0110@x.com", "i0110"],
+    ["kimO1@x.com", "o1"],
+  ] as const) {
+    const { values, chips } = card(read);
+    const value = values.email;
+    assert.equal(value, read.toLowerCase(), read);
+    const chip = chips.find((c) => c.kind === "email")!;
+    const note = confusableNote(value, chip.value);
+    assert.equal(note.confusable, true, read);
+    // 보여 주는 글자는 칸 값(소문자) 그대로, 강조 위치는 읽은 글자 기준
+    assert.equal(note.parts.map((p) => p.text).join(""), value, read);
+    assert.equal(marks(note), chars, read);
+  }
+  // 소문자 값만 보면 I 가 빠져 안내가 없어요 — 직원이 친 값(read 없음 · 다른 값)은 칸 값 그대로 판단
+  assert.equal(confusableNote("iee77@x.com").confusable, false);
+  assert.equal(confusableNote("iee78@x.com", "Iee77@x.com").confusable, false);
+  assert.equal(marks(confusableNote("kimo1@x.com")), "1");
+  assert.equal(confusableNote("rachel@x.com", "Rachel@x.com").confusable, false);
 });

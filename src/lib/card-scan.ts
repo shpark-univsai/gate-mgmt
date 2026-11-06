@@ -952,3 +952,21 @@ export function confusableParts(text: string): { text: string; confusable: boole
   }
   return parts;
 }
+
+/**
+ * 이메일 칸의 헷갈리는 글자 안내(강조할 조각) — read = 그 값을 넣은 메일 칩이 읽은 그대로의 주소(소문자로 바꾸기 전, 없으면 null).
+ * 명함에서 넣은 주소는 소문자로 넣어요(chipValueFor, UG-451 기획 17030). 그러면 읽은 「Iee77」 「jI0110」 「kimO1」의 I · O 가
+ * i · o 로 바뀌어 헷갈리는 글자에서 빠져요(반박 리뷰 M1) — 칸 값이 칩에서 넣은 그대로(대소문자만 다름)면 읽은 글자로 판단하고,
+ * 강조 위치도 읽은 글자 기준이에요. 보여 주는 글자는 칸 값(보낼 주소) 그대로. 직원이 친 값(read 없음 · 다름)은 칸 값으로 봐요.
+ */
+export function confusableNote(value: string, read: string | null = null): { confusable: boolean; parts: { text: string; confusable: boolean }[] } {
+  const src = read !== null && read.length === value.length && read.toLowerCase() === value.toLowerCase() ? read : value;
+  if (!emailHasConfusable(src)) return { confusable: false, parts: [{ text: value, confusable: false }] };
+  let i = 0;
+  const parts = confusableParts(src).map((p) => {
+    const text = value.slice(i, i + p.text.length);
+    i += p.text.length;
+    return { text, confusable: p.confusable };
+  });
+  return { confusable: true, parts };
+}

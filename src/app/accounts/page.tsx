@@ -65,8 +65,7 @@ import {
 } from "@/lib/draft-session";
 import {
   chipEmailAddresses,
-  confusableParts,
-  emailHasConfusable,
+  confusableNote,
   isEmailLikeChip,
   isFilled,
   isSuspectChip,
@@ -1567,15 +1566,16 @@ function CardPhotoViewer({ src, onClose }: { src: string; onClose: () => void })
  * 「이메일 전체 — 명함과 같은지 확인해 주세요.」(이메일 전체 굵게, UG-451 — 도메인만 보이면 잘린 앞부분(jung@ ← daeun.jung@)을 놓쳐요.
  * 기획 16846 — company-a.com 을 company-a.qi 로 읽는 일도 그대로 보여요).
  */
-function ScannedEmailNotes({ email }: { email: string }) {
-  const confusable = emailHasConfusable(email);
+function ScannedEmailNotes({ email, read }: { email: string; read: string | null }) {
+  // 헷갈리는 글자는 칩이 읽은 그대로(소문자로 바꾸기 전)로 판단해요(UG-451 반박 리뷰 M1, confusableNote)
+  const { confusable, parts } = confusableNote(email, read);
   if (!email) return null;
   return (
     <div className="confusable">
       {confusable && (
         <>
           <p className="confusable-email" translate="no">
-            {confusableParts(email).map((p, i) =>
+            {parts.map((p, i) =>
               p.confusable ? (
                 <mark key={i} className="confusable-char">
                   {p.text}
@@ -3016,6 +3016,9 @@ function CreateDialog({
 
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   const scannedEmail = scan?.links.email !== undefined;
+  // 칸 이메일을 넣은 메일 칩이 읽은 그대로의 주소(소문자로 바꾸기 전) — 칸을 직접 고치면 연결이 풀려 없어요(헷갈리는 글자 판단, 반박 리뷰 M1)
+  const scannedChip = scannedEmail ? scan?.chips.find((c) => c.id === scan.links.email) : undefined;
+  const scannedRead = scannedChip?.kind === "email" ? scannedChip.value : null;
   // 칸 아래 안내가 「이미 사용 중인 계정입니다」일 때만(다른 오류 · 해지 중 · 주소 고치는 중이 아닐 때) 재설정 메일 링크를 보여 줘요
   const offerReset = inUse && !fix && !emailError && !closing && !suspectBlocked;
 
@@ -3296,7 +3299,7 @@ function CreateDialog({
             )}
             {/* 명함에서 읽은 이메일의 헷갈리는 글자 · 도메인 — 위 안내(「주소가 틀리면…」 · 오류 · 주소 오류 · 이미 만든 계정) 아래에 덧붙여요 */}
             {/* 잘렸을 수 있는 주소면 「명함과 같은지 확인」 줄은 띄우지 않아요 — 확인된 것처럼 보이지 않게(반박 리뷰 F2) */}
-            {scannedEmail && !suspectBlocked && <ScannedEmailNotes email={trimmed} />}
+            {scannedEmail && !suspectBlocked && <ScannedEmailNotes email={trimmed} read={scannedRead} />}
           </div>
 
           <div className="field">
