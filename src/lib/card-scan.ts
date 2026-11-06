@@ -385,8 +385,33 @@ const EMAIL_LABEL_TOKEN_RE = /^(?:E|E-?mail|Mail)$/i;
 // 잘못 읽은 끝 도메인(UG-451) — 실재하지 않는 최상위 도메인 중 com · net · org · kr 을 잘못 읽은 흔한 모양만(.cor · .con …)
 const TLD_TYPOS = new Set("cor con corn cpm comm coom ner nel orq ogr krr".split(" "));
 
-/** 메일 주소 앞뒤에서 본 「잘렸을 수 있는」 조각. head · tail = 읽은 그대로의 앞 덩어리 · 뒤 조각(없으면 ""), typo = 끝 도메인 오독 */
-type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean };
+/**
+ * 끝 도메인 바로 뒤에 띄어쓰기 없이 붙어도 주소를 그대로 믿는 덩어리(UG-451 기획 17005) — 맺음 기호만으로 된 덩어리예요.
+ * . , ; : (문장 · 나열 끝) · | (구분자 — 칩을 나눌 때 이미 떨어져요) · 닫는 괄호 · 따옴표(「(kim@x.com)」 「<kim@x.com>」 「"kim@x.com"」)뿐이면 괜찮아요.
+ * 그 밖에 글자 · 숫자 · 기호(- & _ / + # % @ ! ? 등)가 하나라도 섞이면 주소가 더 이어지다 잘못 읽혔을 수 있어 처음 채우기에서 빼요
+ * (「…com-s&」 「…com&」 「…com58」 → 정규식이 「…com」까지만 주소로 잡아요). 잘린 주소를 조용히 채우는 쪽이 비워 두는 쪽보다 나빠서
+ * 띄어쓰기 없이 이어 쓴 다음 주소 · 누리집(「kim@x.com,www.x.com」 「kim@x.com/www.x.com」)도 비워요 — 칩은 남아 눌러 넣을 수 있어요.
+ * 띄어 쓴 경우(「kim@x.com, www.x.com」)는 위 tail 규칙대로 채워요. 「…comTel」처럼 소문자 끝 도메인에 대문자 낱말이 붙은 것은
+ * 정규식이 한 덩어리로 잡아 여기까지 오지 않고 extractEmail 이 떼요(전처럼 채워요).
+ * 줄 끝의 | _ = ~ : ; , ' " 등은 칩 정리(cleanSegment)에서 이미 떨어져요.
+ */
+const GLUED_OK_RE = /^[.,;:|)\]}>"'’”」』〉》]+$/;
+/**
+ * 소문자 끝 도메인에 띄어쓰기 없이 붙은 대문자 낱말 중 떼어도 되는 것(UG-451 기획 17005) — 같은 줄의 항목 라벨이에요(「…comTel」 「…comFax」).
+ * 그 밖의 대문자 덩어리(「…comSG」 「…comKR」)는 나라 도메인 앞 점을 놓친 것일 수 있어 떼지 않고 의심으로 봐요.
+ */
+const GLUED_LABEL_RE = new RegExp(`^(?:${PHONE_LABEL}|${EMAIL_LABEL}|Web|WEB|Website|Homepage|Www|WWW|Office|Add|Addr|Address|ADDRESS)$`);
+/**
+ * 점을 놓쳐 끝 도메인에 나라 도메인이 붙은 모양(「…comsg」 「…cokr」 「…netmy」) — 실재하지 않는 최상위 도메인이라 오독으로 봐요(UG-451 기획 17005).
+ * 소문자로 붙으면 정규식이 한 덩어리 끝 도메인으로 잡아 위 규칙으로는 못 보고, 명함에 흔한 나라만 골랐어요.
+ */
+const GLUED_CC_TLD_RE = /^(?:com|net|org|co|ac|or|go|edu|gov)(?:sg|kr|my|hk|jp|cn|tw|uk|au|id|ph|th|vn|nz)$/i;
+
+/**
+ * 메일 주소 앞뒤에서 본 「잘렸을 수 있는」 조각. head · tail = 읽은 그대로의 앞 덩어리 · 뒤 조각(없으면 ""), typo = 끝 도메인 오독,
+ * glue = 끝 도메인에 라벨이 아닌 대문자 덩어리가 붙음(「…comSG」 — match 에 들어 있어요)
+ */
+type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean; glue: boolean };
 
 /**
  * 줄의 메일 주소가 잘렸을 수 있는지 살펴요(UG-451). 글자 읽기가 주소 속 「.」 를 공백 · 쉼표로 읽으면 메일 모양 꼬리만 뽑혀요
@@ -396,7 +421,10 @@ type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean
  * - tail: 끝 도메인 바로 뒤에 점 · 쉼표 · 가운뎃점(앞뒤 공백 허용) + 1~4글자 로마자 · 숫자 덩어리(「. kr」 「.58」 「· sg」),
  *   또는 공백 하나 뒤 로마자 2글자로 줄이 끝남(「…co kr」 「…com SG」). 덩어리 뒤에 . · @ 가 이어지면 다음 주소 · 누리집이라 괜찮아요
  *   (「kim@x.com, www.x.com」 「kim@x.com, lee@x.com」). 문장 끝 점(「…com.」)도 괜찮아요.
- * - typo: 끝 도메인이 흔한 오독 모양(TLD_TYPOS — .cor · .con 등)
+ *   또 끝 도메인 바로 뒤(띄어쓰기 없이)에 붙은 덩어리가 맺음 기호(GLUED_OK_RE)만이 아니면 그 덩어리 전체(기획 17005 —
+ *   「…@bluepeak.com.sg」를 「…@bluepeak.com-s&」로 읽어 「…@bluepeak.com」이 채워진 일). 아래 GLUED_OK_RE 참고.
+ * - typo: 끝 도메인이 흔한 오독 모양(TLD_TYPOS — .cor · .con 등) · 점을 놓쳐 나라 도메인이 붙은 모양(GLUED_CC_TLD_RE — 「…comsg」)
+ * - glue: 소문자 끝 도메인에 붙은 대문자 덩어리가 항목 라벨(GLUED_LABEL_RE — 「…comTel」)이 아님(「…comSG」)
  */
 function emailSuspicion(text: string): EmailSuspicion | null {
   const line = text.slice(0, MAX_LINE);
@@ -415,15 +443,21 @@ function emailSuspicion(text: string): EmailSuspicion | null {
       /^[\d+-]+$/.test(hm[1]) && last !== undefined && last.index + last[0].length === rest.length && digitsOf(last[0]).length >= 8;
     if (!phoneTail) head = hm[1] + hm[2];
   }
-  const tail = after.match(/^(?:\s*[.,·・•]\s*[A-Za-z0-9]{1,4}(?![A-Za-z0-9.@])| [A-Za-z]{2}$)/)?.[0] ?? "";
+  const glued = after.match(/^\S+/)?.[0] ?? "";
+  const tail =
+    after.match(/^(?:\s*[.,·・•]\s*[A-Za-z0-9]{1,4}(?![A-Za-z0-9.@])| [A-Za-z]{2}$)/)?.[0] ??
+    (glued && !GLUED_OK_RE.test(glued) ? glued : "");
   const tld = extractEmail(line).split(".").pop() ?? "";
-  return { match: m[0], head, tail, typo: TLD_TYPOS.has(tld.toLowerCase()) };
+  const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld);
+  const capsGlued = m[0].slice(m[0].lastIndexOf(".") + 1).match(/^[a-z]{2,}([A-Z][A-Za-z]*)$/)?.[1];
+  const glue = capsGlued !== undefined && !GLUED_LABEL_RE.test(capsGlued);
+  return { match: m[0], head, tail, typo, glue };
 }
 
 /** 줄의 메일 주소가 잘렸거나 잘못 읽혔을 수 있는지(UG-451) — 그런 주소는 처음 채우기에서 빼요(autoFill). */
 export function isSuspectEmail(line: string): boolean {
   const s = emailSuspicion(line);
-  return s !== null && (s.head !== "" || s.tail !== "" || s.typo);
+  return s !== null && (s.head !== "" || s.tail !== "" || s.typo || s.glue);
 }
 
 /** 한 줄의 종류와 칸에 넣을 값. 메일이 함께 있는 줄은 메일로 봐요(메일 칸이 더 중요해요 — 라벨로 나눈 뒤라 드물어요). */
@@ -433,7 +467,7 @@ export function classifyLine(line: string): { kind: ChipKind; value: string; fax
     // 잘렸을 수 있는 주소는 앞 덩어리부터 뒤 조각까지 읽은 그대로(「daeun jung@miraero-logis.co.kr」)를 값으로 —
     // 칩을 눌러 넣으면 형식 오류로 보여 직원이 고쳐요(잘린 꼬리가 조용히 들어가지 않게)
     const s = emailSuspicion(line);
-    if (s && (s.head || s.tail)) return { kind: "email", value: (s.head + s.match + s.tail).trim() };
+    if (s && (s.head || s.tail || s.glue)) return { kind: "email", value: (s.head + s.match + s.tail).trim() };
     return { kind: "email", value: email };
   }
   const phone = bestPhone(phoneHits(line));

@@ -226,3 +226,66 @@ test("UG-451 16991 ⑦ 전화번호 모양이 아닌 번호는 라벨이 있어�
   ];
   for (const [line, phone] of ok) assert.equal(card(line).values.phone, phone, line);
 });
+
+test("UG-451 17005 끝 도메인 바로 뒤에 글자 · 숫자 · 기호가 붙으면 채우지 않아요(잘렸을 수 있어요)", () => {
+  const suspect: [string, string][] = [
+    // [읽은 줄, 칩 값(읽은 그대로 — 눌러 넣으면 형식 오류로 보여요)]
+    ["marcus.wong@bluepeak.com-s&", "marcus.wong@bluepeak.com-s&"],
+    ["E. marcus.wong@bluepeak.com-s&", "marcus.wong@bluepeak.com-s&"],
+    ["kim@x.com&", "kim@x.com&"],
+    ["kim@x.com58", "kim@x.com58"],
+    ["kim@x.com-sg", "kim@x.com-sg"],
+    ["kim@x.com_sg", "kim@x.com_sg"],
+    ["kim@x.com/sg", "kim@x.com/sg"],
+    ["kim@x.com#", "kim@x.com#"],
+    ["kim@x.com-", "kim@x.com-"],
+    ["kim@x.com.-", "kim@x.com.-"],
+    ["kim@x.com,www.x.com", "kim@x.com,www.x.com"],
+    // 라벨이 아닌 대문자 덩어리가 붙음(나라 도메인 앞 점을 놓침)
+    ["kim@x.comSG", "kim@x.comSG"],
+    ["kim@x.co.krKR", "kim@x.co.krKR"],
+  ];
+  for (const [line, value] of suspect) {
+    assert.equal(isSuspectEmail(line), true, line);
+    const r = card("Company-A", line, "M. 010-1234-5678");
+    assert.equal(r.values.email, "", line);
+    assert.equal(r.links.email, undefined, line);
+    const chip = r.chips.find((c) => c.kind === "email");
+    assert.ok(chip, line);
+    assert.equal(chip.value, value, line);
+    // 칩 글자는 읽은 그대로
+    assert.ok(line.endsWith(chip.text.replace(/^E\. /, "")), line);
+  }
+  // 소문자로 붙은 나라 도메인(점을 놓침)도 오독으로 봐요
+  for (const line of ["marcus.wong@bluepeak.comsg", "kim@x.cokr", "kim@x.netmy"]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    assert.equal(card(line).values.email, "", line);
+  }
+  // 다른 정상 메일 칩이 있어도 비워요(규칙 그대로)
+  assert.equal(card("sales@x.com", "marcus.wong@bluepeak.com-s&").values.email, "");
+});
+
+test("UG-451 17005 맺음 기호 · 띄어쓰기 · 라벨만 붙은 주소는 그대로 채워요", () => {
+  const ok: [string, string][] = [
+    ["kim@x.com", "kim@x.com"],
+    ["kim@x.com.", "kim@x.com"],
+    ["kim@x.com,", "kim@x.com"],
+    ["kim@x.com;", "kim@x.com"],
+    ["kim@x.com|", "kim@x.com"],
+    ["(kim@x.com)", "kim@x.com"],
+    ["<kim@x.com>", "kim@x.com"],
+    ["\"kim@x.com\"", "kim@x.com"],
+    ["E: kim@x.com).", "kim@x.com"],
+    ["kim@x.com T. 02-123-4567", "kim@x.com"],
+    ["kim@x.com, www.x.com", "kim@x.com"],
+    ["kim@x.comTel", "kim@x.com"],
+    ["kim@x.comFax", "kim@x.com"],
+    ["kim@x.com.sg", "kim@x.com.sg"],
+    ["kim@x.co.kr", "kim@x.co.kr"],
+    ["kim@company-a.network", "kim@company-a.network"],
+  ];
+  for (const [line, email] of ok) {
+    assert.equal(isSuspectEmail(line), false, line);
+    assert.equal(card(line).values.email, email, line);
+  }
+});
