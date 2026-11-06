@@ -195,13 +195,26 @@ function GoneCardCompany({ account, query }: { account: Account; query: string }
   const tipId = useId();
   const shown = open && truncated;
 
-  // 카드 폭이 바뀌면(화면 회전 등) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요
+  // 카드 폭이 바뀌면(화면 회전 등) 말줄임 여부를 다시 재요 — 처음 observe 때도 한 번 불려요.
+  // 상자 폭은 그대로인데 글자 폭만 바뀌는 경우(늦게 받은 글꼴로 바뀜 · 회사명 · 검색 강조가 바뀜)도 다시 재요(반박 리뷰).
+  // 말줄임이 풀리면 열린 말풍선도 닫아요 — 다시 잘려도 저절로 열리지 않게.
   useEffect(() => {
     if (!textEl) return;
-    const ro = new ResizeObserver(() => setTruncated(textEl.scrollWidth > textEl.clientWidth));
+    let alive = true;
+    const measure = () => {
+      if (!alive) return;
+      const cut = textEl.scrollWidth > textEl.clientWidth;
+      setTruncated(cut);
+      if (!cut) setOpen(false);
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(textEl);
-    return () => ro.disconnect();
-  }, [textEl]);
+    document.fonts?.ready.then(measure).catch(() => {});
+    return () => {
+      alive = false;
+      ro.disconnect();
+    };
+  }, [textEl, account.company, query]);
 
   useEffect(() => {
     if (!shown) return;
@@ -227,7 +240,16 @@ function GoneCardCompany({ account, query }: { account: Account; query: string }
   return (
     <div className="card-company-full" ref={wrapRef}>
       {truncated ? (
-        <button type="button" className="card-company-tap" aria-expanded={shown} aria-describedby={shown ? tipId : undefined} onClick={() => setOpen((v) => !v)}>
+        <button
+          type="button"
+          className="card-company-tap"
+          aria-describedby={shown ? tipId : undefined}
+          onClick={() => setOpen((v) => !v)}
+          // Tab 으로 다른 곳에 가면 닫아요(반박 리뷰)
+          onBlur={(e) => {
+            if (!wrapRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
+          }}
+        >
           {text}
         </button>
       ) : (
