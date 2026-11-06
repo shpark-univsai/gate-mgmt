@@ -416,7 +416,10 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .popup-select-option.is-active { background: var(--gray-500); } /* 어두운 유리 위에서 글자가 보이는 밝기 */
 .popup-select-option[aria-selected="true"] { font-weight: 600; }
 .popup-select-check { flex: none; color: var(--gray-0); }
-.count { margin-left: auto; color: var(--gray-500); white-space: nowrap; } /* 옆에 목록 오류 안내가 붙어도 「총 N개」는 한 줄로 */
+.count { margin-left: auto; color: var(--gray-500); white-space: nowrap; } /* 옆에 안내가 붙어도 「총 N개」는 한 줄로 */
+/* 목록 불러오기 실패 안내 — 검색 줄과 목록 사이 한 줄씩(UG-451). 위아래 간격은 검색 줄 ↔ 목록 간격(16)과 같게 */
+.list-errors { display: flex; flex-direction: column; gap: 4px; margin-bottom: -8px; }
+.list-errors .error { margin: 0; }
 
 .table { border: 1px solid var(--gray-200); border-bottom: 0; overflow-x: auto; } /* 창이 좁으면(태블릿 · 창 나누기) 표 안에서 옆으로 밀어 봐요 */
 .tr {
@@ -628,6 +631,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .content { padding: 16px; gap: 12px; }
   .page-title h1 { font-size: 20px; line-height: 28px; }
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
+  .list-errors { margin-bottom: 0; }
   .search { width: 100%; height: 40px; }
   .status-chips { display: flex; gap: 8px; width: 100%; overflow-x: auto; scrollbar-width: none; }
   .status-chips.has-more { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); } /* 오른쪽에 칩이 더 있으면 끝을 흐리게 — 옆으로 밀 수 있다는 표시 */
