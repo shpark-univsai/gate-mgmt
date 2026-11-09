@@ -740,14 +740,29 @@ export function isUnconfirmedSuspect(value: string, chips: readonly Chip[], conf
   return confirmed === null || confirmed.trim().toLowerCase() !== value.trim().toLowerCase();
 }
 
+/**
+ * 명함에서 읽은 메일 주소를 칸에 넣을 글자로(UG-451 기획 17030 · 17072-4) — 소문자로 바꾸되 @ 앞의 대문자 I 는 읽은 그대로 둬요.
+ * 「Iee77@acme.com」의 I 는 l 을 잘못 읽은 것일 수 있어, i 로 바꾸면 칸에서 「iee77」로 보여 명함 「lee77」과 견줄 때 틀린 글자를
+ * 알아보기 어려워요(헷갈리는 글자 안내도 I 를 가리켜요). 단 @ 앞에 소문자가 하나도 없으면(「KIM@ACME.COM」처럼 전부 대문자로 찍힌 명함)
+ * 그 I 는 대문자 글씨일 뿐이라 전부 소문자로 바꿔요(「kIm」이 되지 않게). 도메인(@ 뒤)은 전부 소문자예요.
+ * 같은 주소인지 견줄 때(isSuspectValue · isUnconfirmedSuspect · 이메일 확인)는 언제나 대소문자 없이 봐요 — 이 I 때문에 달라지지 않아요.
+ */
+export function scannedEmailValue(email: string): string {
+  const at = email.lastIndexOf("@");
+  const local = at === -1 ? email : email.slice(0, at);
+  const domain = at === -1 ? "" : email.slice(at).toLowerCase();
+  if (!/[a-z]/.test(local)) return local.toLowerCase() + domain;
+  return local.replace(/[^I]+/g, (run) => run.toLowerCase()) + domain;
+}
+
 /** 명함 칩의 메일 주소들(뽑은 주소, 겹치지 않게) — 잘렸을 수 있는 칩도 뽑은 꼬리 주소로(「daeun · jung@x.co.kr」 → jung@x.co.kr) */
 export function chipEmailAddresses(chips: readonly Chip[]): string[] {
   const out = new Set<string>();
   for (const c of chips) {
     if (c.kind !== "email") continue;
     const e = extractEmail(c.value) || extractEmail(c.text);
-    // 의심이 아닌 칩은 칸에 넣을 때처럼 소문자로(chipValueFor — 기획 17030) — 칸 주소와 같은 글자로 확인해요
-    if (e) out.add(isSuspectChip(c) ? e : e.toLowerCase());
+    // 의심이 아닌 칩은 칸에 넣을 때처럼(chipValueFor — 기획 17030 · 17072-4) — 칸 주소와 같은 글자로 확인해요
+    if (e) out.add(isSuspectChip(c) ? e : scannedEmailValue(e));
   }
   return [...out];
 }
@@ -801,14 +816,15 @@ export function nameFromLine(line: string): string | null {
 
 /**
  * 칩을 그 칸에 넣을 때의 글자. 메일 · 전화 칩은 뽑은 값, 이름 칸은 직함을 뗀 이름, 나머지는 읽은 줄 그대로.
- * 메일 칩은 주소 전체를 소문자로(UG-451 기획 17030) — 처음 채우기(autoFill)와 칩 누르기(tapChip)가 모두 여기를 지나요.
+ * 메일 칩은 주소를 소문자로(UG-451 기획 17030 — @ 앞의 대문자 I 는 읽은 그대로, 17072-4 · scannedEmailValue) — 처음 채우기(autoFill)와
+ * 칩 누르기(tapChip)가 모두 여기를 지나요.
  * 글자 읽기의 대소문자는 믿을 수 없고(「USER1+X@EXAMPLE.COM」) 메일 배달은 실제로 대소문자를 가르지 않아요.
- * 그런데 auth 는 이메일을 대소문자 그대로 저장 · 비교해서, 대문자로 읽힌 주소가 있는 계정 「user1+x@example.com」와 다른 계정으로 보여
- * 같은 고객의 계정이 하나 더 생길 수 있어요 — auth 쪽(대소문자 없이 저장 · 비교)이 근본 해결이에요. 직원이 손으로 친 값은 친 그대로 둬요.
+ * auth 는 이메일을 대소문자 없이 비교하지만(UMS-56) 적힌 그대로 저장해요 — 대문자로 읽힌 주소가 그대로 계정 주소가 되지 않게 소문자로 넣어요.
+ * 직원이 손으로 친 값은 친 그대로 둬요.
  * 잘렸을 수 있는 칩(isSuspectChip)은 명함과 견줘 고치도록 읽은 그대로 둬요.
  */
 export function chipValueFor(chip: Chip, field: ScanField): string {
-  if (field === "email" && chip.kind === "email") return isSuspectChip(chip) ? chip.value : chip.value.toLowerCase();
+  if (field === "email" && chip.kind === "email") return isSuspectChip(chip) ? chip.value : scannedEmailValue(chip.value);
   if (field === "phone" && chip.kind === "phone") return chip.value;
   if (field === "name") return nameFromLine(chip.text) ?? chip.text;
   return chip.text;
@@ -955,8 +971,8 @@ export function confusableParts(text: string): { text: string; confusable: boole
 
 /**
  * 이메일 칸의 헷갈리는 글자 안내(강조할 조각) — read = 그 값을 넣은 메일 칩이 읽은 그대로의 주소(소문자로 바꾸기 전, 없으면 null).
- * 명함에서 넣은 주소는 소문자로 넣어요(chipValueFor, UG-451 기획 17030). 그러면 읽은 「Iee77」 「jI0110」 「kimO1」의 I · O 가
- * i · o 로 바뀌어 헷갈리는 글자에서 빠져요(반박 리뷰 M1) — 칸 값이 칩에서 넣은 그대로(대소문자만 다름)면 읽은 글자로 판단하고,
+ * 명함에서 넣은 주소는 소문자로 넣어요(chipValueFor, UG-451 기획 17030 — 대문자 I 는 그대로 두지만(17072-4) O 와 전부 대문자인 주소의 I 는
+ * 바뀌어요). 그러면 읽은 「kimO1」의 O · 「JI0110」의 I 가 o · i 로 바뀌어 헷갈리는 글자에서 빠져요(반박 리뷰 M1) — 칸 값이 칩에서 넣은 그대로(대소문자만 다름)면 읽은 글자로 판단하고,
  * 강조 위치도 읽은 글자 기준이에요. 보여 주는 글자는 칸 값(보낼 주소) 그대로. 직원이 친 값(read 없음 · 다름)은 칸 값으로 봐요.
  */
 export function confusableNote(value: string, read: string | null = null): { confusable: boolean; parts: { text: string; confusable: boolean }[] } {

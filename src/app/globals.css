@@ -159,12 +159,17 @@ p {
 .field-link:hover { color: var(--gray-700); }
 .field-link:disabled { cursor: default; color: var(--gray-400); }
 .field-link--underline { align-self: flex-start; text-decoration: underline; text-underline-offset: 2px; }
+/* 누르는 영역은 44px 높이로(UG-451 기획 17073-8) — 보이는 글자 · 자리는 그대로(위아래 13px 를 음수 여백으로 되돌려요). 위아래 이웃은 글자뿐이에요 */
+.field-link--underline { min-height: 44px; margin: -13px 0; }
 /* 의심 주소 경고 아래 「명함과 같은 주소예요」(UG-451 기획 17030) — 왼쪽에 붙은 작은 테두리 버튼 */
 .suspect-confirm { align-self: flex-start; }
 .error { color: var(--danger-400); }
 /* 칸 두 개를 한 줄에(회사명 · 이름 / 고객 이메일 · 연락처) — 휴대폰은 위아래로 */
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .field-row > .field { min-width: 0; }
+/* 메일 언어(UG-451 기획 17073-7): DOM 은 이메일 칸 바로 다음(휴대폰은 한 줄씩이라 이메일 아래 · 연락처 위),
+   PC 두 칸은 이메일 · 연락처 아래 한 줄을 다 써요 — 위 줄과 간격은 전처럼 24(줄 간격 16 + 8) */
+.field-row > .field--language { grid-column: 1 / -1; grid-row: 2; margin-top: 8px; }
 .field-optional { margin-left: 2px; } /* 「(선택)」 — 칸 이름과 같은 굵은 검정(N1) */
 
 /* ── 명함 찍어서 채우기 (UG-431) ── */
@@ -781,15 +786,27 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .dialog-form { gap: 16px; }
   .dialog-form .field { gap: 6px; }
   .dialog-form .field-row { grid-template-columns: 1fr; gap: 16px; }
-  .scan-chip { height: 36px; font-size: 14px; }
+  .field-row > .field--language { margin-top: 0; }
+  /* 읽은 줄(칩)은 손가락으로 누르기 좋게 44 높이 · 8 간격(UG-451 기획 17073-10) */
+  .scan-chip { height: 44px; font-size: 14px; }
+  .scan-chips { gap: 8px; }
   .input-box,
   .segmented button { height: 40px; }
   .dialog-actions .btn { flex: 1; height: 40px; }
   /* 키보드가 올라와 창이 가려져도 버튼은 보이는 영역 맨 아래에 붙어 있게 · 평소 자리와 간격은 그대로 */
   .dialog-actions { position: sticky; bottom: -16px; margin: -12px 0 -16px; padding: 12px 0 16px; background: var(--gray-0); }
+  /* 칸에 초점이 가거나 칸 아래 안내가 늘면 창이 그 칸 · 안내를 보이게 스크롤해요(Dialog) — 그때 위 버튼 줄(40 + 12 + 16 = 68)에
+     가려지지 않게 버튼 줄 높이 + 8 만큼 아래를 비워 두고 맞춰요(UG-451 기획 17073-6) */
+  .scrim { scroll-padding-bottom: 76px; }
   .mail-failure-sentence { display: block; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
+}
+
+/* ── 터치 기기(아이패드 등 넓은 화면 포함): 읽은 줄(칩)은 44 높이 · 8 간격(UG-451 기획 17073-10) ── */
+@media (pointer: coarse) {
+  .scan-chip { height: 44px; }
+  .scan-chips { gap: 8px; }
 }
 
 /* ── 호버: 마우스가 있는 기기에서만(터치에서 눌린 채 남지 않게) ── */
