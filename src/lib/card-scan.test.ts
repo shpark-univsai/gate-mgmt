@@ -924,8 +924,14 @@ test("UG-453 ⑤ 다음 칸 고르기 규칙", () => {
   assert.equal(nextChipTarget({ field: "phone", value: "1" }, "phone", v({ phone: "1" }), ["company"]), "name");
   // 메일 칩이 이메일 칸에 들어가도 비어 있는 커서 칸은 그대로
   assert.equal(nextChipTarget({ field: "email", value: "a@example.com" }, "company", v({ email: "a@example.com" })), "company");
-  // 커서 칸이 이미 찼으면 넣은 칸 다음 빈 칸
-  assert.equal(nextChipTarget({ field: "email", value: "a@example.com" }, "company", v({ company: "A", email: "a@example.com" })), "phone");
+  // 커서 칸이 이미 찼으면 넣은 칸 다음 빈 칸 — 연락처(선택 칸)는 건너뛰고 처음으로 돌아요(리뷰 m1)
+  assert.equal(nextChipTarget({ field: "email", value: "a@example.com" }, "company", v({ company: "A", email: "a@example.com" })), "name");
+  // 연락처만 비었으면 대상 칸 없음 — 다음 글자 칩이 연락처에 들어가지 않게(전화 칩은 늘 제 칸으로)
+  assert.equal(nextChipTarget({ field: "name", value: "B" }, "name", v({ company: "A", name: "B", email: "c@example.com" })), null);
+  assert.equal(nextChipTarget(null, null, v({ company: "A", name: "B", email: "c@example.com" })), null);
+  // 이메일은 골라요 — 깨진 메일 칩(「lena@koh sg」)을 글자 칩으로 이메일 칸에 넣어요
+  assert.equal(nextChipTarget({ field: "name", value: "B" }, "name", v({ company: "A", name: "B" })), "email");
+  assert.equal(nextChipTarget({ field: "phone", value: "1" }, "phone", v({ company: "A", name: "B", phone: "1" })), "email");
   // 칸을 비웠으면(「칸에 들어감」 칩을 다시 누름) 그 칸 — 잠긴 칸이면 없음
   assert.equal(nextChipTarget({ field: "name", value: "" }, "company", v({ company: "A" })), "name");
   assert.equal(nextChipTarget({ field: "name", value: "" }, null, v({}), ["name"]), null);

@@ -127,6 +127,8 @@ const isHeic = (file: File) => /^image\/hei[cf](-sequence)?$/i.test(file.type) |
 type ScanFailure = ReadFailure | "format";
 /** 도구를 받는 동안의 기다림 안내(진행률 0~100) */
 const scanDownloading = (percent: number) => `글자 읽기 도구를 받고 있습니다… ${percent}%`;
+/** 칩 대상 칸 이름(낭독기 알림, UG-453 리뷰 m2) — 창의 칸 이름과 같게 */
+const CHIP_TARGET_LABEL: Record<ScanField, string> = { company: "회사명", name: "이름", email: "고객 이메일", phone: "연락처" };
 
 const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactElement }[] = [
   { value: "en", label: "English", Flag: FlagUS },
@@ -2229,7 +2231,7 @@ function CreateDialog({
   // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때.
   // 「작성 중」 저장 판단도 같아요 — 확인한 값은 의심이 아닌 주소처럼 「새 계정」으로 확인되면 남겨요(기획 17030 결정)
   const suspectBlocked = !!scan && isUnconfirmedSuspect(trimmed, scan.chips, confirmedEmail);
-  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect)
+  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect, PC 만)
   const focusAfterConfirm = useRef(false);
   useEffect(() => {
     if (!focusAfterConfirm.current) return;
@@ -2886,6 +2888,9 @@ function CreateDialog({
   const lockedFields: ScanField[] = [...(companyLocked ? (["company"] as const) : []), ...(personLocked ? (["name", "phone"] as const) : [])];
   /** 다음 칩이 들어갈 칸을 진하게(UG-453 기획 5) — 터치 기기에서 초점 없이 정한 대상 칸. 읽은 줄(칩)이 보일 때만 */
   const targetClass = (field: ScanField) => (scan && !fix && chipTarget === field && !lockedFields.includes(field) ? " is-target" : "");
+  // 터치 기기 — 칩 안내 문구 · 낭독기 대상 칸 알림(UG-453 리뷰 m2 · nit)
+  const touchPrimary = isTouchPrimary();
+  const targetLabel = chipTarget && targetClass(chipTarget) ? CHIP_TARGET_LABEL[chipTarget] : null;
 
   /** 이메일 칸 값 바꾸기 — 직접 칠 때와 명함 · 칩으로 넣을 때가 같은 정리를 해요(앞 기록의 안내가 남지 않게). */
   // companyNow = 지금 회사명 칸 값(명함으로 함께 채울 때는 새 값 — 옛 기록 회사명이 명함 회사명을 덮지 않게)
@@ -2911,10 +2916,13 @@ function CreateDialog({
   /**
    * 「명함과 같은 주소예요」(UG-451 기획 17030) — 지금 칸 값을 직원이 명함과 견줘 맞다고 확인했어요. 그 값 그대로인 동안 경고 · 막음을 풀어요.
    * 버튼이 사라지니 초점은 이메일 칸으로 돌려요(기획 17072-2) — 실행 버튼으로 옮기면 Enter 두 번에 바로 메일이 나가요.
+   * 터치 기기는 이메일 칸에 초점을 주지 않아요(UG-453 리뷰 m3) — 키보드가 올라오고 이메일 칸이 칩 대상이 되어 다음 글자 칩이 확인한 주소를 덮어요.
+   * 대신 다음 칩이 들어갈 칸을 다시 골라요.
    */
   function confirmSuspect() {
     setConfirmedEmail(email);
-    focusAfterConfirm.current = true;
+    if (isTouchPrimary()) moveChipTarget(nextChipTarget(null, null, { company, name, email, phone }, lockedFields));
+    else focusAfterConfirm.current = true;
   }
 
   /**
@@ -3184,7 +3192,9 @@ function CreateDialog({
             {scan ? (
               <>
                 <div className="scan-head">
-                  <span className="scan-title">명함에서 읽은 줄 · 누르면 커서가 있는 칸에 들어갑니다</span>
+                  <span className="scan-title">
+                    명함에서 읽은 줄 · {touchPrimary ? "누르면 진하게 표시된 칸에 들어갑니다" : "누르면 커서가 있는 칸에 들어갑니다"}
+                  </span>
                   <button
                     type="button"
                     className="btn btn-outline btn-sm"
@@ -3218,6 +3228,12 @@ function CreateDialog({
                     })}
                   </div>
                 </div>
+                {/* 터치 기기에서 진하게 보인 대상 칸을 낭독기에도 알려요(UG-453 리뷰 m2) */}
+                {touchPrimary && (
+                  <span className="visually-hidden" aria-live="polite">
+                    {targetLabel ? `다음 줄은 ${targetLabel} 칸에 들어갑니다` : ""}
+                  </span>
+                )}
                 {/* 다시 읽는 동안에는 지난 결과(「명함에서 읽었습니다…」) 대신 기다림 안내 — 낭독기가 읽게 같은 상태 줄에 */}
                 <p className="help" role="status">
                   {scanning ? scanWaitText : scanFailed ? scanFailedText : SCAN_DONE}

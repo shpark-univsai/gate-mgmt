@@ -934,7 +934,9 @@ const FIELD_ORDER: readonly ScanField[] = ["company", "name", "email", "phone"];
  * - tap = 방금 바뀐 칸 · 값(tapChip 의 set). null 이면 아직 넣은 것이 없음(명함을 막 읽음) — 차례대로 첫 빈 칸
  * - 칸을 비웠으면(「칸에 들어감」 칩을 다시 누름) 그 칸 — 다른 칩으로 바꿔 넣기 쉽게
  * - 메일 · 전화 칩이 제 칸에 들어갔고 커서 칸(previous)이 아직 비어 있으면 커서 칸 그대로
- * - 그 밖에는 넣은 칸 다음부터 차례대로(끝에서 처음으로) 비어 있고 잠기지 않은 칸, 다 찼으면 null
+ * - 그 밖에는 넣은 칸 다음부터 차례대로(끝에서 처음으로) 비어 있고 잠기지 않은 칸, 다 찼으면 null.
+ *   연락처는 고르지 않아요 — 선택 칸이고 전화 칩은 늘 제 칸으로 가요. 고르면 다음 글자 칩이 연락처에 들어가요(UG-453 리뷰 m1).
+ *   이메일은 골라요 — 메일처럼 생겼지만 깨진 칩(「lena@koh sg」)은 글자 칩으로 이메일 칸에 넣어요
  * values = 칩을 넣은 뒤의 칸 값, locked = 지금 고칠 수 없는 칸
  */
 export function nextChipTarget(
@@ -949,7 +951,7 @@ export function nextChipTarget(
   const start = tap ? FIELD_ORDER.indexOf(tap.field) + 1 : 0;
   for (let k = 0; k < FIELD_ORDER.length; k++) {
     const f = FIELD_ORDER[(start + k) % FIELD_ORDER.length];
-    if (open(f)) return f;
+    if (f !== "phone" && open(f)) return f;
   }
   return null;
 }
