@@ -220,8 +220,33 @@ p {
   gap: 12px;
   padding: 16px;
   background: var(--overlay-dark-80);
+  touch-action: none; /* 두 손가락 · 두 번 누르기를 브라우저(페이지 확대 · 스크롤) 대신 보기 화면이 받아요(UG-455) */
+  overscroll-behavior: contain;
 }
-.photo-viewer img { display: block; max-width: 100%; max-height: calc(100% - 60px); object-fit: contain; border-radius: var(--radius-control); background: var(--gray-0); }
+/* 확대 영역(UG-455) — 사진은 「맞춤」 크기로 가운데, 그 위에 translate · scale. 넘친 부분은 잘라요 */
+.photo-viewer-stage { position: relative; flex: 1 1 auto; align-self: stretch; min-height: 0; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+.photo-viewer-stage img {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-control);
+  background: var(--gray-0);
+  transform-origin: center;
+  will-change: transform;
+  cursor: zoom-in;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.photo-viewer-stage img.is-animating { transition: transform 0.15s ease-out; }
+.photo-viewer.is-zoomed .photo-viewer-stage img { cursor: grab; }
+.photo-viewer-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; color: var(--gray-0); font-size: 14px; line-height: 20px; }
+.photo-viewer-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+.photo-viewer-zoom { min-width: 44px; padding: 0 12px; font-size: 18px; }
+.photo-viewer-bar .btn-outline:disabled { color: var(--gray-400); }
 .confusable { display: flex; flex-direction: column; gap: 4px; }
 /* 고정폭 글꼴 — 0 · O, 1 · l · I 가 모양으로 갈리게 */
 .confusable-email { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 20px; letter-spacing: 0.02em; color: var(--gray-900); overflow-wrap: anywhere; }
@@ -833,6 +858,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 @media (pointer: coarse) {
   .scan-chip { height: 44px; }
   .scan-chips { gap: 8px; }
+  .photo-viewer-bar .btn { height: 44px; } /* 명함 크게 보기 버튼도 누르는 높이 44 · 사이 8(UG-455) */
 }
 
 /* ── 호버: 마우스가 있는 기기에서만(터치에서 눌린 채 남지 않게) ── */
