@@ -990,7 +990,7 @@ export default function AccountsPage() {
         setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
       } else {
         reload();
-        setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 임시 비밀번호로 발송을 요청했습니다" });
+        setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 비밀번호 설정 링크로 발송을 요청했습니다" });
       }
     },
     [reload, showCreated],
@@ -3395,7 +3395,7 @@ function CreateDialog({
           </div>
         </div>
 
-        {!fix && pending && !blocked && <p className="help">다시 보내면 이전 임시 비밀번호는 쓸 수 없게 됩니다.</p>}
+        {!fix && pending && !blocked && <p className="help">다시 보내면 이전 링크는 쓸 수 없게 됩니다.</p>}
         {!fix && blocked &&
           (cancelError ? (
             <p className="error" role="alert">
@@ -3678,8 +3678,8 @@ function ResendDialog({
             <dd>{languageName(account.language)}</dd>
           </div>
           <div>
-            <dt>임시 비밀번호</dt>
-            <dd>새로 발급 · 이전 비밀번호는 사용 불가</dd>
+            <dt>비밀번호 설정 링크</dt>
+            <dd>새로 발급(30일) · 이전 링크는 사용 불가</dd>
           </div>
         </dl>
       </div>
@@ -3748,7 +3748,7 @@ function CancelDialog({
           </div>
           <div>
             <dt>보낸 메일</dt>
-            <dd>비밀번호와 체험 링크를 쓸 수 없게 됨</dd>
+            <dd>비밀번호 설정 링크와 체험 링크를 쓸 수 없게 됨</dd>
           </div>
           <div>
             <dt>재발급</dt>
