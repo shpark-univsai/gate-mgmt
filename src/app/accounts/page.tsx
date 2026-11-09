@@ -40,6 +40,7 @@ import {
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
 import { isTextTruncated } from "@/lib/text-overflow";
+import { isTouchPrimary } from "@/lib/pointer";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
@@ -70,6 +71,7 @@ import {
   isFilled,
   isSuspectChip,
   isUnconfirmedSuspect,
+  nextChipTarget,
   scanCard,
   tapChip,
   unlink,
@@ -105,6 +107,8 @@ const personInput = (name: string, phone: string) => ({ ...(name ? { name } : {}
 
 // 안내 문구는 명함 사진 문구와 함께 card-photo.ts 한 곳에
 const SCAN_HELP = CARD_PHOTO_TEXT.scanHelp;
+/** 휴대폰은 한 줄로(UG-453 기획 6 — SE · 안드로이드에서 세 줄이었어요). 이름 · 회사명 넣는 법은 읽은 뒤 칩 위 안내에 있어요 */
+const SCAN_HELP_SHORT = CARD_PHOTO_TEXT.scanHelpShort;
 const SCAN_READING = "명함을 읽고 있습니다…";
 // 읽는 동안만(N2) — 첫 읽기는 글자 읽기 도구(약 8MB)를 내려받아 더 걸려요
 const SCAN_WAIT = "보통 몇 초 걸립니다. 처음 한 번은 글자 읽기 도구를 내려받아 조금 더 걸립니다.";
@@ -123,6 +127,8 @@ const isHeic = (file: File) => /^image\/hei[cf](-sequence)?$/i.test(file.type) |
 type ScanFailure = ReadFailure | "format";
 /** 도구를 받는 동안의 기다림 안내(진행률 0~100) */
 const scanDownloading = (percent: number) => `글자 읽기 도구를 받고 있습니다… ${percent}%`;
+/** 칩 대상 칸 이름(낭독기 알림, UG-453 리뷰 m2) — 창의 칸 이름과 같게 */
+const CHIP_TARGET_LABEL: Record<ScanField, string> = { company: "회사명", name: "이름", email: "고객 이메일", phone: "연락처" };
 
 const LANGUAGES: { value: MailLanguage; label: string; Flag: () => React.ReactElement }[] = [
   { value: "en", label: "English", Flag: FlagUS },
@@ -253,6 +259,9 @@ function ClipText({ text, query, className }: { text: string; query: string; cla
  * 말풍선은 보기만 하는 것이라 누름을 받지 않고(pointer-events: none) 그 아래 글자가 받아요 — 회사명 말풍선이 아래 이메일 줄을 덮어도 이메일을 누를 수 있어요.
  * 다른 말줄임 글자를 누를 때는 바깥 누르기로 닫지 않고, 그 글자가 열리면서 앞 말풍선을 닫아요(openTapClip) — 누르는 도중에 화면이 바뀌지 않게.
  * text = 말풍선 · title 의 전체 글자, children = 보이는 글자(검색 강조 등), className = 말줄임 글자의 클래스, wrapClassName = 감싸는 상자의 클래스
+ * dismissLayer = 말풍선이 열린 동안 화면 전체에 투명한 막을 깔아, 다음 누름은 말풍선을 닫기만 해요(UG-453 기획 7 — 휴대폰 카드).
+ *   두 줄 말풍선이 이웃 카드의 「메일 재발송」 · ⋮ 를 덮어, 닫으려고 누른 곳의 버튼이 함께 눌렸어요. 막 아래가 다른 말줄임 글자면
+ *   한 번에 그 말풍선으로 바꿔요(기획 17028 과 같게). PC 표(아이패드)는 막 없이 전과 같아요.
  */
 /** 지금 열린 말풍선(한 번에 하나) — 다른 TapClip 이 열리면 이것을 닫아요(UG-450 기획 17028) */
 let openTapClip: { id: string; close: () => void } | null = null;
@@ -263,6 +272,7 @@ function TapClip({
   className,
   wrapClassName,
   strong = false,
+  dismissLayer = false,
   watch,
   resetOn,
 }: {
@@ -271,6 +281,7 @@ function TapClip({
   className: string;
   wrapClassName: string;
   strong?: boolean;
+  dismissLayer?: boolean;
   /** 바뀌면 말줄임을 다시 재요(보이는 글자 · 검색어 — 상자 폭은 그대로인데 글자 폭만 바뀌는 경우) */
   watch: readonly unknown[];
   /** 목록이 바뀌면(새로 불러옴 · 줄이 빠지거나 옮겨짐) 열린 말풍선을 닫아요(반박 리뷰 F6) */
@@ -384,6 +395,23 @@ function TapClip({
       ) : (
         inner
       )}
+      {shown && dismissLayer && (
+        // 닫기만 하는 투명한 막(UG-453 기획 7). 누르는 동안 초점이 옮겨 가지 않게(mousedown) — 초점이 빠지면 onBlur 가 말풍선과 막을
+        // click 전에 지워, 그 click 이 아래 버튼(「메일 재발송」 · ⋮)으로 가요. 막 아래 다른 말줄임 글자는 한 번에 그 말풍선으로(기획 17028)
+        <span
+          className="tap-tip-dismiss"
+          aria-hidden="true"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            setPos(null);
+            const under = document
+              .elementsFromPoint(e.clientX, e.clientY)
+              .find((el) => !wrapRef.current?.contains(el))
+              ?.closest<HTMLElement>(".tap-clip-button");
+            under?.click();
+          }}
+        />
+      )}
       {shown && (
         <span role="tooltip" id={tipId} className="tap-tip" style={{ left: pos.left, top: pos.top, bottom: pos.bottom, maxWidth: pos.maxWidth }}>
           {text}
@@ -452,6 +480,8 @@ function GoneCardCompany({ account, query, resetOn }: { account: Account; query:
       className="card-company card-company-line"
       wrapClassName="card-company-full"
       strong
+      // 휴대폰 카드: 말풍선이 이웃 카드 버튼을 덮어요 — 닫는 누름이 버튼으로 가지 않게(UG-453 기획 7)
+      dismissLayer
       watch={[account.company, query]}
       resetOn={resetOn}
     >
@@ -759,6 +789,8 @@ export default function AccountsPage() {
 
   function onSearch(e?: React.FormEvent) {
     e?.preventDefault();
+    // 터치 기기: 키보드의 검색 · Enter 를 누르면 칸을 빠져 키보드를 내려요 — 결과 목록이 가리지 않게(UG-453 기획 3). PC 는 칸에 그대로
+    if (isTouchPrimary()) searchRef.current?.blur();
     setPage(1);
     setApplied({ keyword, status });
     reload();
@@ -1139,6 +1171,10 @@ export default function AccountsPage() {
               ref={searchRef}
               type="search"
               enterKeyHint="search"
+              // 회사명 · 이메일 검색이라 첫 글자 대문자 · 자동 고침 · 맞춤법 밑줄을 꺼요(UG-453 기획 3)
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => {
@@ -1332,23 +1368,26 @@ export default function AccountsPage() {
                 </strong>
                 <span className="card-status">
                   <DraftStatus />
-                  {/* 드물게 쓰는 「지우기」는 발급 취소처럼 더보기 안에 — 자주 쓰는 이어서 만들기만 카드에 보여요 */}
-                  <CardMore label="지우기" onSelect={() => setDraftDeleteTarget(d)} disabled={resumingId === d.id} />
                 </span>
               </div>
               <div className="card-line">
                 <span className="card-email">
                   {d.email ? <Highlight text={d.email} query={applied.keyword} /> : <span className="dash">—</span>}
                 </span>
-                <button
-                  type="button"
-                  className="link-action"
-                  onClick={() => resumeDraft(d)}
-                  disabled={resumingId !== null}
-                  aria-busy={resumingId === d.id || undefined}
-                >
-                  {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
-                </button>
+                {/* 「이어서 만들기」 오른쪽 끝에 ⋮(UG-453 기획 2) — 위아래로 붙어 있던 ⋮ 와 버튼을 같은 줄에 8px 띄워 잘못 눌리지 않게.
+                    드물게 쓰는 「지우기」는 발급 취소처럼 더보기 안에 — 자주 쓰는 이어서 만들기만 카드에 보여요 */}
+                <span className="card-actions">
+                  <button
+                    type="button"
+                    className="link-action"
+                    onClick={() => resumeDraft(d)}
+                    disabled={resumingId !== null}
+                    aria-busy={resumingId === d.id || undefined}
+                  >
+                    {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
+                  </button>
+                  <CardMore label="지우기" onSelect={() => setDraftDeleteTarget(d)} disabled={resumingId === d.id} />
+                </span>
               </div>
               <div className="card-line">
                 <span className="card-meta">
@@ -1379,17 +1418,22 @@ export default function AccountsPage() {
                   </strong>
                   <span className="card-status">
                     <StatusWithRecord account={a} />
-                    {/* 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
-                    {a.status === "pending" && <CardMore label="발급 취소" onSelect={() => setCancelTarget(a)} />}
                   </span>
                 </div>
                 <div className="card-line">
                   <span className="card-email">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
-                  {canResend(a) && (
-                    <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
-                      <IcReload size={14} />
-                      메일 재발송
-                    </button>
+                  {/* 「메일 재발송」 오른쪽 끝에 ⋮(UG-453 기획 2) — 전에는 ⋮(윗줄)와 재발송(아랫줄) 누르는 영역이 3px 떨어져 재발송을 누르면 ⋮ 메뉴가 열리곤 했어요.
+                      같은 줄에 8px 띄워요. 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
+                  {a.status === "pending" && (
+                    <span className="card-actions">
+                      {canResend(a) && (
+                        <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
+                          <IcReload size={14} />
+                          메일 재발송
+                        </button>
+                      )}
+                      <CardMore label="발급 취소" onSelect={() => setCancelTarget(a)} />
+                    </span>
                   )}
                 </div>
                 <div className="card-line">
@@ -2141,7 +2185,14 @@ function CreateDialog({
   const [photo, setPhoto] = useState<string | null>(draftPhoto);
   const [viewingPhoto, setViewingPhoto] = useState(false);
   // 커서가 있는 칸(칩 규칙 3). 칩을 누르면 칸에서 초점이 빠질 수 있어서(아이패드) 방금 빠진 칸도 커서로 봐요.
-  const cursor = useRef<{ field: ScanField; blurredAt: number | null } | null>(null);
+  // virtual = 초점 없이 정한 대상 칸(UG-453 기획 5) — 터치 기기에서 칩을 넣은 뒤 · 명함을 읽은 뒤 다음 빈 칸. 키보드를 올리지 않으려고 초점은 주지 않아요.
+  //   칸을 직접 누르면(초점) 그 칸으로 바뀌어요. 화면에는 chipTarget 으로 그 칸을 진하게 보여 줘요(.input-box.is-target)
+  const [chipTarget, setChipTarget] = useState<ScanField | null>(() =>
+    draft && isTouchPrimary() && scanFromDraft(draft.chips) ? nextChipTarget(null, null, { company, name, email, phone }) : null,
+  );
+  const cursor = useRef<{ field: ScanField; blurredAt: number | null; virtual?: boolean } | null>(
+    chipTarget ? { field: chipTarget, blurredAt: null, virtual: true } : null,
+  );
   // 명함 읽기가 끝났을 때의 칸 값 — 읽는 동안(수 초) 직원이 친 값을 보려고 늘 최신으로 둬요(onPhoto 는 누를 때의 값만 알아요)
   const latestValues = useRef<ScanValues>({ company, name, email, phone });
   useEffect(() => {
@@ -2180,7 +2231,7 @@ function CreateDialog({
   // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때.
   // 「작성 중」 저장 판단도 같아요 — 확인한 값은 의심이 아닌 주소처럼 「새 계정」으로 확인되면 남겨요(기획 17030 결정)
   const suspectBlocked = !!scan && isUnconfirmedSuspect(trimmed, scan.chips, confirmedEmail);
-  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect)
+  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect, PC 만)
   const focusAfterConfirm = useRef(false);
   useEffect(() => {
     if (!focusAfterConfirm.current) return;
@@ -2835,6 +2886,11 @@ function CreateDialog({
   const phoneShown = fix?.name ? (fix.phone ?? "") : !fix && pending ? "" : phone;
   // 칩을 넣지 않을 칸(잠긴 칸) — 그 칸에 연결된 칩은 「아직 안 씀」으로 보여요
   const lockedFields: ScanField[] = [...(companyLocked ? (["company"] as const) : []), ...(personLocked ? (["name", "phone"] as const) : [])];
+  /** 다음 칩이 들어갈 칸을 진하게(UG-453 기획 5) — 터치 기기에서 초점 없이 정한 대상 칸. 읽은 줄(칩)이 보일 때만 */
+  const targetClass = (field: ScanField) => (scan && !fix && chipTarget === field && !lockedFields.includes(field) ? " is-target" : "");
+  // 터치 기기 — 칩 안내 문구 · 낭독기 대상 칸 알림(UG-453 리뷰 m2 · nit)
+  const touchPrimary = isTouchPrimary();
+  const targetLabel = chipTarget && targetClass(chipTarget) ? CHIP_TARGET_LABEL[chipTarget] : null;
 
   /** 이메일 칸 값 바꾸기 — 직접 칠 때와 명함 · 칩으로 넣을 때가 같은 정리를 해요(앞 기록의 안내가 남지 않게). */
   // companyNow = 지금 회사명 칸 값(명함으로 함께 채울 때는 새 값 — 옛 기록 회사명이 명함 회사명을 덮지 않게)
@@ -2860,10 +2916,13 @@ function CreateDialog({
   /**
    * 「명함과 같은 주소예요」(UG-451 기획 17030) — 지금 칸 값을 직원이 명함과 견줘 맞다고 확인했어요. 그 값 그대로인 동안 경고 · 막음을 풀어요.
    * 버튼이 사라지니 초점은 이메일 칸으로 돌려요(기획 17072-2) — 실행 버튼으로 옮기면 Enter 두 번에 바로 메일이 나가요.
+   * 터치 기기는 이메일 칸에 초점을 주지 않아요(UG-453 리뷰 m3) — 키보드가 올라오고 이메일 칸이 칩 대상이 되어 다음 글자 칩이 확인한 주소를 덮어요.
+   * 대신 다음 칩이 들어갈 칸을 다시 골라요.
    */
   function confirmSuspect() {
     setConfirmedEmail(email);
-    focusAfterConfirm.current = true;
+    if (isTouchPrimary()) moveChipTarget(nextChipTarget(null, null, { company, name, email, phone }, lockedFields));
+    else focusAfterConfirm.current = true;
   }
 
   /**
@@ -2910,27 +2969,55 @@ function CreateDialog({
 
   const onFieldFocus = (field: ScanField) => {
     cursor.current = { field, blurredAt: null };
+    setChipTarget(null); // 초점이 간 칸은 칸 테두리(초점)로 보여요
   };
   /** at = 이벤트 시각(e.timeStamp) */
   const onFieldBlur = (field: ScanField, at: number) => {
-    if (cursor.current?.field === field) cursor.current = { field, blurredAt: at };
+    if (cursor.current?.field === field && !cursor.current.virtual) cursor.current = { field, blurredAt: at };
   };
   /** 지금(now = 이벤트 시각) 커서가 있는 칸. 칩을 눌러 방금(0.5초 안) 빠진 칸도 커서로 봐요 — 다른 곳을 눌러 빠졌으면 커서 없음. */
   function cursorField(now: number): ScanField | null {
     const c = cursor.current;
     if (!c) return null;
+    // 초점 없이 정한 대상 칸은 그 칸이 잠기지 않았으면 그대로(잠긴 칸이면 칩 규칙의 빈 칸 고르기로)
+    if (c.virtual) return lockedFields.includes(c.field) ? null : c.field;
     return c.blurredAt === null || now - c.blurredAt < 500 ? c.field : null;
+  }
+
+  /**
+   * 다음 칩이 들어갈 칸으로 커서를 옮겨요(UG-453 기획 5). PC 는 그 칸에 초점(전처럼 커서가 보여요).
+   * 터치 기기는 키보드가 올라와 칩을 가리지 않게 초점을 주지 않고 그 칸만 진하게 보여 줘요 — 다른 칸에 키보드가 올라와 있었으면 내려요(두 칸이 함께 진해 보이지 않게).
+   * field = null(다 참)이면 PC 는 초점을 그대로 두고, 터치 기기는 진하게 보인 칸을 지워요.
+   */
+  function moveChipTarget(field: ScanField | null) {
+    if (!isTouchPrimary()) {
+      if (field) fieldRef[field].current?.focus();
+      return;
+    }
+    const active = document.activeElement;
+    const target = field ? fieldRef[field].current : null;
+    if (active instanceof HTMLInputElement && active !== target && Object.values(fieldRef).some((r) => r.current === active)) active.blur();
+    if (field) cursor.current = { field, blurredAt: null, virtual: true };
+    else if (cursor.current?.virtual) cursor.current = null;
+    setChipTarget(field);
+  }
+  /** 명함을 다시 읽으면 커서 · 진하게 보인 칸을 지워요 */
+  function clearChipTarget() {
+    cursor.current = null;
+    setChipTarget(null);
   }
 
   function onChip(chip: Chip, now: number) {
     if (!scan) return;
     const at = cursorField(now);
-    const r = tapChip(chip, scan.links, { company, name, email, phone }, at, lockedFields);
+    const values = { company, name, email, phone };
+    const r = tapChip(chip, scan.links, values, at, lockedFields);
     setScan({ ...scan, links: r.links });
     if (r.set) putField[r.set.field](r.set.value);
-    // 커서는 있던 칸에 그대로(메일 · 전화 칩이 다른 칸에 들어가도) — 다음 칩도 같은 칸을 고를 수 있게
-    const focus = r.focus ?? at;
-    if (focus) fieldRef[focus].current?.focus();
+    // 넣었으면 다음 빈 칸으로(UG-453 기획 5 — 전에는 커서가 있던 칸에 남아 이름 칸에 회사명이 들어갔어요).
+    // 메일 · 전화 칩이 제 칸에 들어갔으면 비어 있는 커서 칸은 그대로. 넣지 않았으면 칩 규칙이 정한 칸(없으면 있던 칸)
+    const next = r.set ? nextChipTarget(r.set, at, { ...values, [r.set.field]: r.set.value }, lockedFields) : (r.focus ?? at);
+    moveChipTarget(next);
   }
 
   /**
@@ -2982,7 +3069,7 @@ function CreateDialog({
         else putField.phone("");
       }
       setScan(null);
-      cursor.current = null;
+      clearChipTarget();
       setEmailMissing(null);
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
       // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저)
@@ -3000,14 +3087,14 @@ function CreateDialog({
       else putField.phone(value);
       return true;
     };
-    fill("phone");
+    const phoneFilled = fill("phone");
     // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기는 회사명 칸이 비었을 때만 채워요
     const emailFilled = fill("email");
     // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요
     setScan({ chips: result.chips, links });
     // 앞 명함과 견줘 한 「명함과 같은 주소예요」 확인은 새 명함에는 쓰지 않아요
     setConfirmedEmail(null);
-    cursor.current = null;
+    clearChipTarget();
     // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
     // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 이메일 칸 아래 안내가 따로 떠요.
     // 칩이 생겼으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 위 안내와 겹치지 않게 칸 아래 안내 · 커서는 찾은 경우만.
@@ -3025,8 +3112,19 @@ function CreateDialog({
     const others = chipEmailAddresses(result.chips).filter((address) => address !== result.values.email);
     if (others.length > 0) void checkChipEmails(others);
     setScanDone((n) => n + 1); // 읽은 값 · 사진을 바로 「작성 중」에 남겨요(UG-451 기획 17009)
-    // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4)
-    if (missing) emailRef.current?.focus();
+    // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4). 터치 기기는 초점 없이(키보드가 칩 · 사진을 가리지 않게) 대상 칸만 진하게 —
+    // 메일을 채웠으면 차례대로 첫 빈 칸(대개 회사명)을 진하게 보여 줘요(UG-453 기획 4 · 5)
+    if (!isTouchPrimary()) {
+      if (missing) emailRef.current?.focus();
+      return;
+    }
+    const filledValues: ScanValues = {
+      company: now.company,
+      name: now.name,
+      email: emailFilled ? result.values.email : now.email,
+      phone: phoneFilled ? result.values.phone : now.phone,
+    };
+    moveChipTarget(missing ? "email" : nextChipTarget(null, null, filledValues, lockedFields));
   }
 
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
@@ -3081,7 +3179,8 @@ function CreateDialog({
   }
 
   return (
-    <Dialog title="Gate 계정 만들기" onClose={close} closable={!sending && !keepingDraft} wide>
+    // 터치 기기는 열릴 때 회사명 칸에 초점을 주지 않아요(UG-453 기획 4) — 첫 할 일은 명함 찍기라 키보드가 화면을 가리지 않게
+    <Dialog title="Gate 계정 만들기" onClose={close} closable={!sending && !keepingDraft} wide touchInputFocus={false}>
       <form onSubmit={onSubmit} onKeyDown={onFormKeyDown} noValidate>
         {/* 「작성 중」 저장을 기다리는 동안(keepingDraft)은 칸 · 버튼 · 칩 · 사진을 모두 잠가요 — 저장한 값과 화면 값이 달라지지 않게(UG-451 반박 리뷰) */}
         <fieldset className="dialog-form" disabled={keepingDraft}>
@@ -3093,7 +3192,9 @@ function CreateDialog({
             {scan ? (
               <>
                 <div className="scan-head">
-                  <span className="scan-title">명함에서 읽은 줄 · 누르면 커서가 있는 칸에 들어갑니다</span>
+                  <span className="scan-title">
+                    명함에서 읽은 줄 · {touchPrimary ? "누르면 진하게 표시된 칸에 들어갑니다" : "누르면 커서가 있는 칸에 들어갑니다"}
+                  </span>
                   <button
                     type="button"
                     className="btn btn-outline btn-sm"
@@ -3127,6 +3228,12 @@ function CreateDialog({
                     })}
                   </div>
                 </div>
+                {/* 터치 기기에서 진하게 보인 대상 칸을 낭독기에도 알려요(UG-453 리뷰 m2) */}
+                {touchPrimary && (
+                  <span className="visually-hidden" aria-live="polite">
+                    {targetLabel ? `다음 줄은 ${targetLabel} 칸에 들어갑니다` : ""}
+                  </span>
+                )}
                 {/* 다시 읽는 동안에는 지난 결과(「명함에서 읽었습니다…」) 대신 기다림 안내 — 낭독기가 읽게 같은 상태 줄에 */}
                 <p className="help" role="status">
                   {scanning ? scanWaitText : scanFailed ? scanFailedText : SCAN_DONE}
@@ -3146,7 +3253,17 @@ function CreateDialog({
                 </button>
                 {/* 읽는 동안(N2)은 안내 아래에 기다림 안내를 한 줄 더 — 둘 다 상태 줄 안이라 낭독기가 읽어요 */}
                 <div className="scan-status" role="status">
-                  <p className="help">{scanFailed ? scanFailedText : SCAN_HELP}</p>
+                  <p className="help">
+                    {scanFailed ? (
+                      scanFailedText
+                    ) : (
+                      // 휴대폰은 한 줄 안내(UG-453 기획 6) — 폭에 따라 하나만 보여요(globals.css)
+                      <>
+                        <span className="scan-help-long">{SCAN_HELP}</span>
+                        <span className="scan-help-short">{SCAN_HELP_SHORT}</span>
+                      </>
+                    )}
+                  </p>
                   {scanning && <p className="help">{scanWaitText}</p>}
                 </div>
               </>
@@ -3159,7 +3276,7 @@ function CreateDialog({
             <label htmlFor="company" className="t-body-200-b">
               회사명
             </label>
-            <div className={`input-box${companyError ? " is-error" : ""}${companyLocked ? " is-readonly" : ""}`}>
+            <div className={`input-box${companyError ? " is-error" : ""}${companyLocked ? " is-readonly" : ""}${targetClass("company")}`}>
               <input
                 ref={companyRef}
                 id="company"
@@ -3195,7 +3312,7 @@ function CreateDialog({
             <label htmlFor="person-name" className="t-body-200-b">
               이름
             </label>
-            <div className={`input-box${nameError ? " is-error" : ""}${personLocked ? " is-readonly" : ""}`}>
+            <div className={`input-box${nameError ? " is-error" : ""}${personLocked ? " is-readonly" : ""}${targetClass("name")}`}>
               <input
                 ref={nameRef}
                 id="person-name"
@@ -3231,7 +3348,7 @@ function CreateDialog({
             <label htmlFor="email" className="t-body-200-b">
               고객 이메일
             </label>
-            <div className={`input-box${emailError || suspectBlocked || inUse || closing || fixSame || fixTaken ? " is-error" : ""}`}>
+            <div className={`input-box${emailError || suspectBlocked || inUse || closing || fixSame || fixTaken ? " is-error" : ""}${targetClass("email")}`}>
               <input
                 ref={emailRef}
                 id="email"
@@ -3363,7 +3480,7 @@ function CreateDialog({
             <label htmlFor="person-phone" className="t-body-200-b">
               연락처<span className="field-optional">(선택)</span>
             </label>
-            <div className={`input-box${phoneError ? " is-error" : ""}${personLocked ? " is-readonly" : ""}`}>
+            <div className={`input-box${phoneError ? " is-error" : ""}${personLocked ? " is-readonly" : ""}${targetClass("phone")}`}>
               <input
                 ref={phoneRef}
                 id="person-phone"

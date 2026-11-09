@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { IcArrowDown, IcCheck, IcInputClose } from "./icons";
+import { isTouchPrimary } from "@/lib/pointer";
 
 /** inverse = 어두운 바탕(로그인)용: 흰색 로고 + 반전 배지 */
 export function Brand({ inverse = false }: { inverse?: boolean }) {
@@ -19,6 +20,8 @@ let dialogOpener: HTMLElement | null = null;
 /**
  * 확인 · 입력 창. 닫기 ✕는 두지 않아요 — 「취소」, Esc, 창 바깥 누르기로 닫혀요.
  * 열리면 data-autofocus 가 붙은 버튼 → 첫 입력 칸 → 실행 버튼 순으로 초점이 가요.
+ * touchInputFocus = false 면 손가락으로 쓰는 기기(pointer: coarse)에서는 입력 칸에 초점을 주지 않고 창 자체에 둬요(UG-453 기획 4 —
+ * 계정 만들기 창은 명함 찍기가 먼저인데 안드로이드 키보드가 올라와 화면을 가렸어요). PC 는 그대로 첫 입력 칸.
  * 창 안에서만 Tab 이 돌고, 닫히면 창을 연 버튼으로 초점이 돌아가요.
  */
 export function Dialog({
@@ -26,6 +29,7 @@ export function Dialog({
   onClose,
   closable = true,
   wide = false,
+  touchInputFocus = true,
   children,
 }: {
   title: string;
@@ -33,6 +37,8 @@ export function Dialog({
   closable?: boolean;
   /** 칸을 두 줄로 나란히 두는 창(계정 만들기 — 회사명 · 이름 / 이메일 · 연락처)은 조금 넓게 */
   wide?: boolean;
+  /** 터치 기기에서도 열릴 때 첫 입력 칸에 초점을 줄지(기본 그대로) — false 면 키보드가 저절로 올라오지 않아요 */
+  touchInputFocus?: boolean;
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -121,17 +127,28 @@ export function Dialog({
     const active = document.activeElement as HTMLElement | null;
     if (active && active !== document.body && !active.closest(".dialog")) dialogOpener = active;
     const el = ref.current;
-    (
-      el?.querySelector<HTMLElement>("[data-autofocus]") ??
-      el?.querySelector<HTMLElement>("input:not([readonly])") ??
-      el?.querySelector<HTMLElement>(".dialog-actions button:last-child")
-    )?.focus();
+    // 터치 기기에서 입력 칸에 초점을 주지 않는 창 — 창 자체에 둬요(낭독기가 창을 읽고, Tab 은 창 안에서 시작해요).
+    // 창이 초점을 받을 수 있는 것은 이때 한 번뿐 — 초점이 창을 떠나면 tabindex 를 지워, 뒤에 창 빈 곳을 눌러도 칸에서 초점(키보드)이 빠지지 않게 전과 같아요
+    const skipInput = !touchInputFocus && isTouchPrimary() && !el?.querySelector("[data-autofocus]");
+    if (el && skipInput) {
+      el.tabIndex = -1;
+      el.addEventListener("blur", () => el.removeAttribute("tabindex"), { once: true });
+      el.focus();
+    } else {
+      (
+        el?.querySelector<HTMLElement>("[data-autofocus]") ??
+        el?.querySelector<HTMLElement>("input:not([readonly])") ??
+        el?.querySelector<HTMLElement>(".dialog-actions button:last-child")
+      )?.focus();
+    }
     return () => {
       // 마지막 창이 닫히면 연 버튼으로(메뉴 안 버튼처럼 사라졌으면 그대로)
       if (document.querySelector(".dialog")) return;
       if (dialogOpener?.isConnected) dialogOpener.focus();
       dialogOpener = null;
     };
+    // 창이 열릴 때 한 번만 — touchInputFocus 는 창마다 정해진 값이에요
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** Tab 이 창 밖(뒤 화면)으로 나가지 않게 처음 ↔ 끝을 이어요. */
@@ -143,7 +160,8 @@ export function Dialog({
     if (items.length === 0) return;
     const first = items[0];
     const last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    // 창 자체에 초점이 있을 때(터치 기기에서 열림) Shift+Tab 도 창 안 마지막으로
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) {
       e.preventDefault();
       last.focus();
     } else if (!e.shiftKey && document.activeElement === last) {
@@ -162,7 +180,14 @@ export function Dialog({
 
   return (
     <div ref={scrimRef} className="scrim" onMouseDown={(e) => e.target === e.currentTarget && closable && onClose()}>
-      <div ref={ref} className={`dialog${wide ? " dialog--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={trapTab}>
+      <div
+        ref={ref}
+        className={`dialog${wide ? " dialog--wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dialog-title"
+        onKeyDown={trapTab}
+      >
         <h2 id="dialog-title" className="dialog-title">
           {title}
         </h2>
