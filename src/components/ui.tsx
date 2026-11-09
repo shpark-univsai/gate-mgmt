@@ -58,16 +58,22 @@ export function Dialog({
   }, []);
 
   // 터치 기기(휴대폰 · 아이패드): 칸에 초점이 가면 그 칸과 칸 아래 안내(이미 사용 중 · 비밀번호 링크 · 의심 주소 경고 등)를 보이게 스크롤해요
-  // (UG-451 기획 17073-6). 키보드가 올라와 보이는 영역이 줄어든 뒤(visualViewport resize — 위 fit 이 먼저 창 높이를 맞춰요)와
-  // 칸 아래 안내가 늘거나 줄 때(ResizeObserver)도 다시 맞춰요. 휴대폰은 맨 아래 버튼 줄만큼 비워 두고 맞춰요(.scrim scroll-padding-bottom).
+  // (UG-451 기획 17073-6). 칸 아래 안내가 늘거나 줄 때(ResizeObserver)도 다시 맞춰요. 휴대폰은 맨 아래 버튼 줄만큼 비워 두고 맞춰요(.scrim scroll-padding-bottom).
   // 칸 묶음(.field)을 먼저, 그다음 칸 자체를 가장 가까운 자리로 — 묶음이 보이는 영역보다 길어도 칸은 꼭 보여요.
+  // 키보드가 올라오는 동안만 다시 맞춰요: 초점이 간 뒤 1초 안에, 보이는 영역이 줄어들 때(visualViewport resize — 위 fit 이 먼저 창 높이를 맞춰요)와
+  // 400ms 뒤 한 번 더. 직원이 명함 사진 · 칩과 견주려고 창을 만지거나 스크롤하기 시작하면(touchstart · wheel) 남은 맞춤은 모두 취소해요 —
+  // 안드로이드 주소창이 접히는 resize 따위로 보던 자리에서 칸으로 끌려가지 않게.
   useEffect(() => {
     const dialog = ref.current;
-    if (!dialog || !window.matchMedia("(pointer: coarse)").matches) return;
+    const scrim = scrimRef.current;
+    if (!dialog || !scrim || !window.matchMedia("(pointer: coarse)").matches) return;
     const vv = window.visualViewport;
+    const REALIGN_WINDOW_MS = 1000;
     let input: HTMLElement | null = null;
     let field: HTMLElement | null = null;
     let timer = 0;
+    let realignUntil = 0;
+    let lastHeight = vv?.height ?? 0;
     const reveal = () => {
       if (!input || document.activeElement !== input) return;
       field?.scrollIntoView({ block: "nearest" });
@@ -81,15 +87,30 @@ export function Dialog({
       field = t.closest<HTMLElement>(".field") ?? t;
       observer?.disconnect();
       observer?.observe(field);
+      realignUntil = performance.now() + REALIGN_WINDOW_MS;
       // 키보드가 다 올라온 뒤(resize 가 오지 않는 브라우저도) 한 번 더
       window.clearTimeout(timer);
       timer = window.setTimeout(reveal, 400);
     };
+    const onViewportResize = () => {
+      const height = vv?.height ?? 0;
+      const shrank = height < lastHeight;
+      lastHeight = height;
+      if (shrank && performance.now() < realignUntil) reveal();
+    };
+    const onUserScroll = () => {
+      realignUntil = 0;
+      window.clearTimeout(timer);
+    };
     dialog.addEventListener("focusin", onFocusIn);
-    vv?.addEventListener("resize", reveal);
+    scrim.addEventListener("touchstart", onUserScroll, { passive: true });
+    scrim.addEventListener("wheel", onUserScroll, { passive: true });
+    vv?.addEventListener("resize", onViewportResize);
     return () => {
       dialog.removeEventListener("focusin", onFocusIn);
-      vv?.removeEventListener("resize", reveal);
+      scrim.removeEventListener("touchstart", onUserScroll);
+      scrim.removeEventListener("wheel", onUserScroll);
+      vv?.removeEventListener("resize", onViewportResize);
       observer?.disconnect();
       window.clearTimeout(timer);
     };

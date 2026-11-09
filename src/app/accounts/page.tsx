@@ -3163,12 +3163,12 @@ function CreateDialog({
               <input
                 ref={companyRef}
                 id="company"
-                // 칸 이동 · 입력 도움(UG-451 기획 17073): Enter = 다음 칸, 자동 완성 · 맞춤법 고치기 끔, 서버와 같은 길이 한도
+                // 칸 이동 · 입력 도움(UG-451 기획 17073): Enter = 다음 칸, 자동 완성 · 맞춤법 고치기 끔.
+                // 길이는 maxLength 로 자르지 않고 「40자까지」 안내로 알려요 — 붙여 넣은 글이 조용히 잘리거나 한글 입력 마지막 글자가 깨지지 않게.
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
                 enterKeyHint="next"
-                maxLength={COMPANY_MAX}
                 // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
                 readOnly={companyLocked}
                 placeholder={!fix && pending ? (pending.company ? undefined : "이미 만든 계정의 회사명 그대로") : "회사명"}
@@ -3204,7 +3204,6 @@ function CreateDialog({
                 autoCapitalize="words"
                 spellCheck={false}
                 enterKeyHint="next"
-                maxLength={NAME_MAX}
                 readOnly={personLocked}
                 placeholder={!fix && pending ? "이미 만든 계정 그대로" : "고객 이름"}
                 value={nameShown}
