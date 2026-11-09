@@ -22,6 +22,7 @@ import {
   type ClosureTarget,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
+import { isTouchPrimary } from "@/lib/pointer";
 import { fmtDate, fmtFull, handle, kstToday, pageItems } from "@/lib/format";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -209,6 +210,8 @@ export default function ClosuresPage() {
 
   function onSearch(e?: React.FormEvent) {
     e?.preventDefault();
+    // 터치 기기: 키보드의 검색 · Enter 를 누르면 칸을 빠져 키보드를 내려요 — 결과 목록이 가리지 않게(UG-453 기획 3). PC 는 칸에 그대로
+    if (isTouchPrimary()) searchRef.current?.blur();
     setApplied({ keyword: keyword.trim(), status });
     setPage(1);
   }
@@ -299,6 +302,10 @@ export default function ClosuresPage() {
               ref={searchRef}
               type="search"
               enterKeyHint="search"
+              // 회사명 · 이메일 검색이라 첫 글자 대문자 · 자동 고침 · 맞춤법 밑줄을 꺼요(UG-453 기획 3)
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => {

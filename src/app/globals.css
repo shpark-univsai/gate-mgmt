@@ -132,6 +132,9 @@ p {
 .input-box.is-error { border-color: var(--danger-400); }
 .input-box.is-readonly { background: var(--gray-50); } /* 이미 만든 계정의 회사명 — 고칠 수 없어요 */
 .input-box.is-readonly input { color: var(--gray-500); }
+/* 다음 칩이 들어갈 칸(UG-453 기획 5) — 터치 기기에서 초점(키보드) 없이 정한 대상 칸. 초점 테두리와 같은 진한 선을 안쪽 1px 더 그려 2px 로 */
+.input-box.is-target:not(.is-error) { border-color: var(--gray-900); box-shadow: inset 0 0 0 1px var(--gray-900); }
+.input-box.is-target.is-error { box-shadow: inset 0 0 0 1px var(--danger-400); }
 /* 글자를 받는 영역이 칸 전체를 채워요(눌리는 곳 · 자동 완성 색이 칸과 같게) */
 .input-box input {
   flex: 1;
@@ -176,6 +179,8 @@ p {
 .scan { display: flex; flex-direction: column; gap: 8px; }
 .scan-status { display: flex; flex-direction: column; gap: 8px; } /* 안내 · 읽는 중 안내(N2) — 한 상태 줄(role=status) 안에 */
 .scan-button { width: 100%; }
+/* 명함 찍기 안내 — PC · 아이패드는 긴 안내, 휴대폰은 한 줄(UG-453 기획 6, 아래 휴대폰 묶음) */
+.scan-help-short { display: none; }
 .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scan-title { flex: 1; min-width: 0; color: var(--gray-700); font-weight: 600; }
 .scan-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -503,6 +508,8 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
   overflow-wrap: anywhere;
   text-align: left;
 }
+/* 휴대폰 카드 말풍선이 열린 동안 화면 전체를 덮는 투명한 막(UG-453 기획 7) — 말풍선(40) 바로 아래. 누르면 닫기만 해요 */
+.tap-tip-dismiss { position: fixed; inset: 0; z-index: 39; -webkit-tap-highlight-color: transparent; }
 /* 발급 취소 · 해지됨 상태 칸: 「● 발급 취소」 아래 처리 기록 — 점(8) + 사이(6) = 14 들여 써 글자 시작에 맞춰요 */
 .status-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; max-width: 100%; }
 .status-stack-record { display: block; max-width: 100%; padding-left: 14px; white-space: nowrap; overflow-wrap: normal; }
@@ -622,6 +629,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
   gap: 24px;
 }
 .dialog--wide { max-width: 640px; } /* 칸 두 개를 나란히(UG-431) */
+.dialog:focus { outline: none; } /* 터치 기기에서 입력 칸 대신 창에 초점을 둘 때(UG-453 기획 4) — 창 테두리에 초점 선을 그리지 않아요 */
 .dialog-title { margin: 0; font-size: 26px; line-height: 40px; font-weight: 800; }
 .dialog-form { display: flex; flex-direction: column; gap: 24px; }
 /* 계정 만들기 창은 fieldset 이 칸을 묶어요(저장 중 한꺼번에 잠그려고) — 기본 테두리 · 여백을 지워요 */
@@ -684,9 +692,10 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .login { padding: 24px 16px 72px; }
   .login-card { gap: 16px; }
   .login-card .field { gap: 6px; }
-  .login-card .input-box { height: 40px; }
+  /* 손가락으로 누르는 칸 · 버튼은 44 이상(UG-453 기획 1) — 입력 칸 46(글자 받는 영역 44) · 버튼 48 */
+  .login-card .input-box { height: 46px; }
   .login-card .input-box:focus-within { border-color: var(--gray-0); }
-  .login-card .btn { height: 40px; }
+  .login-card .btn { height: 48px; }
   .login-card .help { color: var(--gray-400); }
 
   .input-box input { font-size: 16px; line-height: 24px; } /* 16px보다 작으면 iPhone이 칸을 누를 때 화면을 확대해요 */
@@ -701,6 +710,8 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .toolbar .btn,
   .export-button { display: none; }
   .avatar { width: 28px; height: 28px; font-size: 12px; }
+  /* 프로필 버튼은 동그라미(28) 둘레까지 44×44 로 눌려요(UG-453 기획 2) — 동그라미 자리는 그대로(오른쪽 8 은 화면 여백 안으로) */
+  .profile-button { width: 44px; height: 44px; justify-content: center; margin-right: -8px; }
   /* 휴대폰 위쪽 띠: 로고 · 배지를 한 단계 작게 */
   .app-nav .brand { gap: 6px; }
   .app-nav .brand img { width: 107px; height: 16px; }
@@ -711,18 +722,19 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .profile-menu-item { height: 40px; }
   .content { padding: 16px; gap: 12px; }
   .page-title h1 { font-size: 20px; line-height: 28px; }
+  .page-actions .btn { height: 44px; } /* 「계정 만들기」 · 「계정 해지」 32 → 44(UG-453 기획 2) */
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
   .list-errors { margin-bottom: 0; }
-  .search { width: 100%; height: 40px; }
+  .search { width: 100%; height: 44px; } /* UG-453 기획 1 — 40 → 44 */
   .status-chips { display: flex; gap: 8px; width: 100%; overflow-x: auto; scrollbar-width: none; }
   .status-chips.has-more { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); } /* 오른쪽에 칩이 더 있으면 끝을 흐리게 — 옆으로 밀 수 있다는 표시 */
   .status-chips::-webkit-scrollbar { display: none; }
-  .status-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border: 1px solid var(--gray-200); border-radius: var(--radius-control); background: var(--gray-0); color: var(--gray-700); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+  .status-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 44px; /* UG-453 기획 2 — 32 → 44 */ padding: 0 12px; border: 1px solid var(--gray-200); border-radius: var(--radius-control); background: var(--gray-0); color: var(--gray-700); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
   .status-chip-count { font-weight: 400; color: var(--gray-500); }
   .status-chip.is-on { background: var(--gray-200); border-color: transparent; color: var(--gray-900); } /* 선택은 바탕만, 테두리 없음 · 검정은 「계정 만들기」에만 */
   .empty { padding: 48px 16px; }
   .search input { font-size: 16px; }
-  .search-clear { width: 38px; height: 38px; margin-right: -13px; } /* 누르는 영역 38, ✕ 자리는 그대로 */
+  .search-clear { width: 44px; height: 44px; margin-right: -16px; } /* 누르는 영역 44(UG-453), ✕ 자리는 그대로 */
   .count { margin-left: 0; }
 
   .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
@@ -748,18 +760,25 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .card-meta-parts > span { flex: none; }
   .card-meta-parts > .card-meta-who { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .card-status { flex: none; display: inline-flex; align-items: center; gap: 2px; font-size: 14px; line-height: 20px; }
+  /*
+   * 카드 둘째 줄 오른쪽: 「메일 재발송」 · 「이어서 만들기」 + ⋮(UG-453 기획 2). 전에는 ⋮ 가 윗줄(상태 옆)에 있어 아랫줄 버튼과 누르는 영역이 3px 떨어졌어요.
+   * 같은 줄에 두고 누르는 영역끼리 8px 띄워요. 누르는 영역은 높이 44 — 줄 높이(20)는 그대로, 위아래 12 는 글자뿐인 윗줄 · 아랫줄 쪽으로(카드 안)
+   */
+  .card-actions { flex: none; display: inline-flex; align-items: center; gap: 8px; }
   .card-more { position: relative; display: inline-flex; }
-  .card-more-button { display: flex; align-items: center; justify-content: center; width: 40px; height: 36px; margin: -13px -14px -3px -6px; padding: 10px 0 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 40×36, 아이콘 자리는 그대로 · 아래로는 3px만 넘쳐 「재발송」과 안 겹침 */
-  .profile-menu.card-more-menu { top: calc(100% + 4px); right: 0; min-width: 140px; }
+  .card-more-button { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -12px -13px -12px 0; padding: 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 44×44, 아이콘(18)은 카드 오른쪽 끝에 맞춰요(오른쪽 13 은 화면 여백 16 안으로) */
+  .profile-menu.card-more-menu { top: calc(100% + 14px); right: 0; min-width: 140px; } /* ⋮ 누르는 영역 바로 아래 */
   .link-action {
     display: inline-flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 4px;
     flex: none;
+    min-width: 44px; /* 짧은 글자(「철회」)도 44 폭 — 남는 폭은 왼쪽(글자뿐인 이메일 쪽)으로 */
     border: 0;
     background: none;
-    padding: 0 0 14px; /* 누르는 영역 34, 화면 모양은 글자 높이 · 위는 ⋮ 자리라 아래로 넓힘 */
-    margin: 0 0 -14px;
+    padding: 12px 0; /* 누르는 영역 높이 44, 화면 모양은 글자 높이 그대로 */
+    margin: -12px 0;
     font-size: 14px;
     line-height: 20px;
     font-weight: 600;
@@ -770,12 +789,11 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
   .pagination.is-single { display: none; } /* 한 페이지뿐이면 휴대폰은 번호 줄을 감춰요 */
-  /* 작은 버튼은 보이는 크기 그대로, 누르는 영역만 40 가까이 */
-  .page-btn,
-  .profile-button { position: relative; }
-  .page-btn::after { content: ""; position: absolute; inset: -6px -4px; } /* 36×40 · 버튼 사이 8px라 옆과 안 겹침 */
-  .profile-button::after { content: ""; position: absolute; inset: -6px; }
-  .eye-toggle { width: 40px; height: 38px; margin-right: 2px; }
+  /* 쪽 번호(UG-453 기획 2): 28 → 32×36, 누르는 영역은 36×44. 한 줄에 버튼이 9개(◀ · 번호 7 · ▶)까지라 폭은 360 화면(328)에 맞춰 사이를 4 로 */
+  .pages { gap: 4px; }
+  .page-btn { position: relative; min-width: 32px; height: 36px; }
+  .page-btn::after { content: ""; position: absolute; inset: -4px -2px; } /* 36×44 · 버튼 사이 4px라 옆과 안 겹침 */
+  .eye-toggle { width: 44px; height: 44px; margin-right: 0; } /* 칸 안쪽 높이 44 에 맞춰 · 눈 아이콘 자리는 그대로 */
   .pagination-range,
   .page-size { display: none; }
 
@@ -790,14 +808,22 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   /* 읽은 줄(칩)은 손가락으로 누르기 좋게 44 높이 · 8 간격(UG-451 기획 17073-10) */
   .scan-chip { height: 44px; font-size: 14px; }
   .scan-chips { gap: 8px; }
-  .input-box,
-  .segmented button { height: 40px; }
-  .dialog-actions .btn { flex: 1; height: 40px; }
+  /* 손가락으로 누르는 칸 · 버튼은 44 이상(UG-453 기획 1): 입력 칸 46(글자 받는 영역 44) · 메일 언어 · 창 버튼 44 · 명함 찍기 48 ·
+     명함 다시 찍기 · 「명함과 같은 주소예요」 44 */
+  .input-box { height: 46px; }
+  .segmented button { height: 44px; }
+  .dialog-actions .btn { flex: 1; height: 44px; }
+  .scan-button { height: 48px; }
+  .scan-head .btn,
+  .suspect-confirm { height: 44px; }
+  /* 명함 찍기 안내는 한 줄(UG-453 기획 6) */
+  .scan-help-long { display: none; }
+  .scan-help-short { display: inline; }
   /* 키보드가 올라와 창이 가려져도 버튼은 보이는 영역 맨 아래에 붙어 있게 · 평소 자리와 간격은 그대로 */
   .dialog-actions { position: sticky; bottom: -16px; margin: -12px 0 -16px; padding: 12px 0 16px; background: var(--gray-0); }
-  /* 칸에 초점이 가거나 칸 아래 안내가 늘면 창이 그 칸 · 안내를 보이게 스크롤해요(Dialog) — 그때 위 버튼 줄(40 + 12 + 16 = 68)에
-     가려지지 않게 버튼 줄 높이 + 8 만큼 아래를 비워 두고 맞춰요(UG-451 기획 17073-6) */
-  .scrim { scroll-padding-bottom: 76px; }
+  /* 칸에 초점이 가거나 칸 아래 안내가 늘면 창이 그 칸 · 안내를 보이게 스크롤해요(Dialog) — 그때 위 버튼 줄(44 + 12 + 16 = 72)에
+     가려지지 않게 버튼 줄 높이 + 8 만큼 아래를 비워 두고 맞춰요(UG-451 기획 17073-6 · 버튼 높이 UG-453) */
+  .scrim { scroll-padding-bottom: 80px; }
   .mail-failure-sentence { display: block; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
