@@ -391,7 +391,7 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
   }
 }
 
-/** 첫 로그인 전 계정에 안내 메일을 다시 보내요(새 임시 비밀번호). id = 발급 기록 번호 */
+/** 첫 로그인 전 계정에 안내 메일을 다시 보내요(새 30일 비밀번호 설정 링크, 이전 링크는 무효 — UG-454). id = 발급 기록 번호 */
 export async function resendGuide(id: string, language: MailLanguage): Promise<ResendResult> {
   try {
     const data = await authed<{ ok: boolean; requestedAt?: string; reason?: string | null }>(
@@ -412,7 +412,7 @@ export async function resendGuide(id: string, language: MailLanguage): Promise<R
 }
 
 /**
- * 첫 로그인 전 계정의 발급 취소: 계정 · 데모 프로젝트를 지우고, 보낸 메일의 임시 비밀번호와 체험 링크를 막아요.
+ * 첫 로그인 전 계정의 발급 취소: 계정 · 데모 프로젝트를 지우고, 보낸 메일의 비밀번호 설정 링크와 체험 링크를 막아요.
  * 취소 안내 메일은 보내지 않아요. 목록에는 「발급 취소」 줄로 남고(누가 · 언제), 같은 이메일로 다시 발급할 수 있어요.
  * 만들기 · 다시 보내기 · 발급 취소는 할 때마다 누가 · 언제 했는지 서버가 기록해 둬요(나중에 「관리/보안 이력」에서 보기).
  */
