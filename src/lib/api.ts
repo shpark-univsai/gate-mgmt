@@ -60,6 +60,8 @@ export type Account = {
   phone?: string;
   /** 해지 중(closing)일 때 원래 상태 — 그 줄의 동작을 꺼 둔 채 보여 줘요 */
   statusBeforeClosing?: "pending" | "in_use";
+  /** 계정을 만들 때 함께 보낸 명함 사진이 서버에 있어요(UG-455) — 목록 ⋮ 「명함 보기」. 예전 서버는 주지 않아요(없으면 메뉴를 숨겨요) */
+  hasCardPhoto?: boolean;
 };
 
 /** 목록 · 내보내기 상태 거르기 — closed_all = 해지 중 + 해지됨(UG-450, 서버 mgmt 같은 값) */
@@ -92,6 +94,8 @@ export type CreateAccountInput = {
   phone?: string;
   /** 「작성 중」 명함을 이어서 만든 창이면 그 번호(UG-431 기획 16864) — 계정이 만들어지면(메일 실패 포함) 서버가 그 명함을 지워요 */
   draftId?: number;
+  /** 창에 있는 명함 사진(UG-455, data: 접두사 없는 base64 JPEG) — 서버가 계정과 함께 남겨 목록 「명함 보기」로 봐요 */
+  photo?: string;
 };
 
 /**
@@ -142,10 +146,11 @@ export type EmailCheck =
   // 해지 중인 계정(UG-443 기획 16908) — 다시 보내지도 새로 만들지도 않아요
   | { status: "closing" };
 
+// photoRejected = 서버가 명함 사진을 받지 않아(너무 큼 · 형식) 사진 없이 한 번 더 보내 만들었어요(UG-455) — 창은 같은 사진을 다시 보내지 않아요
 export type CreateAccountResult =
-  | { ok: true; account: Account; mailSent: true }
+  | { ok: true; account: Account; mailSent: true; photoRejected?: true }
   // 계정은 만들었지만 안내 메일은 못 보냈어요 — 까닭에 따라 목록에서 다시 보내거나 발급 취소해요
-  | { ok: true; account: Account; mailSent: false; mailFailureReason: MailFailureReason }
+  | { ok: true; account: Account; mailSent: false; mailFailureReason: MailFailureReason; photoRejected?: true }
   // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
   // domain = 받는 주소의 도메인이 메일을 받을 수 없어 서버가 계정을 만들지 않음(MGMT-108 — 명함에서 도메인을 잘못 읽은 경우 등)
   // network = 응답 없음 · 시간 초과 · 5xx — 서버가 만들었는지 알 수 없어요(다시 누르면 이미 만든 계정이면 duplicate 로 와요, UG-451)
@@ -218,7 +223,10 @@ export function logout() {
 }
 
 // 발급 취소 · 해지됨 기록은 서버가 고객 정보를 비워 회사명 · 이메일이 null 로 와요(UG-443 기획 16925) — 화면에는 빈 글자로 넘겨요.
-type AccountDto = Omit<Account, "company" | "email" | "createdBy" | "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing"> & {
+type AccountDto = Omit<
+  Account,
+  "company" | "email" | "createdBy" | "cancelledBy" | "cancelledAt" | "mailFailureReason" | "name" | "phone" | "statusBeforeClosing" | "hasCardPhoto"
+> & {
   company: string | null;
   email: string | null;
   /** 만든 직원 이메일 — 서버는 NOT NULL 로 늘 채우지만, 비어 와도 목록이 깨지지 않게 받는다(UG-443 기획 16936) */
@@ -229,6 +237,7 @@ type AccountDto = Omit<Account, "company" | "email" | "createdBy" | "cancelledBy
   mailFailureReason?: MailFailureReason | null;
   name?: string | null;
   phone?: string | null;
+  hasCardPhoto?: boolean | null;
 };
 
 const MAIL_FAILURE_REASONS: readonly string[] = ["temporary", "address", "unknown"] satisfies MailFailureReason[];
@@ -250,6 +259,7 @@ const toAccount = (a: AccountDto): Account => ({
   ...(a.name ? { name: a.name } : {}),
   ...(a.phone ? { phone: a.phone } : {}),
   ...(a.statusBeforeClosing ? { statusBeforeClosing: a.statusBeforeClosing } : {}),
+  ...(a.hasCardPhoto === true ? { hasCardPhoto: true } : {}),
 });
 
 /** 계정 발급 목록. 모든 직원이 만든 계정을 최신순으로, 한 페이지씩(page 는 1부터) 보여 줘요. */
@@ -366,8 +376,22 @@ export async function sendPasswordResetLink(email: string, language: MailLanguag
   }
 }
 
-/** 계정 만들기 — 서버가 계정 · 데모 프로젝트를 만들고 안내 메일을 보내요. 만든 직원은 서버가 로그인 정보로 정해요. */
+/**
+ * 계정 만들기 — 서버가 계정 · 데모 프로젝트를 만들고 안내 메일을 보내요. 만든 직원은 서버가 로그인 정보로 정해요.
+ * 명함 사진(photo)을 서버가 받지 않으면(너무 큼 · 형식 — 계정은 만들지 않은 4xx) 사진 없이 한 번 더 보내요(UG-455) —
+ * 사진 때문에 계정을 못 만드는 일은 없게.
+ */
 export async function createAccount(input: CreateAccountInput): Promise<CreateAccountResult> {
+  const first = await createAccountOnce(input);
+  if (first !== "photo") return first;
+  const rest: CreateAccountInput = { ...input };
+  delete rest.photo;
+  const again = await createAccountOnce(rest);
+  if (again === "photo") return { ok: false, reason: "failed" };
+  return again.ok ? { ...again, photoRejected: true } : again;
+}
+
+async function createAccountOnce(input: CreateAccountInput): Promise<CreateAccountResult | "photo"> {
   try {
     const data = await authed<{
       ok: boolean;
@@ -387,6 +411,31 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
   } catch (e) {
     if (e instanceof ApiError && e.code === RECIPIENT_DOMAIN_UNDELIVERABLE) return { ok: false, reason: "domain" };
     if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) return { ok: false, reason: "network" };
+    if (input.photo && ((e.code && CARD_DRAFT_PHOTO_ERRORS.includes(e.code)) || e.status === 413)) return "photo";
+    return { ok: false, reason: "failed" };
+  }
+}
+
+/** 명함 사진이 없음(MGMT-125) · 그사이 계정이 없어짐(MGMT-101) */
+const CARD_PHOTO_NOT_FOUND: readonly string[] = ["MGMT-125", "MGMT-101"];
+const JPEG_DATA_URL = "data:image/jpeg;base64,";
+
+/** 계정에 남긴 명함 사진(UG-455). src = 화면에 바로 쓰는 data URL, collectedAt = 받은 시각(서버가 주지 않으면 null) */
+export type AccountCardPhotoResult = { ok: true; src: string; collectedAt: string | null } | { ok: false; reason: "not_found" | "failed" };
+
+/**
+ * 목록 ⋮ 「명함 보기」 — 서버가 계정에 남긴 명함 사진을 받아요(UG-455). <img src=주소> 로는 직원 토큰을 붙일 수 없어 API 로 받아요.
+ * 받은 사진은 보기 화면을 연 동안만 상태에 두고 기기에 남기지 않아요(서버도 no-store 로 답해요).
+ * not_found = 사진이 없음(MGMT-125, 그사이 지워짐 등) · 계정이 없어짐 / failed = 서버 · 네트워크 문제
+ */
+export async function getAccountCardPhoto(id: string): Promise<AccountCardPhotoResult> {
+  try {
+    const data = await authed<{ photo?: string | null; collectedAt?: string | null }>("GET", `${MGMT}/accounts/${encodeURIComponent(id)}/card-photo`);
+    const photo = typeof data?.photo === "string" ? data.photo.trim() : "";
+    if (!photo) return { ok: false, reason: "not_found" };
+    return { ok: true, src: photo.startsWith(JPEG_DATA_URL) ? photo : JPEG_DATA_URL + photo, collectedAt: data.collectedAt ?? null };
+  } catch (e) {
+    if (e instanceof ApiError && ((e.code && CARD_PHOTO_NOT_FOUND.includes(e.code)) || (e.status === 404 && !e.code))) return { ok: false, reason: "not_found" };
     return { ok: false, reason: "failed" };
   }
 }

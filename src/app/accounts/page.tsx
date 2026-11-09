@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Dialog, PopupSelect, Toast } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
+import { CardPhotoViewer } from "@/components/card-photo-viewer";
 import { fmtFull, fmtShort, handle, kstParts, pageItems } from "@/lib/format";
 import { FlagKR, FlagUS } from "@/components/flags";
 import { IcArrowLeft, IcArrowRight, IcCamera, IcInputClose, IcMoreVert, IcReload, IcSearch } from "@/components/icons";
@@ -13,6 +14,7 @@ import {
   createAccount,
   deleteCardDraft,
   exportAccounts,
+  getAccountCardPhoto,
   getCardDraft,
   getSummary,
   listAccounts,
@@ -45,7 +47,7 @@ import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
 import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
-import { chipsForDraft, draftField, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
+import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
 import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
 import {
   LOST_CLOCK_SKEW_MS,
@@ -149,6 +151,9 @@ const STATUS_LABEL: Record<AccountStatus, string> = {
 };
 /** 해지 중인 줄의 동작 안내(툴팁) */
 const CLOSING_TIP = "해지 처리 중인 계정입니다";
+
+/** 목록 ⋮ 「명함 보기」를 보여 줄 줄(UG-455) — 서버에 명함 사진이 있고 첫 로그인 전 · 사용 중일 때만(해지 중 · 발급 취소 · 해지됨은 숨겨요, 사용자 결정) */
+const canViewCardPhoto = (a: Account) => a.hasCardPhoto === true && (a.status === "pending" || a.status === "in_use");
 /** 발급 취소 · 해지됨 — 계정이 없어진 기록(고객 정보를 비웠어요). 목록 줄 · 카드가 흐리게 · 누가 · 언제만 보여요. */
 const isGone = (a: Account) => a.status === "cancelled" || a.status === "closed";
 
@@ -684,6 +689,10 @@ export default function AccountsPage() {
   const draftSaves = useRef(new Map<string, Promise<void>>());
   const [resendTarget, setResendTarget] = useState<Account | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Account | null>(null);
+  // 목록 ⋮ 「명함 보기」(UG-455) — 보기 화면을 연 동안만 사진(data URL)을 둬요. src 가 null 이면 받는 중. 닫으면 버려요(기기에 남기지 않아요)
+  const [cardPhoto, setCardPhoto] = useState<{ id: string; src: string | null } | null>(null);
+  // 받는 중에 닫았거나 다른 줄을 열었으면 늦게 온 응답을 버리려고
+  const cardPhotoReq = useRef(0);
   const [toast, setToast] = useState<ToastState>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -766,7 +775,7 @@ export default function AccountsPage() {
   // 표 줄의 ⋮ 메뉴는 목록(계정 줄 · 「작성 중」 줄)이 바뀌면 닫아요
   const listStamp = [rows, draftList] as const;
   // 다른 창이 열려 있는지 — 이어서 만들기 응답이 늦게 와도 창을 겹쳐 열지 않게(응답을 버려요)
-  const modalOpen = !!creating || !!resendTarget || !!cancelTarget || !!draftDeleteTarget;
+  const modalOpen = !!creating || !!resendTarget || !!cancelTarget || !!draftDeleteTarget || !!cardPhoto;
   const modalOpenRef = useRef(modalOpen);
   useEffect(() => {
     modalOpenRef.current = modalOpen;
@@ -999,6 +1008,29 @@ export default function AccountsPage() {
     reload();
     setToast({ title: "작성 중인 명함을 지웠습니다", detail: "명함 사진과 입력한 값을 지웠습니다" });
   }, [reload]);
+
+  /** 목록 ⋮ 「명함 보기」 — 보기 화면을 「불러오는 중」으로 먼저 열고 서버에서 사진을 받아요(UG-455) */
+  const openCardPhoto = useCallback(
+    async (account: Account) => {
+      const req = ++cardPhotoReq.current;
+      setCardPhoto({ id: account.id, src: null });
+      const res = await getAccountCardPhoto(account.id);
+      if (req !== cardPhotoReq.current) return; // 그사이 닫았거나 다른 줄을 열었어요
+      if (res.ok) return setCardPhoto({ id: account.id, src: res.src });
+      setCardPhoto(null);
+      if (res.reason === "not_found") {
+        // 그사이 지워졌어요(고객 요청 삭제 · 해지 등) — 목록을 새로 받아 메뉴도 맞춰요
+        reload();
+        setToast({ tone: "error", title: CARD_PHOTO_TEXT.notFound, detail: CARD_PHOTO_TEXT.notFoundDetail });
+      } else setToast({ tone: "error", title: CARD_PHOTO_TEXT.loadFailed, detail: CARD_PHOTO_TEXT.loadFailedDetail });
+    },
+    [reload],
+  );
+
+  const closeCardPhoto = useCallback(() => {
+    cardPhotoReq.current++;
+    setCardPhoto(null);
+  }, []);
 
   /** 새로 만든 계정이 보이도록 조건을 풀고 첫 페이지를 다시 불러와 그 줄을 잠깐 표시해요. */
   const showCreated = useCallback(
@@ -1323,7 +1355,7 @@ export default function AccountsPage() {
                 <span role="cell">{fmtFull(a.createdAt)}</span>
                 <span role="cell">
                   {a.status === "pending" ? (
-                    // 「메일 재발송」 + ⋮(발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로.
+                    // 「메일 재발송」 + ⋮(명함 보기 · 발급 취소) — UG-450 기획 17007. 1024 폭에서 「발급 취소」 버튼이 잘려 드물게 쓰는 발급 취소는 메뉴 안으로.
                     // ⋮ 는 칸 오른쪽 끝 같은 자리, 글자 버튼은 그 왼쪽(기획 17020) — 버튼이 없는 줄(주소 오류 · 막힘)도 ⋮ 는 같은 자리
                     <span className="row-actions">
                       {canResend(a) && (
@@ -1331,7 +1363,18 @@ export default function AccountsPage() {
                           메일 재발송
                         </button>
                       )}
-                      <RowMenu items={[{ label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) }]} resetOn={listStamp} />
+                      <RowMenu
+                        items={[
+                          ...(canViewCardPhoto(a) ? [{ label: CARD_PHOTO_TEXT.listView, onSelect: () => void openCardPhoto(a) }] : []),
+                          { label: "발급 취소", danger: true, onSelect: () => setCancelTarget(a) },
+                        ]}
+                        resetOn={listStamp}
+                      />
+                    </span>
+                  ) : canViewCardPhoto(a) ? (
+                    // 사용 중이고 명함 사진이 있으면 ⋮ 에 「명함 보기」만(UG-455) — 첫 로그인 전 줄의 ⋮ 와 같은 자리
+                    <span className="row-actions">
+                      <RowMenu items={[{ label: CARD_PHOTO_TEXT.listView, onSelect: () => void openCardPhoto(a) }]} resetOn={listStamp} />
                     </span>
                   ) : a.status === "closing" ? (
                     // 해지 중(UG-443 기획 16908) — 원래 로그인 전이던 줄도 꺼진 버튼 없이 「—」(기획 17020). 마우스를 올리면 까닭
@@ -1339,7 +1382,7 @@ export default function AccountsPage() {
                       —
                     </span>
                   ) : (
-                    // 버튼이 없는 줄(사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
+                    // 버튼이 없는 줄(명함 사진이 없는 사용 중 · 발급 취소 · 해지됨) — 처리 기록은 상태 칸으로 옮겼어요(UG-450 기획 16965)
                     <span className="dash">—</span>
                   )}
                 </span>
@@ -1386,7 +1429,7 @@ export default function AccountsPage() {
                   >
                     {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
                   </button>
-                  <CardMore label="지우기" onSelect={() => setDraftDeleteTarget(d)} disabled={resumingId === d.id} />
+                  <CardMore items={[{ label: "지우기", onSelect: () => setDraftDeleteTarget(d) }]} disabled={resumingId === d.id} />
                 </span>
               </div>
               <div className="card-line">
@@ -1424,7 +1467,7 @@ export default function AccountsPage() {
                   <span className="card-email">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
                   {/* 「메일 재발송」 오른쪽 끝에 ⋮(UG-453 기획 2) — 전에는 ⋮(윗줄)와 재발송(아랫줄) 누르는 영역이 3px 떨어져 재발송을 누르면 ⋮ 메뉴가 열리곤 했어요.
                       같은 줄에 8px 띄워요. 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
-                  {a.status === "pending" && (
+                  {a.status === "pending" ? (
                     <span className="card-actions">
                       {canResend(a) && (
                         <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
@@ -1432,8 +1475,20 @@ export default function AccountsPage() {
                           메일 재발송
                         </button>
                       )}
-                      <CardMore label="발급 취소" onSelect={() => setCancelTarget(a)} />
+                      <CardMore
+                        items={[
+                          ...(canViewCardPhoto(a) ? [{ label: CARD_PHOTO_TEXT.listView, onSelect: () => void openCardPhoto(a) }] : []),
+                          { label: "발급 취소", onSelect: () => setCancelTarget(a) },
+                        ]}
+                      />
                     </span>
+                  ) : (
+                    // 사용 중이고 명함 사진이 있으면 같은 자리에 ⋮(「명함 보기」만, UG-455)
+                    canViewCardPhoto(a) && (
+                      <span className="card-actions">
+                        <CardMore items={[{ label: CARD_PHOTO_TEXT.listView, onSelect: () => void openCardPhoto(a) }]} />
+                      </span>
+                    )
                   )}
                 </div>
                 <div className="card-line">
@@ -1542,6 +1597,8 @@ export default function AccountsPage() {
         />
       )}
 
+      {cardPhoto && <CardPhotoViewer src={cardPhoto.src} onClose={closeCardPhoto} />}
+
       {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
     </>
   );
@@ -1554,56 +1611,6 @@ function CardPhotoThumb({ src, onOpen }: { src: string; onOpen: () => void }) {
       {/* eslint-disable-next-line @next/next/no-img-element -- data URL(줄인 명함 사진)이라 next/image 를 쓸 수 없어요 */}
       <img src={src} alt="" />
     </button>
-  );
-}
-
-/**
- * 명함 크게 보기 — 화면에 맞춰 보여 주고 「닫기」 · Esc · 바깥 누르기로 닫아요.
- * 발급 창 안에서 열려도 Esc 는 이 화면만 닫아요(창까지 닫히지 않게 먼저 받아요).
- */
-function CardPhotoViewer({ src, onClose }: { src: string; onClose: () => void }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      // 초점은 이 화면 안에만(뒤 창 · 목록으로 빠지지 않게) — 초점 가능한 것이 「닫기」뿐이라 거기 고정
-      if (e.key === "Tab") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeRef.current?.focus();
-        return;
-      }
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      onCloseRef.current();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("keydown", onKey, true);
-      if (opener?.isConnected) opener.focus();
-    };
-  }, []);
-  return (
-    <div
-      className="photo-viewer"
-      role="dialog"
-      aria-modal="true"
-      aria-label={CARD_PHOTO_TEXT.viewerTitle}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element -- data URL(줄인 명함 사진) */}
-      <img src={src} alt={CARD_PHOTO_TEXT.viewerTitle} />
-      <button ref={closeRef} type="button" className="btn btn-outline" onClick={onClose}>
-        {CARD_PHOTO_TEXT.close}
-      </button>
-    </div>
   );
 }
 
@@ -1645,8 +1652,11 @@ function ScannedEmailNotes({ email, read }: { email: string; read: string | null
   );
 }
 
-/** 휴대폰 카드 더보기(⋮) — 「발급 취소」 · 「작성 중」 카드의 「지우기」. 프로필 메뉴와 같은 어두운 유리. */
-function CardMore({ label, onSelect, disabled = false }: { label: string; onSelect: () => void; disabled?: boolean }) {
+/**
+ * 휴대폰 카드 더보기(⋮) — 「명함 보기」(UG-455) · 「발급 취소」 · 「작성 중」 카드의 「지우기」. 프로필 메뉴와 같은 어두운 유리.
+ * 항목은 여러 개 — 위에서부터 차례로(드물게 쓰는 되돌릴 수 없는 동작은 맨 아래).
+ */
+function CardMore({ items, disabled = false }: { items: { label: string; onSelect: () => void }[]; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -1674,18 +1684,21 @@ function CardMore({ label, onSelect, disabled = false }: { label: string; onSele
       </button>
       {open && (
         <div className="profile-menu card-more-menu" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            className="profile-menu-item"
-            onClick={() => {
-              setOpen(false);
-              buttonRef.current?.focus(); // 확인 창을 닫으면 ⋮ 로 초점이 돌아오게
-              onSelect();
-            }}
-          >
-            {label}
-          </button>
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className="profile-menu-item"
+              onClick={() => {
+                setOpen(false);
+                buttonRef.current?.focus(); // 확인 창 · 보기 화면을 닫으면 ⋮ 로 초점이 돌아오게
+                item.onSelect();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -2180,8 +2193,9 @@ function CreateDialog({
   // 명함에서 메일 주소를 채우지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요(UG-451 기획 17022).
   // none = 메일 모양 글자를 하나도 읽지 못함, unsure = 메일 칩은 있지만 잘렸을 수 있어 채우지 않음(읽은 줄에서 고르거나 직접 입력)
   const [emailMissing, setEmailMissing] = useState<"none" | "unsure" | null>(null);
-  // 비교용 명함 사진(줄인 JPEG data URL). 기기에는 저장하지 않아요(기획 16841). 계정을 만들면 바로 지우고,
-  // 주소 오류로 고치는 동안(fix)에는 남겨 두며, 만들지 않고 닫으면 「작성 중」 명함과 함께 서버에 남겨요(기획 16864 — 계정을 만들거나 30일이면 서버가 지워요).
+  // 비교용 명함 사진(줄인 JPEG data URL). 기기에는 저장하지 않아요(기획 16841). 계정을 만들 때 함께 보내 서버가 계정과 함께 남기고(UG-455 — 목록 「명함 보기」),
+  // 창은 계정을 만들고 나면 이 사진을 비워요. 주소 오류로 고치는 동안(fix)에는 남겨 두며(고친 주소로 새로 만들 때도 함께 보내요),
+  // 만들지 않고 닫으면 「작성 중」 명함과 함께 서버에 남겨요(기획 16864 — 계정을 만들거나 30일이면 서버가 그 「작성 중」 명함을 지워요).
   const [photo, setPhoto] = useState<string | null>(draftPhoto);
   const [viewingPhoto, setViewingPhoto] = useState(false);
   // 커서가 있는 칸(칩 규칙 3). 칩을 누르면 칸에서 초점이 빠질 수 있어서(아이패드) 방금 빠진 칸도 커서로 봐요.
@@ -2703,6 +2717,14 @@ function CreateDialog({
     }
   }
 
+  /**
+   * 계정 만들기에 함께 보낼 명함 사진(UG-455) — 창에 있는 사진(JPEG)을 data: 접두사 없이. 서버가 한 번 받지 않은 사진(rejectedPhotoRef)은 빼요
+   */
+  function photoInput(): { photo?: string } {
+    const b64 = photoForDraft(photo);
+    return b64 && photoTag(b64) !== rejectedPhotoRef.current ? { photo: b64 } : {};
+  }
+
   /** 고친 주소로 재발송(I3 · C3 · M8b): 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요. */
   async function submitFix(wrong: Account) {
     if (fixSame) return; // 주소 그대로 — 버튼은 「발급 취소」라 Enter 로도 보내지 않아요
@@ -2737,7 +2759,9 @@ function CreateDialog({
     if (!state || state.status !== "new") return emailRef.current?.focus(); // 사용 중 · 다른 발급 기록 · 조회 실패 — 칸 아래 안내
 
     setSending(true);
-    const res = await createAccount({ company: fixCompany, email: trimmed, language: wrong.language, ...personInput(fixName, fixPhone) });
+    const sentPhoto = photoInput();
+    const res = await createAccount({ company: fixCompany, email: trimmed, language: wrong.language, ...personInput(fixName, fixPhone), ...sentPhoto });
+    if (res.ok && res.photoRejected && sentPhoto.photo) rejectedPhotoRef.current = photoTag(sentPhoto.photo);
     if (!res.ok) {
       setSending(false);
       if (res.reason === "duplicate" || res.reason === "in_use") {
@@ -2757,7 +2781,7 @@ function CreateDialog({
     await cancelIssue(wrong.id).catch(() => undefined);
     setSending(false);
     if (res.mailSent) {
-      setPhoto(null); // 고쳐 재발송이 끝났어요 — 명함 사진은 바로 지워요(16841)
+      setPhoto(null); // 고쳐 재발송이 끝났어요 — 창의 명함 사진은 비워요(사진은 새 계정과 함께 서버에 남아요, UG-455)
       return onCreated(res.account);
     }
     if (res.mailFailureReason === "address") {
@@ -2766,7 +2790,7 @@ function CreateDialog({
       return onMailFailed(res.account);
     }
     setFix(null);
-    setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 사진은 지워요
+    setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 창의 사진은 비워요(서버에는 계정과 함께 남아요)
     setMailFailure({ account: res.account, reason: res.mailFailureReason });
     return onMailFailed(res.account);
   }
@@ -2850,18 +2874,20 @@ function CreateDialog({
       if (res.reason === "closing") setChecked(key, { status: "closing" });
       return;
     }
-    const res = await createAccount({ ...input, ...(await draftIdInput()) });
+    const sentPhoto = photoInput();
+    const res = await createAccount({ ...input, ...(await draftIdInput()), ...sentPhoto });
+    if (res.ok && res.photoRejected && sentPhoto.photo) rejectedPhotoRef.current = photoTag(sentPhoto.photo);
     setSending(false);
     if (res.ok) {
       endDraft(); // 계정이 만들어졌어요(메일 실패 포함) — 서버가 「작성 중」 명함을 지웠어요
       if (res.mailSent) {
-        setPhoto(null); // 계정을 만들었어요 — 명함 사진은 바로 지워요(16841)
+        setPhoto(null); // 계정을 만들었어요 — 창의 명함 사진은 비워요(사진은 계정과 함께 서버에 남아요, UG-455)
         return onCreated(res.account);
       }
       // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2) — 고치는 동안 명함 사진은 남겨 비교해요
       if (res.mailFailureReason === "address") setFix(res.account);
       else {
-        setPhoto(null); // 고칠 주소가 없는 실패(결과 화면) — 사진은 지워요
+        setPhoto(null); // 고칠 주소가 없는 실패(결과 화면) — 창의 사진은 비워요(서버에는 계정과 함께 남아요)
         setMailFailure({ account: res.account, reason: res.mailFailureReason });
       }
       return onMailFailed(res.account);
