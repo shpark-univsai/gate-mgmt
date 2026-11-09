@@ -57,6 +57,44 @@ export function Dialog({
     };
   }, []);
 
+  // 터치 기기(휴대폰 · 아이패드): 칸에 초점이 가면 그 칸과 칸 아래 안내(이미 사용 중 · 비밀번호 링크 · 의심 주소 경고 등)를 보이게 스크롤해요
+  // (UG-451 기획 17073-6). 키보드가 올라와 보이는 영역이 줄어든 뒤(visualViewport resize — 위 fit 이 먼저 창 높이를 맞춰요)와
+  // 칸 아래 안내가 늘거나 줄 때(ResizeObserver)도 다시 맞춰요. 휴대폰은 맨 아래 버튼 줄만큼 비워 두고 맞춰요(.scrim scroll-padding-bottom).
+  // 칸 묶음(.field)을 먼저, 그다음 칸 자체를 가장 가까운 자리로 — 묶음이 보이는 영역보다 길어도 칸은 꼭 보여요.
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog || !window.matchMedia("(pointer: coarse)").matches) return;
+    const vv = window.visualViewport;
+    let input: HTMLElement | null = null;
+    let field: HTMLElement | null = null;
+    let timer = 0;
+    const reveal = () => {
+      if (!input || document.activeElement !== input) return;
+      field?.scrollIntoView({ block: "nearest" });
+      input.scrollIntoView({ block: "nearest" });
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reveal);
+    const onFocusIn = (e: FocusEvent) => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) || t.type === "file") return;
+      input = t;
+      field = t.closest<HTMLElement>(".field") ?? t;
+      observer?.disconnect();
+      observer?.observe(field);
+      // 키보드가 다 올라온 뒤(resize 가 오지 않는 브라우저도) 한 번 더
+      window.clearTimeout(timer);
+      timer = window.setTimeout(reveal, 400);
+    };
+    dialog.addEventListener("focusin", onFocusIn);
+    vv?.addEventListener("resize", reveal);
+    return () => {
+      dialog.removeEventListener("focusin", onFocusIn);
+      vv?.removeEventListener("resize", reveal);
+      observer?.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   useEffect(() => {
     // 창이 다른 창으로 바뀌는 경우(만들기 → 실패 결과)에도 처음 연 버튼을 기억해요.
     const active = document.activeElement as HTMLElement | null;

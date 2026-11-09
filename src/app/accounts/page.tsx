@@ -80,6 +80,8 @@ import {
 } from "@/lib/card-scan";
 
 const COMPANY_MAX = 40;
+// 고객 이메일 — 서버(CreateAccountRequest · AccountIssuance.EMAIL_MAX_LENGTH)와 같은 한도. 칸에서 그 이상은 칠 수 없어요(UG-451 기획 17073)
+const EMAIL_MAX = 255;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // 고객 이름 · 연락처(UG-431) — 서버(CreateAccountRequest)와 같은 한도 · 같은 글자
 const NAME_MAX = 40;
@@ -491,7 +493,8 @@ const DRAFT_GONE = { title: "작성 중인 명함이 이미 지워졌습니다",
 
 const CHECK_FAILED = "이메일을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 // 이메일 칸 값이 명함에서 잘렸거나 잘못 읽었을 수 있는 주소와 똑같을 때(UG-451 반박 리뷰 F2) — 고칠 때까지 보내지 않아요
-const SUSPECT_EMAIL = "명함에서 잘못 읽었을 수 있는 주소입니다. 명함과 한 글자씩 비교해 고쳐 주세요.";
+// 「고쳐 주세요」는 빼요(기획 17072-3) — 맞는 주소면 고치지 않고 아래 「명함과 같은 주소예요」로 확인해요
+const SUSPECT_EMAIL = "명함에서 잘못 읽었을 수 있는 주소입니다. 명함과 한 글자씩 비교해 주세요.";
 // 경고 바로 아래 버튼 — 명함과 견줘 맞는 주소면 직원이 그 값을 확인해 보내요(UG-451 기획 17030)
 const SUSPECT_CONFIRM = "명함과 같은 주소예요";
 // 보내기를 눌렀는데 이메일 확인이 네트워크 · 서버 문제(응답 없음 · 5xx · 시간 초과)로 실패 — 버튼 위에 남겨요(UG-451 기획 16991)
@@ -2110,9 +2113,6 @@ function CreateDialog({
   // 확인 창에서 [취소]로 돌아왔는지 — 돌아오면 초점을 「고객이 비밀번호를 잊었나요?」에 둬요
   const [resetReturned, setResetReturned] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
-  // 실행 버튼(계정 만들기 · 재발송) · 「고객이 비밀번호를 잊었나요?」 — 「명함과 같은 주소예요」를 누른 뒤 초점을 옮겨요
-  const submitRef = useRef<HTMLButtonElement>(null);
-  const resetLinkRef = useRef<HTMLButtonElement>(null);
   const companyRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
@@ -2180,13 +2180,12 @@ function CreateDialog({
   // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때.
   // 「작성 중」 저장 판단도 같아요 — 확인한 값은 의심이 아닌 주소처럼 「새 계정」으로 확인되면 남겨요(기획 17030 결정)
   const suspectBlocked = !!scan && isUnconfirmedSuspect(trimmed, scan.chips, confirmedEmail);
-  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 옮겨요(confirmSuspect)
+  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect)
   const focusAfterConfirm = useRef(false);
   useEffect(() => {
     if (!focusAfterConfirm.current) return;
     focusAfterConfirm.current = false;
-    const next = [submitRef.current, resetLinkRef.current].find((b) => b && b.isConnected && !b.disabled);
-    (next ?? emailRef.current)?.focus();
+    emailRef.current?.focus();
   }, [confirmedEmail]);
   const emailGate = draftSaveGate({
     email: trimmed,
@@ -2860,11 +2859,27 @@ function CreateDialog({
 
   /**
    * 「명함과 같은 주소예요」(UG-451 기획 17030) — 지금 칸 값을 직원이 명함과 견줘 맞다고 확인했어요. 그 값 그대로인 동안 경고 · 막음을 풀어요.
-   * 버튼이 사라지니 초점은 실행 버튼(계정 만들기 · 재발송) → 「고객이 비밀번호를 잊었나요?」 → 이메일 칸 순으로 쓸 수 있는 곳에 둬요.
+   * 버튼이 사라지니 초점은 이메일 칸으로 돌려요(기획 17072-2) — 실행 버튼으로 옮기면 Enter 두 번에 바로 메일이 나가요.
    */
   function confirmSuspect() {
     setConfirmedEmail(email);
     focusAfterConfirm.current = true;
+  }
+
+  /**
+   * 칸에서 Enter 로는 메일을 보내지 않아요(UG-451 기획 17073-5) — 메일은 실행 버튼으로만. 폼의 Enter 보내기(implicit submit)를 막고
+   * 회사명 → 이름 → 이메일 → 연락처 순으로 다음 칸에 초점(고칠 수 없는 칸은 건너뛰어요), 연락처(마지막)에서는 칸을 빠져 키보드를 닫아요.
+   * 한글 조합 중 Enter(조합 끝내기)는 건드리지 않아요.
+   */
+  function onFormKeyDown(e: React.KeyboardEvent<HTMLFormElement>) {
+    if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    const order = [companyRef.current, nameRef.current, emailRef.current, phoneRef.current];
+    const at = order.indexOf(e.target);
+    const next = at === -1 ? undefined : order.slice(at + 1).find((el) => el && el.isConnected && !el.readOnly && !el.disabled);
+    if (next) next.focus();
+    else e.target.blur();
   }
 
   /** 칸마다 값 넣기(명함 · 칩). 그 칸의 오류 안내는 지워요. */
@@ -3067,7 +3082,7 @@ function CreateDialog({
 
   return (
     <Dialog title="Gate 계정 만들기" onClose={close} closable={!sending && !keepingDraft} wide>
-      <form onSubmit={onSubmit} noValidate>
+      <form onSubmit={onSubmit} onKeyDown={onFormKeyDown} noValidate>
         {/* 「작성 중」 저장을 기다리는 동안(keepingDraft)은 칸 · 버튼 · 칩 · 사진을 모두 잠가요 — 저장한 값과 화면 값이 달라지지 않게(UG-451 반박 리뷰) */}
         <fieldset className="dialog-form" disabled={keepingDraft}>
         {/* 찍은 명함 — 읽은 줄(칩)이 있으면 칩 왼쪽(N7), 없거나 주소를 고치는 동안(fix)이면 여기. 누르면 크게 */}
@@ -3148,7 +3163,12 @@ function CreateDialog({
               <input
                 ref={companyRef}
                 id="company"
-                autoComplete="organization"
+                // 칸 이동 · 입력 도움(UG-451 기획 17073): Enter = 다음 칸, 자동 완성 · 맞춤법 고치기 끔, 서버와 같은 길이 한도
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="next"
+                maxLength={COMPANY_MAX}
                 // 이미 만든 계정이면 기록의 회사명을 보여 주고 고칠 수 없어요(다시 보내기엔 쓰이지 않아요).
                 readOnly={companyLocked}
                 placeholder={!fix && pending ? (pending.company ? undefined : "이미 만든 계정의 회사명 그대로") : "회사명"}
@@ -3180,6 +3200,11 @@ function CreateDialog({
                 ref={nameRef}
                 id="person-name"
                 autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="words"
+                spellCheck={false}
+                enterKeyHint="next"
+                maxLength={NAME_MAX}
                 readOnly={personLocked}
                 placeholder={!fix && pending ? "이미 만든 계정 그대로" : "고객 이름"}
                 value={nameShown}
@@ -3214,6 +3239,11 @@ function CreateDialog({
                 type="email"
                 inputMode="email"
                 autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="next"
+                maxLength={EMAIL_MAX}
                 placeholder="name@company.com"
                 value={email}
                 onChange={(e) => {
@@ -3287,7 +3317,6 @@ function CreateDialog({
                 주소를 고치는 중(fix)에는 새 주소를 받는 중이라 띄우지 않아요. 이메일을 고치면 사라지고 새로 만들기로 돌아가요. */}
             {offerReset && (
               <button
-                ref={resetLinkRef}
                 type="button"
                 className="field-link field-link--underline"
                 data-autofocus={resetReturned || undefined}
@@ -3302,6 +3331,35 @@ function CreateDialog({
             {scannedEmail && !suspectBlocked && <ScannedEmailNotes email={trimmed} read={scannedRead} />}
           </div>
 
+          {/* 메일 언어는 이메일 칸 바로 아래(UG-451 기획 17073-7) — 휴대폰(한 줄씩)에서 맨 아래 버튼 줄에 가려지지 않게 연락처보다 위에 둬요.
+              PC(두 칸)는 전처럼 이메일 · 연락처 줄 아래 한 줄을 다 써요(.field--language). 고치는 중이면 메일 언어는 처음 만든 그대로,
+              사용 중 · 발급 취소만 남은 기록이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
+          {!fix && !inUse && !closing && !blocked && (
+            <div className="field field--language">
+              <span id="language-label" className="t-body-200-b">
+                메일 언어
+              </span>
+              <div className="segmented" role="radiogroup" aria-labelledby="language-label">
+                {LANGUAGES.map(({ value, label, Flag }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={language === value}
+                    onClick={() => {
+                      langBeforePending.current = null; // 직접 고르면 되돌리지 않아요
+                      setLanguage(value);
+                      setLanguageChosen(true);
+                    }}
+                  >
+                    <Flag />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="field">
             <label htmlFor="person-phone" className="t-body-200-b">
               연락처<span className="field-optional">(선택)</span>
@@ -3313,6 +3371,9 @@ function CreateDialog({
                 type="tel"
                 inputMode="tel"
                 autoComplete="off"
+                // 마지막 칸 — Enter 는 키보드만 닫아요(보내지 않아요, 17073-5)
+                enterKeyHint="done"
+                maxLength={PHONE_MAX}
                 readOnly={personLocked}
                 placeholder={!fix && pending ? "이미 만든 계정 그대로" : personLocked ? undefined : "+65 0000 0000"}
                 value={phoneShown}
@@ -3334,33 +3395,6 @@ function CreateDialog({
             )}
           </div>
         </div>
-
-        {/* 고치는 중이면 메일 언어는 처음 만든 그대로, 사용 중 · 발급 취소만 남은 기록이면 보낼 메일이 없어요 — 줄을 숨겨요 */}
-        {!fix && !inUse && !closing && !blocked && (
-        <div className="field">
-          <span id="language-label" className="t-body-200-b">
-            메일 언어
-          </span>
-          <div className="segmented" role="radiogroup" aria-labelledby="language-label">
-            {LANGUAGES.map(({ value, label, Flag }) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={language === value}
-                onClick={() => {
-                  langBeforePending.current = null; // 직접 고르면 되돌리지 않아요
-                  setLanguage(value);
-                  setLanguageChosen(true);
-                }}
-              >
-                <Flag />
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        )}
 
         {!fix && pending && !blocked && <p className="help">다시 보내면 이전 임시 비밀번호는 쓸 수 없게 됩니다.</p>}
         {!fix && blocked &&
@@ -3410,7 +3444,7 @@ function CreateDialog({
                 </button>
               )
             ) : (
-              <button ref={submitRef} type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
+              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -3432,7 +3466,7 @@ function CreateDialog({
             <button type="button" className="btn btn-outline" onClick={close} disabled={sending}>
               취소
             </button>
-            <button ref={submitRef} type="submit" className="btn btn-dark" disabled={inUse || closing || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
+            <button type="submit" className="btn btn-dark" disabled={inUse || closing || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
               {/* 첫 로그인 전 이메일이면 목록 줄과 같은 이름 「메일 재발송」(UG-450 기획 17020) — 확인 창 제목은 그대로 */}
               {sending ? "보내는 중…" : pending ? "메일 재발송" : "계정 만들고 메일 보내기"}
             </button>

@@ -12,8 +12,10 @@ import {
   isSuspectChip,
   isSuspectEmail,
   isSuspectValue,
+  isUnconfirmedSuspect,
   readLines,
   scanCard,
+  scannedEmailValue,
   tapChip,
 } from "./card-scan.ts";
 
@@ -825,14 +827,15 @@ test("UG-451 17030 ④ 명함에서 채우거나 칩을 눌러 넣는 메일 주
 
 test("UG-451 반박 리뷰 M1 · 소문자로 넣은 주소의 헷갈리는 글자는 칩이 읽은 그대로로 판단 · 강조해요", () => {
   const marks = (n: ReturnType<typeof confusableNote>) => n.parts.filter((p) => p.confusable).map((p) => p.text).join("");
-  for (const [read, chars] of [
-    ["Iee77@x.com", "i"],
-    ["yoon.jI0110@x.com", "i0110"],
-    ["kimO1@x.com", "o1"],
+  for (const [read, filled, chars] of [
+    ["Iee77@x.com", "Iee77@x.com", "I"],
+    ["yoon.jI0110@x.com", "yoon.jI0110@x.com", "I0110"],
+    ["kimO1@x.com", "kimo1@x.com", "o1"],
+    ["JI0110@X.COM", "ji0110@x.com", "i0110"],
   ] as const) {
     const { values, chips } = card(read);
     const value = values.email;
-    assert.equal(value, read.toLowerCase(), read);
+    assert.equal(value, filled, read);
     const chip = chips.find((c) => c.kind === "email")!;
     const note = confusableNote(value, chip.value);
     assert.equal(note.confusable, true, read);
@@ -845,4 +848,44 @@ test("UG-451 반박 리뷰 M1 · 소문자로 넣은 주소의 헷갈리는 글�
   assert.equal(confusableNote("iee78@x.com", "Iee77@x.com").confusable, false);
   assert.equal(marks(confusableNote("kimo1@x.com")), "1");
   assert.equal(confusableNote("rachel@x.com", "Rachel@x.com").confusable, false);
+});
+
+test("UG-451 17072-4 · 명함 메일 주소를 소문자로 넣을 때 @ 앞의 대문자 I 는 읽은 그대로 둬요", () => {
+  for (const [read, filled] of [
+    ["Iee77@acme.com", "Iee77@acme.com"],
+    ["Iee77@ACME.COM", "Iee77@acme.com"],
+    ["yoon.jI0110@Acme.co.kr", "yoon.jI0110@acme.co.kr"],
+    ["Kim.LIee@Acme.com", "kim.lIee@acme.com"],
+    ["kimO1@x.com", "kimo1@x.com"],
+    // @ 앞에 소문자가 하나도 없으면 대문자 글씨일 뿐이라 I 도 소문자로(「kIm」이 되지 않게)
+    ["KIM@ACME.COM", "kim@acme.com"],
+    ["USER1+X@EXAMPLE.COM", "user1+x@example.com"],
+    // 도메인의 I 는 소문자로
+    ["lee77@MAIL.COM", "lee77@mail.com"],
+  ] as const) {
+    assert.equal(scannedEmailValue(read), filled, read);
+    assert.equal(card(read).values.email, filled, `${read} 처음 채우기`);
+    const chip = card(read).chips.find((c) => c.kind === "email")!;
+    assert.equal(tapChip(chip, {}, { company: "", name: "", email: "", phone: "" }, null).set?.value, filled, `${read} 칩 누르기`);
+    assert.deepEqual(chipEmailAddresses(card(read).chips), [filled], `${read} 칩 주소`);
+  }
+  // 헷갈리는 글자 안내는 칸에 보이는 I 를 가리켜요
+  const note = confusableNote("Iee77@acme.com", "Iee77@acme.com");
+  assert.equal(note.confusable, true);
+  assert.equal(note.parts.find((p) => p.confusable)?.text, "I");
+});
+
+test("UG-451 17072-4 · I 를 남겨도 의심 값 · 확인 판단은 대소문자 없이 그대로예요", () => {
+  // 잘렸을 수 있는 칩은 읽은 그대로라 값이 달라지지 않고, 견주기는 대소문자 없이
+  const { chips } = card("Sales · Iee77@acme.com");
+  assert.equal(chips.some(isSuspectChip), true);
+  for (const v of ["Iee77@acme.com", "iee77@acme.com", "IEE77@ACME.COM"]) {
+    assert.equal(isSuspectValue(v, chips), true, v);
+    assert.equal(isUnconfirmedSuspect(v, chips, null), true, v);
+    // 「명함과 같은 주소예요」로 확인한 값과 대소문자만 다르면 확인한 것으로 봐요
+    assert.equal(isUnconfirmedSuspect(v, chips, "iee77@acme.com"), false, v);
+  }
+  // 한 글자라도 고치면(I → l) 풀려요
+  assert.equal(isSuspectValue("lee77@acme.com", chips), false);
+  assert.equal(isUnconfirmedSuspect("lee77@acme.com", chips, null), false);
 });
