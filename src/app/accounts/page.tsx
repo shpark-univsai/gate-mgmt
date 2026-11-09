@@ -2725,6 +2725,13 @@ function CreateDialog({
     return b64 && photoTag(b64) !== rejectedPhotoRef.current ? { photo: b64 } : {};
   }
 
+  /** 주소 고쳐 새로 만들기에 붙일 원래 기록 번호(UG-455) — 잘못된 계정에 명함 사진이 남아 있을 때만. 번호를 읽지 못하면 빼요 */
+  function sourceIssuanceInput(wrong: Account): { sourceIssuanceId?: number } {
+    if (wrong.hasCardPhoto !== true) return {};
+    const n = Number(wrong.id);
+    return Number.isSafeInteger(n) && n > 0 ? { sourceIssuanceId: n } : {};
+  }
+
   /** 고친 주소로 재발송(I3 · C3 · M8b): 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요. */
   async function submitFix(wrong: Account) {
     if (fixSame) return; // 주소 그대로 — 버튼은 「발급 취소」라 Enter 로도 보내지 않아요
@@ -2759,9 +2766,15 @@ function CreateDialog({
     if (!state || state.status !== "new") return emailRef.current?.focus(); // 사용 중 · 다른 발급 기록 · 조회 실패 — 칸 아래 안내
 
     setSending(true);
-    const sentPhoto = photoInput();
-    const res = await createAccount({ company: fixCompany, email: trimmed, language: wrong.language, ...personInput(fixName, fixPhone), ...sentPhoto });
-    if (res.ok && res.photoRejected && sentPhoto.photo) rejectedPhotoRef.current = photoTag(sentPhoto.photo);
+    // 명함 사진은 다시 보내지 않아요(UG-455 반박 리뷰 M1) — 잘못된 계정에 남은 사진이 있으면 서버가 처음 받은 시각 그대로 새 계정에 옮겨요.
+    // 다시 보낸 사진은 받은 시각이 「지금」이 되어 보관 기간이 밀려요. 사진이 없는 기록(조회로 만난 기록 포함)은 아무것도 남기지 않아요
+    const res = await createAccount({
+      company: fixCompany,
+      email: trimmed,
+      language: wrong.language,
+      ...personInput(fixName, fixPhone),
+      ...sourceIssuanceInput(wrong),
+    });
     if (!res.ok) {
       setSending(false);
       if (res.reason === "duplicate" || res.reason === "in_use") {
@@ -2781,7 +2794,7 @@ function CreateDialog({
     await cancelIssue(wrong.id).catch(() => undefined);
     setSending(false);
     if (res.mailSent) {
-      setPhoto(null); // 고쳐 재발송이 끝났어요 — 창의 명함 사진은 비워요(사진은 새 계정과 함께 서버에 남아요, UG-455)
+      setPhoto(null); // 고쳐 재발송이 끝났어요 — 창의 명함 사진은 비워요(잘못된 계정에 남은 사진은 서버가 새 계정으로 옮겨요, UG-455)
       return onCreated(res.account);
     }
     if (res.mailFailureReason === "address") {
@@ -2790,7 +2803,7 @@ function CreateDialog({
       return onMailFailed(res.account);
     }
     setFix(null);
-    setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 창의 사진은 비워요(서버에는 계정과 함께 남아요)
+    setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 창의 사진은 비워요(잘못된 계정에 남은 사진은 서버가 새 계정으로 옮겨요)
     setMailFailure({ account: res.account, reason: res.mailFailureReason });
     return onMailFailed(res.account);
   }

@@ -96,6 +96,11 @@ export type CreateAccountInput = {
   draftId?: number;
   /** 창에 있는 명함 사진(UG-455, data: 접두사 없는 base64 JPEG) — 서버가 계정과 함께 남겨 목록 「명함 보기」로 봐요 */
   photo?: string;
+  /**
+   * 주소 고쳐 새로 만들기의 원래(잘못된) 발급 기록 번호(UG-455) — 서버가 그 기록의 명함 사진을 처음 받은 시각 그대로 새 계정에 옮겨요.
+   * 이걸 보내면 photo 는 보내지 않아요(서버도 보지 않아요). 다시 보낸 사진으로 받은 시각이 「지금」으로 밀리지 않게.
+   */
+  sourceIssuanceId?: number;
 };
 
 /**
