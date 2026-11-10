@@ -2283,6 +2283,9 @@ function CreateDialog({
   // 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워짐(서버 sourceCancel = revoked, 반박 리뷰 M1) — 그 옛 발급의 번호.
   // 고치는 대상이 그 발급인 동안 버튼 위에 알리고 [발급 취소]를 함께 둬요(목록에는 「첫 로그인 전」으로 남아 있어 직원이 알 수 없어요)
   const [revokedOldId, setRevokedOldId] = useState<string | null>(null);
+  // 이 창에서 만든 계정의 명함 사진 저장이 실패했어요(화면 반박 리뷰 3) — 주소를 고쳐 재발송하면 옮길 사진이 없어 서버가 none 으로
+  // 답하지만 새 계정에도 사진은 없으니, 그 완료 알림에도 「명함 사진은 저장하지 못했습니다」를 붙여요
+  const photoLostRef = useRef(false);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
   // 명함 읽기가 끝났을 때 고치는 모드인지 보려고(읽는 동안 바뀔 수 있어요)
@@ -2931,7 +2934,9 @@ function CreateDialog({
       old === "left" ||
       (old === "legacy" && oldIssueLeft(await cancelIssue(wrong.id).catch(() => ({ ok: false as const, reason: "failed" as const }))));
     setSending(false);
-    const notice: CreatedNotice = { photoNotSaved: cardPhotoNotSaved(res) };
+    // 앞서 만든 계정의 사진 저장이 실패했으면 새 계정에도 사진이 없어요 — 같은 줄을 보여 줘요(화면 반박 리뷰 3)
+    const notice: CreatedNotice = { photoNotSaved: cardPhotoNotSaved(res, photoLostRef.current) };
+    photoLostRef.current = notice.photoNotSaved === true;
     if (res.mailSent) {
       setPhoto(null); // 고쳐 재발송이 끝났어요 — 창의 명함 사진은 비워요(잘못된 계정에 남은 사진은 서버가 새 계정으로 옮겨요, UG-455)
       if (left) return setStaleIssue({ old: wrong, created: res.account, notice });
@@ -3043,6 +3048,7 @@ function CreateDialog({
       endDraft(); // 계정이 만들어졌어요(메일 실패 포함) — 서버가 「작성 중」 명함을 지웠어요
       // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 알려요(기획 17099-5) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 아무 표시 없음
       const notice: CreatedNotice = { photoNotSaved: cardPhotoNotSaved(res) };
+      photoLostRef.current = notice.photoNotSaved === true; // 주소를 고쳐 재발송한 완료 알림에도 이어서 알려요(화면 반박 리뷰 3)
       if (res.mailSent) {
         setPhoto(null); // 계정을 만들었어요 — 창의 명함 사진은 비워요(사진은 계정과 함께 서버에 남아요, UG-455)
         return onCreated(res.account, notice);

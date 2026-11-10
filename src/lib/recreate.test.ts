@@ -83,3 +83,15 @@ test("리뷰 M1 옛 발급이 그대로인 실패 · 예전 서버(값 없음) �
 test("리뷰 M1 성공 응답의 옛 발급 결과에는 revoked 가 없어요(실패 응답 전용 값)", () => {
   assert.equal(isSourceCancel("revoked"), false);
 });
+
+test("화면 리뷰 3 이 창에서 사진 저장 실패를 이미 겪었으면 주소를 고쳐 재발송한 완료 알림에도 같은 줄 — 서버는 옮길 사진이 없어 none", () => {
+  assert.equal(cardPhotoNotSaved({ cardPhoto: "none" }, true), true);
+  assert.equal(cardPhotoNotSaved({ cardPhoto: "policy" }, true), true);
+  assert.equal(cardPhotoNotSaved({}, true), true, "예전 서버");
+});
+
+test("화면 리뷰 3 서버가 남겼다고 답하면(kept) 앞서 실패했어도 표시 없음, 앞서 실패한 적이 없으면 전과 같아요", () => {
+  assert.equal(cardPhotoNotSaved({ cardPhoto: "kept" }, true), false);
+  assert.equal(cardPhotoNotSaved({ cardPhoto: "none" }, false), false);
+  assert.equal(cardPhotoNotSaved({ cardPhoto: "failed" }, false), true);
+});

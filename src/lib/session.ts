@@ -42,6 +42,18 @@ export function getTokens(): Tokens | null {
   }
 }
 
+/**
+ * 로그인 상태(직원 정보 · 토큰)가 이 브라우저에 남아 있는지. 없으면 화면이 곧 로그인 화면으로 떠나요(이 탭의 세션 만료 · 로그아웃,
+ * 다른 탭의 로그아웃) — 명함 크게 보기가 닫히면서 history 를 건드리지 않게 봐요(back-layer.ts, UG-455 화면 반박 리뷰 1).
+ */
+export function hasSession(): boolean {
+  try {
+    return localStorage.getItem(KEY) !== null && localStorage.getItem(TOKEN_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** 로그인 상태(직원 정보 · 토큰)를 지워요. 서버 세션 종료는 api.ts 의 logout 이 함께 해요. */
 export function clearSession() {
   takenReason = undefined;

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { browserBackLayer } from "@/lib/back-layer";
 import { CARD_PHOTO_TEXT } from "@/lib/card-photo";
+import { hasSession } from "@/lib/session";
 import {
   FIT,
   clampPan,
@@ -59,8 +60,9 @@ export function CardPhotoViewer({ src, email, onClose }: { src: string | null; e
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  // 휴대폰 「뒤로 가기」는 이 화면만 닫아요(기획 17099-6). 다른 길로 닫히면 얹어 둔 history 칸을 빼요(back-layer.ts)
-  useEffect(() => browserBackLayer().open(() => onCloseRef.current()), []);
+  // 휴대폰 「뒤로 가기」는 이 화면만 닫아요(기획 17099-6). 다른 길로 닫히면 얹어 둔 history 칸을 빼요(back-layer.ts).
+  // 로그인이 끊겨 로그인 화면으로 떠나는 중이면 빼지 않아요 — 뒤로 가기가 그 이동을 망가뜨려 빈 화면에 멈춰요(화면 반박 리뷰 1)
+  useEffect(() => browserBackLayer(leavingForLogin).open(() => onCloseRef.current()), []);
 
   /** 사진이 아닌 조작부(위 이메일 줄 · 아래 버튼 줄) — 여기서 시작한 누르기는 확대 · 이동 · 바깥 누르기 닫힘으로 보지 않아요 */
   const inChrome = (target: EventTarget | null) =>
@@ -389,3 +391,6 @@ export function CardPhotoViewer({ src, email, onClose }: { src: string | null; e
 }
 
 const xy = (p: Point): [number, number] => [p.x, p.y];
+
+/** 로그인 상태가 지워졌으면(세션 만료 · 로그아웃 · 다른 탭 로그아웃) 화면이 로그인 화면으로 떠나는 중이에요 */
+const leavingForLogin = () => !hasSession();

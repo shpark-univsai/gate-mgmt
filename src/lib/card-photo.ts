@@ -50,9 +50,12 @@ export const isCardPhotoStatus = (v: unknown): v is CardPhotoStatus => typeof v 
  * 정책상 남기지 않은 것(policy) · 사진을 보내지 않은 발급(none) · 남긴 것(kept)에는 보여 주지 않아요.
  * photoRejected = 서버가 사진 때문에 요청을 거절해(너무 큼 · 형식) 사진 없이 한 번 더 보내 만든 경우 — 이때 서버는 사진을 본 적이 없어
  * none 으로 답하므로 화면이 따로 알아요. 예전 서버(cardPhoto 를 주지 않음)는 이 경우만 알 수 있어요.
+ * lostBefore = 이 창에서 앞서 만든 계정의 사진 저장이 이미 실패했어요(화면 반박 리뷰 3). 그 뒤 주소를 고쳐 재발송하면 옮길 사진이 없어
+ * 서버는 none 으로 답하지만 새 계정에도 사진은 없으니 같은 줄을 보여 줘요 — 서버가 남겼다고(kept) 답한 때만 빼요.
  */
-export function cardPhotoNotSaved(result: { cardPhoto?: CardPhotoStatus; photoRejected?: boolean }): boolean {
-  return result.photoRejected === true || result.cardPhoto === "rejected" || result.cardPhoto === "failed";
+export function cardPhotoNotSaved(result: { cardPhoto?: CardPhotoStatus; photoRejected?: boolean }, lostBefore = false): boolean {
+  if (result.photoRejected === true || result.cardPhoto === "rejected" || result.cardPhoto === "failed") return true;
+  return lostBefore && result.cardPhoto !== "kept";
 }
 
 /**
