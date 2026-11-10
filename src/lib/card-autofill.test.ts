@@ -1,4 +1,4 @@
-// 회사명 · 이름 자동 채움(UG-451 기획 17100) 시험 — card-scan.ts 의 scanCard(글자, 줄 점수).
+// 회사명 · 이름 자동 채움(UG-451 기획 17100) · 못 읽은 명함 판정(기획 17106 — 파일 뒤쪽) 시험 — card-scan.ts 의 scanCard(글자, 줄 점수).
 // 예시 값은 모두 지어낸 것이에요(공개 저장소 — 실제 고객 · 회사 · 이름 · 번호 금지).
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -368,4 +368,69 @@ test("UG-451 17100 도구의 낱말이 띄어쓰기와 달라도(한글을 낱�
   assert.equal(scan(line("주식회사 한빛테크를 0", [["주식회사", 94], ["한빛테크를", 86], ["0", 30]], 70)).values.company, "주식회사 한빛테크");
   // 잡글자 조각의 점수가 높으면(이름의 일부일 수 있음) 비워요
   assert.equal(scan(line("주식회사 한빛테크를 0", [["주식회사", 94], ["한빛테크를", 86], ["0", 88]], 88)).values.company, "");
+});
+
+test("UG-451 17106 읽은 결과 — 채움(found) · 확인 못 함(unsure) · 못 읽음(unreadable)", () => {
+  // 이메일이나 연락처를 하나라도 채웠으면 found
+  assert.equal(read("홍길동", "gildong.hong@ganadatech.co.kr").outcome, "found");
+  assert.equal(read("홍길동", "010-1234-5678").outcome, "found");
+  // 채운 것은 없지만 메일 모양 줄을 또렷이 읽음 — 직원이 읽은 줄에서 골라요
+  const unsure = read("주식회사 다온물류", "정다은", "daeun jung@daon-logis.co.kr");
+  assert.equal(unsure.outcome, "unsure");
+  assert.equal(unsure.found, 0);
+  assert.equal(unsure.values.email, "");
+  assert.ok(unsure.chips.some((c) => c.kind === "email"));
+  // 이때도 또렷한 회사명 · 이름은 채워요
+  assert.equal(unsure.values.company, "주식회사 다온물류");
+  assert.equal(unsure.values.name, "정다은");
+  // 형식이 깨진 메일 모양 줄(@ 양옆에 글자)도 또렷하면 unsure
+  assert.equal(read("Lena Koh", "lena@koh sg").outcome, "unsure");
+});
+
+test("UG-451 17106 거꾸로 · 옆으로 찍힌 명함 — 우연히 잡힌 @ 줄(점수 낮음)은 읽은 것으로 치지 않고, 아무것도 채우지 않아요", () => {
+  const r = read(["LZ9S-ɥEZL-OLO 'W", 31], ["ɹʞ'oɔ'ɥɔǝʇ@buoɥ", 28], ["wo lo@ɯo sb", 35], ["주식회사 가나다테크", 44], ["홍길동", 40], ["눔lo 묵운", 22]);
+  assert.equal(r.outcome, "unreadable");
+  assert.equal(r.found, 0);
+  assert.deepEqual(r.values, { company: "", name: "", email: "", phone: "" });
+  assert.deepEqual(r.links, {});
+  assert.equal(r.korean, false);
+});
+
+test("UG-451 17106 점수 낮은 줄에서 찾은 번호 · 주소는 찾은 것으로 치지 않아요 — 거꾸로 찍힌 전화번호가 숫자로 읽혀도 못 읽은 명함", () => {
+  // 지어낸 명함을 거꾸로 돌려 실제 도구로 읽힌 모양 — 전화번호 자리가 「95-7601-010」으로 읽혔어요(줄 점수 26)
+  const r = read(["| Zi2lela 즌몸운 |*로늘롱|", 48], ["Dro yoelepeues@®@3uoy Suop|is", 13], ["8/95-7601-010 ‘NN", 26], ["으르우", 55], ["ㄴ『추그", 38]);
+  assert.equal(r.outcome, "unreadable");
+  assert.equal(r.found, 0);
+  assert.deepEqual(r.values, { company: "", name: "", email: "", phone: "" });
+  assert.deepEqual(r.links, {});
+  // 옆으로 찍힌 명함의 짧은 깨진 줄은 줄 점수가 높게 나오기도 해요 — 낱말 점수가 낮으면 메일 후보로 치지 않아요
+  const sideways = read(["x m 를 qm", 72, { x: 65 }], ["mn @ 의 눅", 72, { mn: 70, "@": 10, 의: 60, 눅: 44 }], ["Eo <Q = lo", 58]);
+  assert.equal(sideways.outcome, "unreadable");
+  // 점수를 모르면 전처럼 모양만 봐요
+  assert.equal(scanCard("8/95-7601-010 ‘NN").values.phone, "95-7601-010");
+  // 또렷이 읽은 주소가 있으면, 점수 낮은 줄의 번호도 전처럼 채워요(읽은 명함)
+  const mixed = read("gildong.hong@ganadatech.co.kr", ["M. 010-1234-5678", 52]);
+  assert.equal(mixed.outcome, "found");
+  assert.equal(mixed.found, 1);
+  assert.equal(mixed.values.phone, "010-1234-5678");
+});
+
+test("UG-451 17106 이메일 · 연락처가 없는 사진은 줄이 또렷해도 못 읽은 것 — 회사명 · 이름 · 메일 언어를 채우지 않아요", () => {
+  const r = read("주식회사 가나다테크", "홍길동", "팀장", "서울특별시 강남구");
+  assert.equal(r.outcome, "unreadable");
+  assert.deepEqual(r.values, { company: "", name: "", email: "", phone: "" });
+  assert.equal(r.korean, false);
+  // 칩 목록은 그대로 돌려줘요 — 화면이 이 결과(unreadable)를 보고 숨겨요
+  assert.ok(r.chips.length > 0);
+});
+
+test("UG-451 17106 점수를 모르면 메일 모양 줄은 전처럼 읽은 것으로 봐요", () => {
+  assert.equal(scanCard("Lena Koh\nlena@koh sg").outcome, "unsure");
+  assert.equal(scanCard("daeun jung@daon-logis.co.kr").outcome, "unsure");
+  assert.equal(scanCard("홍길동\n팀장").outcome, "unreadable");
+});
+
+test("UG-451 17106-3 줄 점수 평균 — 돌려 읽은 방향을 견줄 때 써요", () => {
+  assert.equal(read(["홍길동", 90], ["010-1234-5678", 70]).confidence, 80);
+  assert.equal(scanCard("홍길동").confidence, 0);
 });

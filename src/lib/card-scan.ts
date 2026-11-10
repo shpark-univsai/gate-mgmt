@@ -875,7 +875,7 @@ export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks 
   return { values, links };
 }
 
-// ── 회사명 · 이름 자동 채움(UG-451 기획 17100 「자동 채움 규칙 M16 · M17」) ──
+// ── 회사명 · 이름 자동 채움(UG-451 기획 17100 「자동 채움 규칙 M16 · M17」) · 못 읽은 명함 판정(기획 17106) ──
 // 이 화면의 회사명 · 이름은 고객에게 가는 메일 첫 줄에 찍혀요 — 틀리게 채우느니 비워요. 후보가 둘이거나 하나여도 의심스러우면 비워요.
 
 /** 글자 읽기 도구(tesseract)가 준 낱말 · 줄 — confidence = 글자 인식 점수(0~100). card-ocr.ts 가 만들어 줘요 */
@@ -888,9 +888,12 @@ export type OcrLine = { text: string; confidence: number; words: readonly OcrWor
  *   지어낸 명함 그림을 이 도구로 읽어 보면 바로 놓인 또렷한 줄의 낱말은 대개 88~96, 흐리거나 기울어 글자가 틀린 낱말은 30~75,
  *   거꾸로 · 옆으로 놓인 명함의 줄은 대개 20~60 이었어요 — 틀린 낱말이 섞이지 않게 그 사이의 위쪽에 둬요. 못 채우는 쪽은 괜찮아요.
  * - JUNK_CONF(60): 줄 끝의 한두 글자 조각은 점수가 이보다 낮을 때만 잡글자로 떼요. 점수가 높으면 이름의 일부일 수 있어(「채널 A」) 그 줄은 채우지 않아요.
+ * - CANDIDATE_CONF(60): 이메일 · 연락처 · 메일 모양 줄은 줄 점수와 그 줄의 낱말 점수가 모두 이 점수 이상일 때만 「읽은 것」으로 쳐요
+ *   (기획 17106 — 거꾸로 · 옆으로 찍힌 명함에서 우연히 잡힌 번호 · @ 줄을 걸러요. 그런 줄은 줄 점수 13~72 · 낱말 점수 0~55 였어요).
  */
 export const FILL_CONF = 80;
 const JUNK_CONF = 60;
+const CANDIDATE_CONF = 60;
 /** 줄 끝에서 떼는 조각 수 상한 */
 const MAX_TAIL_JUNK = 3;
 /** 채울 회사명 길이 상한 — 화면의 회사명 상한(40자)과 같아요. 넘는 줄은 회사명 한 줄이 아니에요(주소 · 안내 글) */
@@ -1321,34 +1324,70 @@ function isKoreanCard(texts: readonly TextChip[], name: string): boolean {
   return ko >= 2 && ko * 2 >= sure.length;
 }
 
+/**
+ * 명함을 읽은 결과(기획 17106).
+ * - found: 이메일 · 연락처 가운데 하나라도 또렷이 읽은 줄(CANDIDATE_CONF 이상)에서 찾아 칸에 채움
+ * - unsure: 그런 것은 없지만 메일 모양 글자를 또렷이 읽음 — 잘렸을 수 있어 비웠고 직원이 읽은 줄에서 골라요
+ *   (「메일 주소를 확인하지 못했습니다. 읽은 줄에서 고르거나 직접 입력해 주세요.」)
+ * - unreadable: 또렷이 읽은 이메일 · 연락처도, 쓸 만한 메일 후보도 없음 — 「명함을 읽지 못했습니다」. 거꾸로 · 옆으로 찍힌 명함의 깨진 줄이라
+ *   화면은 칩을 보여 주지 않고, 아무 칸도(메일 언어도) 채우지 않아요. 거꾸로 찍힌 전화번호는 숫자로 읽혀 전화번호 모양이 되기도 해요
+ *   (지어낸 명함을 거꾸로 읽혀 보니 「010-1234-5678」이 줄 점수 26 의 「95-7601-010」으로 채워졌어요) — 그래서 점수가 낮은 줄에서 찾은 것은 찾은 것으로 치지 않아요.
+ * 점수를 모르면(도구가 줄 점수를 주지 않음) 전처럼 모양만 봐요.
+ */
+export type ScanOutcome = "found" | "unsure" | "unreadable";
+
 export type ScanResult = {
   chips: Chip[];
   values: ScanValues;
   links: ScanLinks;
+  outcome: ScanOutcome;
+  /** 또렷이 읽은 줄에서 찾아 채운 이메일 · 연락처 수(0~2) */
+  found: number;
   /** 한글 명함(규칙 6) */
   korean: boolean;
+  /** 읽은 줄 점수의 평균(0~100, 점수를 모르면 0) — 돌려 읽은 방향을 견줄 때 써요(card-rotate.ts) */
+  confidence: number;
 };
 
 /**
- * 읽은 글자 → 칩 · 네 칸 값 · 연결. 줄이 하나도 없으면 chips 가 비어요(읽지 못함).
+ * 읽은 글자 → 칩 · 네 칸 값 · 연결 · 읽은 결과. 줄이 하나도 없으면 chips 가 비어요(읽지 못함).
  * ocr = 글자 읽기 도구가 준 줄 · 낱말 점수. 회사명 · 이름은 점수가 있을 때만 채워요(규칙 1 「글자 인식 점수가 높은 줄만」) — 없으면 이메일 · 연락처만.
  */
 export function scanCard(text: string, ocr?: readonly OcrLine[] | null): ScanResult {
   const { chips, lines } = readCard(text, ocr);
-  const { values, links } = autoFill(chips);
-  const texts: TextChip[] = [];
-  chips.forEach((chip, i) => {
-    if (chip.kind === "other") texts.push({ chip, line: lines[i], loose: looseStrip(chip.text).value });
-  });
-  const domain = values.email ? emailDomainName(values.email) : null;
-  const put = (field: "company" | "name", fill: Fill | null) => {
-    if (!fill) return;
-    values[field] = fill.value;
-    links[field] = fill.chip.id;
+  const filled = autoFill(chips);
+  // 또렷이 읽은 줄의 칩인지 — 줄 점수와 그 줄 낱말 점수가 모두 CANDIDATE_CONF 이상. 줄 점수만 보면 옆으로 찍힌 명함의 짧은 깨진 줄이 지나가요
+  // (지어낸 명함을 옆으로 읽혀 보니 「mn @ 의 눅」이 줄 점수 72 · 낱말 점수 10 이었어요). 도구가 줄 점수를 주지 않았으면(없음 · 빈 목록) 전처럼 모두 읽은 것으로 봐요
+  const readable = (i: number) => {
+    if (!ocr || ocr.length === 0) return true;
+    const line = lines[i];
+    return line !== null && Math.min(line.confidence, ...lettered(line.words).map((w) => w.confidence)) >= CANDIDATE_CONF;
   };
-  put("company", certainCompany(texts, domain));
-  put("name", certainName(texts, domain, values.email));
-  return { chips, values, links, korean: isKoreanCard(texts, values.name) };
+  const sure = (field: ScanField) => filled.links[field] !== undefined && readable(chips.findIndex((c) => c.id === filled.links[field]));
+  const found = (sure("email") ? 1 : 0) + (sure("phone") ? 1 : 0);
+  const outcome: ScanOutcome = found > 0 ? "found" : chips.some((c, i) => isEmailLikeChip(c) && readable(i)) ? "unsure" : "unreadable";
+  // 못 읽은 명함은 아무 칸도 채우지 않아요(점수 낮은 줄에서 뽑은 번호 포함)
+  const values: ScanValues = outcome === "unreadable" ? { company: "", name: "", email: "", phone: "" } : filled.values;
+  const links: ScanLinks = outcome === "unreadable" ? {} : filled.links;
+  const scored = (ocr ?? []).filter((l) => /[\p{L}\p{N}]/u.test(l.text));
+  const confidence = scored.length > 0 ? scored.reduce((sum, l) => sum + l.confidence, 0) / scored.length : 0;
+  let korean = false;
+  if (outcome !== "unreadable") {
+    const texts: TextChip[] = [];
+    chips.forEach((chip, i) => {
+      if (chip.kind === "other") texts.push({ chip, line: lines[i], loose: looseStrip(chip.text).value });
+    });
+    const domain = values.email ? emailDomainName(values.email) : null;
+    const put = (field: "company" | "name", fill: Fill | null) => {
+      if (!fill) return;
+      values[field] = fill.value;
+      links[field] = fill.chip.id;
+    };
+    put("company", certainCompany(texts, domain));
+    put("name", certainName(texts, domain, values.email));
+    korean = isKoreanCard(texts, values.name);
+  }
+  return { chips, values, links, outcome, found, korean, confidence };
 }
 
 /**
