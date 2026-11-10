@@ -184,6 +184,10 @@ p {
 .scan-help-short { display: none; }
 .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scan-title { flex: 1; min-width: 0; color: var(--gray-700); font-weight: 600; }
+/* 「읽은 줄 모두 보기 (n)」 · 「읽은 줄 접기」(UG-451 기획 17100, 시안 M16 · M17 「글자 버튼」) — Gray/900 · 13 SemiBold · 줄 높이 16.
+   글자 자리는 줄의 남는 폭을 다 쓰고(시안 flex 1), 누르는 곳은 글자만. 누르는 높이는 옆 「명함 다시 찍기」와 같게(32, 휴대폰 44) */
+.scan-toggle-box { flex: 1; min-width: 0; display: flex; }
+.scan-toggle { display: inline-flex; align-items: center; height: 32px; padding: 0; border: 0; background: none; color: var(--gray-900); font-size: 13px; line-height: 16px; font-weight: 600; text-align: left; cursor: pointer; }
 .scan-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .scan-body { display: flex; align-items: flex-start; gap: 8px; } /* 찍은 명함 사진(작게)은 칩 왼쪽(N7) */
 .scan-body .scan-chips { flex: 1; min-width: 0; }
@@ -865,6 +869,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .dialog-actions .btn { flex: 1; height: 44px; }
   .scan-button { height: 48px; }
   .scan-head .btn,
+  .scan-toggle,
   .suspect-confirm { height: 44px; }
   /* 명함 찍기 안내는 한 줄(UG-453 기획 6) */
   .scan-help-long { display: none; }

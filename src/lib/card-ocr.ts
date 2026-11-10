@@ -7,6 +7,7 @@
 // 일꾼은 「계정 만들기」 창이 열려 있는 동안만 살려 두고, 창을 닫으면 닫아요(createCardReader).
 // 배포 화면의 CSP 는 일꾼 안에서 wasm 을 돌릴 수 있게 script-src 에 'wasm-unsafe-eval' 이 있어야 해요(nginx 설정, 플랫폼 쪽).
 
+import type { OcrLine } from "./card-scan.ts";
 import { createRetryBudget, loadWithRetry } from "./ocr-retry.ts";
 
 /** 사진의 긴 변을 이만큼으로 줄여 읽어요 — 아이패드 원본(4000px 안팎)은 느리고 글자 인식에도 득이 없어요. */
@@ -94,6 +95,28 @@ async function prepare(file: Blob): Promise<{ canvas: HTMLCanvasElement | null; 
 
 type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 type OcrLog = { status: string; progress: number };
+type OcrPage = Awaited<ReturnType<OcrWorker["recognize"]>>["data"];
+
+/** 글자 읽기 결과의 줄 · 낱말과 그 인식 점수(0~100) — 회사명 · 이름 자동 채움이 점수가 높은 줄만 쓰려고(UG-451 기획 17100). 도구가 주지 않으면 null */
+function linesOf(data: OcrPage): OcrLine[] | null {
+  if (!data.blocks) return null;
+  const lines: OcrLine[] = [];
+  for (const block of data.blocks) {
+    for (const paragraph of block.paragraphs ?? []) {
+      for (const line of paragraph.lines ?? []) {
+        lines.push({
+          text: line.text,
+          confidence: line.confidence,
+          words: (line.words ?? []).map((w) => ({ text: w.text, confidence: w.confidence })),
+        });
+      }
+    }
+  }
+  return lines;
+}
+
+/** 글자와 함께 줄 · 낱말 점수(blocks)도 받아요 */
+const OCR_OUTPUT = { text: true, blocks: true } as const;
 
 /**
  * 일꾼을 띄우고 도구를 받아요. tesseract 는 엔진(core)을 받지 못하면 약속을 끝내지만, 언어 데이터를 받지 못하면(인터넷이 잠깐 끊김 등)
@@ -202,14 +225,14 @@ export function createCardReader() {
   }
 
   /**
-   * 명함 사진에서 읽은 글자(줄바꿈 포함)와 비교용 줄인 사진(data URL, 만들지 못하면 null).
+   * 명함 사진에서 읽은 글자(줄바꿈 포함) · 줄 점수와 비교용 줄인 사진(data URL, 만들지 못하면 null).
    * 읽기 도구를 받지 못했거나 읽다가 실패하면 text 가 null 이고 failure 에 까닭이 있어요 — 그래도 이번 사진(preview)은 돌려줘요(앞 명함 사진이 남지 않게).
    * progress = 도구를 받는 동안의 진행률(0~100). 이미 받아 둔 도구면 부르지 않아요.
    */
   async function read(
     photo: Blob,
     progress?: (percent: number) => void,
-  ): Promise<{ text: string | null; preview: string | null; failure: ReadFailure | null }> {
+  ): Promise<{ text: string | null; lines: OcrLine[] | null; preview: string | null; failure: ReadFailure | null }> {
     const { canvas, preview } = await prepare(photo);
     onProgress = progress ?? null;
     try {
@@ -218,18 +241,18 @@ export function createCardReader() {
         w = await ready();
       } catch {
         // 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과) — 다시 받기를 다 썼으면 새로 고치라고 안내해요
-        return { text: null, preview, failure: retryBudget.spent ? "tool_reload" : "tool" };
+        return { text: null, lines: null, preview, failure: retryBudget.spent ? "tool_reload" : "tool" };
       } finally {
         onProgress = null;
       }
       try {
-        const { data } = await withTimeout(w.recognize(canvas ?? photo), READ_TIMEOUT_MS);
-        return { text: data.text, preview, failure: null };
+        const { data } = await withTimeout(w.recognize(canvas ?? photo, {}, OCR_OUTPUT), READ_TIMEOUT_MS);
+        return { text: data.text, lines: linesOf(data), preview, failure: null };
       } catch {
         // 읽다가 멈춘 일꾼은 다시 쓰지 않아요
         if (worker) closeLater(worker);
         worker = null;
-        return { text: null, preview, failure: "read" };
+        return { text: null, lines: null, preview, failure: "read" };
       }
     } finally {
       // 그림판 메모리도 바로 비워요
