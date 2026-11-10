@@ -12,6 +12,17 @@ const OVERFLOW_EPSILON = 0.01;
 /** 글자 폭이 상자 안쪽 폭을 넘는지(소수점 폭 그대로). */
 export const exceedsBox = (textWidth: number, boxWidth: number) => textWidth - boxWidth > OVERFLOW_EPSILON;
 
+/** 말풍선 한두 줄(30~48)에 여유를 둔 높이 — 글자 아래 자리가 이보다 모자라면 위로 띄워요. */
+const TIP_SHORT_ROOM = 72;
+
+/**
+ * 전체 글자 말풍선을 글자 위로 띄울지(UG-453 기획 17101). below · above = 글자 아래 · 위에 남은 화면 높이,
+ * need = 말풍선 높이 + 글자와의 간격 + 화면 끝 여백.
+ * 아래가 한두 줄 자리도 안 되면 전처럼 위로. 긴 글자(서너 줄)라 아래에 다 들어가지 않으면 위에 다 들어갈 때만 위로 —
+ * 위에도 모자라면 아래 그대로예요(위로 뒤집으면 첫 줄이 화면 밖으로 잘려요).
+ */
+export const tipOpensUp = (below: number, above: number, need: number) => below < TIP_SHORT_ROOM || (below < need && above >= need);
+
 /** 복제본을 글자 본래 폭으로 펴는 스타일 — 같은 클래스(글꼴 · 자간)는 그대로 두고, 폭 제한 · 말줄임 · 여백 · 테두리만 풀어요. */
 const NATURAL_STYLE: Partial<CSSStyleDeclaration> = {
   position: "absolute",
