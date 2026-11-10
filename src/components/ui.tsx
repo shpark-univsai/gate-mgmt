@@ -242,9 +242,18 @@ export function StatusChips({ label, children }: { label: string; children: Reac
     return () => observer?.disconnect();
   }, [measure]);
   // 키보드로 옮겨 온 칩이 줄 끝에 걸쳐 있으면 다 보이게 밀어요 — 브라우저는 조금이라도 보이는 칩은 밀어 주지 않아 초점 테두리가 줄 끝에서 잘렸어요.
-  // 오른쪽은 흐려지는 끝만큼 비워요(globals.css 의 scroll-padding-right). 손가락 · 마우스로 누를 때(:focus-visible 아님)는 줄을 움직이지 않아요.
+  // 오른쪽은 흐려지는 끝만큼 비워요(globals.css 의 scroll-padding-right). :focus-visible 을 모르는 옛 브라우저는 건너뛰어요(matches 가 예외를 던져요).
   const revealFocused = (e: React.FocusEvent<HTMLDivElement>) => {
-    if (e.target.matches(":focus-visible")) e.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    try {
+      if (e.target.matches(":focus-visible")) e.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      // 옛 브라우저 — 밀지 않아요
+    }
+  };
+  // 누른 칩이 흐려지는 끝에 걸쳐 있으면 다 보이게 밀어요 — 고른 칩의 채움 · 숫자가 옅게 남지 않게(반박 리뷰). 다 보이는 칩이면 줄이 움직이지 않아요.
+  const revealPicked = (e: React.MouseEvent<HTMLDivElement>) => {
+    const chip = e.target instanceof Element ? e.target.closest("button") : null;
+    chip?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   return (
     <div
@@ -254,6 +263,7 @@ export function StatusChips({ label, children }: { label: string; children: Reac
       aria-label={label}
       onScroll={measure}
       onFocus={revealFocused}
+      onClick={revealPicked}
     >
       <div ref={trackRef} className="status-chips-track">
         {children}
