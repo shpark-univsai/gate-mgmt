@@ -47,7 +47,7 @@ import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
 import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, purgeLegacyCardPhotos } from "@/lib/card-photo";
-import { RECREATE_TEXT, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "@/lib/recreate";
+import { RECREATE_TEXT, newAccountMailText, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "@/lib/recreate";
 import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
 import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
 import {
@@ -539,7 +539,7 @@ const statusText = (a: Account) =>
   a.status === "pending" && a.mailFailureReason ? MAIL_FAILURE_LABEL[a.mailFailureReason] : STATUS_LABEL[a.status];
 
 // note = 알림 아래 줄(UG-455 기획 17099-5 — 「명함 사진은 저장하지 못했습니다」)
-type ToastState = { title: string; detail: string; tone?: "error"; note?: string } | null;
+type ToastState = { title: string; detail: string; tone?: "error" } | null;
 
 /** 계정을 만든 뒤 목록에 알릴 것(UG-455 기획 17099-5) — photoNotSaved = 서버가 명함 사진을 받지 않았거나 저장하지 못함 */
 type CreatedNotice = { photoNotSaved?: boolean };
@@ -730,6 +730,8 @@ export default function AccountsPage() {
   // 받는 중에 닫았거나 다른 줄을 열었으면 늦게 온 응답을 버리려고
   const cardPhotoReq = useRef(0);
   const [toast, setToast] = useState<ToastState>(null);
+  // 계정은 만들었는데 명함 사진만 저장하지 못함 — 완료 알림 옆에 빨간 알림으로 따로 띄워요(UG-455 기획 17120-1)
+  const [photoToast, setPhotoToast] = useState(false);
   const [freshId, setFreshId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // 내려받기 실패 안내는 그때의 조건(applied)에만 붙여요 — 검색 조건을 바꾸면 저절로 사라져요.
@@ -1088,12 +1090,9 @@ export default function AccountsPage() {
       setResendTarget(null);
       if (result.kind === "created") {
         showCreated(result.account);
-        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 아래 줄에 알려요(기획 17099-5) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음
-        setToast({
-          title: "계정을 만들었습니다",
-          detail: "안내 메일 발송을 요청했습니다",
-          ...(result.photoNotSaved ? { note: CARD_PHOTO_TEXT.notSaved } : {}),
-        });
+        setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
+        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 빨간 알림을 따로 띄워요(기획 17120-1) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음
+        setPhotoToast(result.photoNotSaved === true);
       } else {
         reload();
         setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 비밀번호 설정 링크로 발송을 요청했습니다" });
@@ -1106,7 +1105,7 @@ export default function AccountsPage() {
   const afterMailFailed = useCallback(
     (account: Account, notice?: CreatedNotice) => {
       showCreated(account);
-      if (notice?.photoNotSaved) setToast({ tone: "error", title: CARD_PHOTO_TEXT.notSaved, detail: CARD_PHOTO_TEXT.notSavedDetail });
+      setPhotoToast(notice?.photoNotSaved === true);
     },
     [showCreated],
   );
@@ -1118,6 +1117,7 @@ export default function AccountsPage() {
   }, [freshId]);
 
   const clearToast = useCallback(() => setToast(null), []);
+  const clearPhotoToast = useCallback(() => setPhotoToast(false), []);
 
   /** 계정 만들기 창에서 비밀번호 재설정 메일을 대신 보냈어요(UG-421 D2 · MD2) — 창을 닫고 완료 알림 */
   const afterResetSent = useCallback(
@@ -1641,7 +1641,12 @@ export default function AccountsPage() {
 
       {cardPhoto && <CardPhotoViewer src={cardPhoto.src} email={cardPhoto.email} onClose={closeCardPhoto} />}
 
-      {toast && <Toast title={toast.title} detail={toast.detail} note={toast.note} tone={toast.tone} onDone={clearToast} />}
+      {(toast || photoToast) && (
+        <div className="toast-stack">
+          {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
+          {photoToast && <Toast title={CARD_PHOTO_TEXT.notSaved} detail={CARD_PHOTO_TEXT.notSavedDetail} tone="error" onDone={clearPhotoToast} />}
+        </div>
+      )}
     </>
   );
 }
@@ -2081,11 +2086,17 @@ function MailFailureResult({
  */
 function OldIssueLeftResult({
   account,
+  fresh,
+  mailSent,
   onDone,
   onBusyChange,
 }: {
   /** 취소하지 못한 옛 발급(잘못된 주소의 계정) */
   account: Account;
+  /** 새로 만든 계정 — 위쪽에 「새 계정」 줄로 보여 줘요(기획 17120-2) */
+  fresh: Account;
+  /** 새 계정에 안내 메일을 보냈는지 */
+  mailSent: boolean;
   /** 다시 취소했거나 [닫기] — 감싼 창이 다음 화면(완료 알림 · 메일 실패 결과)으로 넘어가요 */
   onDone: () => void;
   /** 취소하는 중 — 감싼 창이 Esc · 바깥 클릭으로 닫히지 않게(closable) */
@@ -2114,7 +2125,12 @@ function OldIssueLeftResult({
       <div className="summary">
         <div className="summary-target">
           {account.company && <strong>{account.company}</strong>}
-          <span>{account.email}</span>
+          <span className="summary-line">
+            <span className="summary-label">{RECREATE_TEXT.newAccountLabel}</span> {fresh.email} {newAccountMailText(mailSent)}
+          </span>
+          <span className="summary-line">
+            <span className="summary-label">{RECREATE_TEXT.leftOldLabel}</span> {account.email}
+          </span>
         </div>
       </div>
       {error ? (
@@ -2271,7 +2287,7 @@ function CreateDialog({
   const [resultBusy, setResultBusy] = useState(false);
   // 주소 고쳐 새로 만든 뒤 옛 발급을 취소하지 못함(기획 17099-7) — 창에 남아 알리고 다시 취소하게 해요.
   // created = 메일까지 보낸 새 계정(안내를 닫으면 완료 알림과 함께 창을 닫아요). 메일을 못 보냈으면 null — 안내를 닫으면 그 결과 화면 · 주소 고치기로 가요
-  const [staleIssue, setStaleIssue] = useState<{ old: Account; created: Account | null; notice: CreatedNotice } | null>(null);
+  const [staleIssue, setStaleIssue] = useState<{ old: Account; fresh: Account; created: Account | null; notice: CreatedNotice } | null>(null);
   // 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워짐(서버 sourceCancel = revoked, 반박 리뷰 M1) — 그 옛 발급의 번호.
   // 고치는 대상이 그 발급인 동안 버튼 위에 알리고 [발급 취소]를 함께 둬요(목록에는 「첫 로그인 전」으로 남아 있어 직원이 알 수 없어요)
   const [revokedOldId, setRevokedOldId] = useState<string | null>(null);
@@ -2958,10 +2974,10 @@ function CreateDialog({
     photoLostRef.current = notice.photoNotSaved === true;
     if (res.mailSent) {
       setPhoto(null); // 고쳐 재발송이 끝났어요 — 창의 명함 사진은 비워요(잘못된 계정에 남은 사진은 서버가 새 계정으로 옮겨요, UG-455)
-      if (left) return setStaleIssue({ old: wrong, created: res.account, notice });
+      if (left) return setStaleIssue({ old: wrong, fresh: res.account, created: res.account, notice });
       return onCreated(res.account, notice);
     }
-    if (left) setStaleIssue({ old: wrong, created: null, notice: {} });
+    if (left) setStaleIssue({ old: wrong, fresh: res.account, created: null, notice: {} });
     if (res.mailFailureReason === "address") {
       // 고친 주소도 받지 않음 — 새 계정을 고치는 대상으로 바꿔 같은 창에 남아요(사진도 남겨 다시 비교)
       setFix(res.account);
@@ -3446,7 +3462,7 @@ function CreateDialog({
   if (staleIssue) {
     return (
       <Dialog title="Gate 계정 만들기" onClose={finishStale} closable={!resultBusy}>
-        <OldIssueLeftResult account={staleIssue.old} onDone={finishStale} onBusyChange={setResultBusy} />
+        <OldIssueLeftResult account={staleIssue.old} fresh={staleIssue.fresh} mailSent={staleIssue.created !== null} onDone={finishStale} onBusyChange={setResultBusy} />
       </Dialog>
     );
   }

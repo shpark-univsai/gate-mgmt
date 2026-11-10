@@ -202,8 +202,7 @@ export function Dialog({
  * 완료 알림 — 어두운 유리(반투명 + 흐림). 4초 뒤 사라져요.
  * tone="error" = 창이 이미 닫힌 뒤의 실패(「작성 중」 명함 저장 등, UG-431) — 같은 자리 · 모양에 아이콘만 빨간 ✕
  */
-/** note = 아래에 한 줄 더(UG-455 기획 17099-5 — 「계정을 만들었습니다」 아래 「명함 사진은 저장하지 못했습니다」) */
-export function Toast({ title, detail, note, tone, onDone }: { title: string; detail: string; note?: string; tone?: "error"; onDone: () => void }) {
+export function Toast({ title, detail, tone, onDone }: { title: string; detail: string; tone?: "error"; onDone: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDone, 4000);
     return () => clearTimeout(t);
@@ -214,7 +213,6 @@ export function Toast({ title, detail, note, tone, onDone }: { title: string; de
       <div>
         <p className="toast-title">{title}</p>
         <p className="toast-detail">{detail}</p>
-        {note && <p className="toast-note">{note}</p>}
       </div>
     </div>
   );

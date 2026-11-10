@@ -14,6 +14,11 @@ export const RECREATE_TEXT = {
    * 창에 [재발송]과 [발급 취소]를 함께 둬요. 고친 주소가 이미 있는 계정이면 다시 보내도 같아 옛 발급을 취소하게 해요
    */
   sourceRevoked: "옛 발급의 링크는 이미 막혔습니다. 다시 [재발송]하거나 [발급 취소]로 옛 발급을 취소해 주세요.",
+  /** 옛 발급 취소 실패 창 위쪽 두 줄의 이름표(기획 17120-2) — 「새 계정 …(메일 보냄)」 · 「취소하지 못한 옛 발급 …」 */
+  newAccountLabel: "새 계정",
+  newAccountMailSent: "(메일 보냄)",
+  newAccountMailFailed: "(메일 보내지 못함)",
+  leftOldLabel: "취소하지 못한 옛 발급",
   retry: "다시 시도",
   retrying: "취소하는 중…",
 } as const;
@@ -57,3 +62,7 @@ export function oldIssueAfterCreate(sourceCancel: SourceCancel | undefined): "do
 export function oldIssueLeft(result: { ok: true } | { ok: false; reason: string }): boolean {
   return !result.ok && result.reason !== "not_found";
 }
+
+/** 옛 발급 취소 실패 창 「새 계정」 줄 끝의 메일 결과 표시 */
+export const newAccountMailText = (mailSent: boolean): string =>
+  mailSent ? RECREATE_TEXT.newAccountMailSent : RECREATE_TEXT.newAccountMailFailed;

@@ -687,6 +687,8 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 .summary-target { display: flex; flex-direction: column; gap: 2px; }
 .summary-target strong { font-size: 14px; line-height: 20px; }
 .summary-target span { color: var(--gray-500); }
+.summary-target .summary-line { overflow-wrap: anywhere; } /* 긴 이메일이 창을 넘치지 않게(UG-455 기획 17120-2) */
+.summary-target .summary-label { color: var(--gray-900); font-weight: 600; margin-right: 4px; }
 .summary-target .dash { color: var(--gray-400); } /* 파기돼 도메인만 남은 이메일(UG-450) — 목록의 「—」와 같은 회색 */
 .summary-rows { margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .summary-rows div { display: flex; gap: 12px; }
@@ -720,7 +722,9 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 .toast--error .toast-icon { color: var(--danger-400); } /* 창이 닫힌 뒤의 실패(「작성 중」 명함 저장 등) */
 .toast-title { color: var(--gray-0); font-weight: 700; }
 .toast-detail { margin-top: 2px; color: var(--gray-300); }
-.toast-note { margin-top: 2px; color: var(--gray-0); } /* 아래 줄의 덧붙임 알림(명함 사진은 저장하지 못했습니다) — 놓치지 않게 제목과 같은 흰색 */
+/* 알림 둘이 함께 뜰 때(계정을 만들었습니다 + 명함 사진은 저장하지 못했습니다) 겹치지 않게 아래에서 위로 쌓아요 — 알림 하나만 있어도 같은 자리 */
+.toast-stack { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: flex; flex-direction: column-reverse; gap: 8px; }
+.toast-stack .toast { position: static; }
 
 /* ── 휴대폰: 보이는 높이가 짧아서 촘촘하게 ── */
 @media (max-width: 640px) {
@@ -882,6 +886,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .mail-failure-sentence { display: block; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
+  .toast-stack { left: 16px; right: 16px; bottom: 16px; }
 }
 
 /* ── 터치 기기(아이패드 등 넓은 화면 포함): 읽은 줄(칩)은 44 높이 · 8 간격(UG-451 기획 17073-10) ── */
