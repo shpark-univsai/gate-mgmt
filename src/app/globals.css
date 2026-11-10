@@ -905,6 +905,9 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
   .toast-stack { left: 16px; right: 16px; bottom: 16px; }
+  /* 창이 열린 동안에는 알림을 화면 위로(UG-455 기획 17124 반박 리뷰 M2) — 닫을 때까지 남는 「명함 사진은 저장하지 못했습니다」가
+     창 맨 아래에 붙은 버튼 줄(다시 보내기 · 취소 · 계정 만들기)을 가리지 않게. 위에서 아래로 쌓아요 */
+  body:has(.scrim) .toast-stack { top: calc(16px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
 }
 
 /* ── 터치 기기(아이패드 등 넓은 화면 포함): 읽은 줄(칩)은 44 높이 · 8 간격(UG-451 기획 17073-10) ── */

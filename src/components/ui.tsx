@@ -211,12 +211,15 @@ export function Toast({
   detail,
   tone,
   persist = false,
+  closeLabel,
   onDone,
 }: {
   title: string;
   detail: string;
   tone?: "error";
   persist?: boolean;
+  /** 「닫기」를 낭독기가 읽는 이름(어떤 알림을 닫는지) — 없으면 「닫기」 */
+  closeLabel?: string;
   onDone: () => void;
 }) {
   useEffect(() => {
@@ -232,7 +235,7 @@ export function Toast({
         <p className="toast-detail">{detail}</p>
       </div>
       {persist && (
-        <button type="button" className="toast-close" onClick={onDone}>
+        <button type="button" className="toast-close" aria-label={closeLabel} onClick={onDone}>
           닫기
         </button>
       )}
