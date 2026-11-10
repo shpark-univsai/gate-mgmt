@@ -731,8 +731,10 @@ export default function AccountsPage() {
   // 받는 중에 닫았거나 다른 줄을 열었으면 늦게 온 응답을 버리려고
   const cardPhotoReq = useRef(0);
   const [toast, setToast] = useState<ToastState>(null);
-  // 계정은 만들었는데 명함 사진만 저장하지 못함 — 완료 알림 옆에 빨간 알림으로 따로 띄워요(UG-455 기획 17120-1)
-  const [photoToast, setPhotoToast] = useState(false);
+  // 계정은 만들었는데 명함 사진만 저장하지 못함 — 완료 알림 옆에 빨간 알림으로 따로 띄워요(UG-455 기획 17120-1).
+  // 0 = 없음, 1 이상 = 실패할 때마다 늘려 알림을 새로 띄우는 키 — 떠 있는 동안 또 실패해도 낭독기가 다시 읽어요(기획 17124 반박 리뷰 L1)
+  const [photoToast, setPhotoToast] = useState(0);
+  const showPhotoToast = useCallback(() => setPhotoToast((n) => n + 1), []);
   const [freshId, setFreshId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // 내려받기 실패 안내는 그때의 조건(applied)에만 붙여요 — 검색 조건을 바꾸면 저절로 사라져요.
@@ -1092,23 +1094,24 @@ export default function AccountsPage() {
       if (result.kind === "created") {
         showCreated(result.account);
         setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
-        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 빨간 알림을 따로 띄워요(기획 17120-1) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음
-        setPhotoToast(result.photoNotSaved === true);
+        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 빨간 알림을 따로 띄워요(기획 17120-1) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음.
+        // 이미 떠 있는 알림은 직원이 닫을 때까지 남아요(기획 17124) — 다음 계정이 잘 만들어져도 내리지 않아요
+        if (result.photoNotSaved === true) showPhotoToast();
       } else {
         reload();
         setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 비밀번호 설정 링크로 발송을 요청했습니다" });
       }
     },
-    [reload, showCreated],
+    [reload, showCreated, showPhotoToast],
   );
 
   /** 계정은 만들었지만 메일은 못 보냄 — 창은 그대로(결과 · 주소 고치기). 명함 사진을 저장하지 못했으면 그것만 따로 알려요(기획 17099-5) */
   const afterMailFailed = useCallback(
     (account: Account, notice?: CreatedNotice) => {
       showCreated(account);
-      setPhotoToast(notice?.photoNotSaved === true);
+      if (notice?.photoNotSaved === true) showPhotoToast();
     },
-    [showCreated],
+    [showCreated, showPhotoToast],
   );
 
   useEffect(() => {
@@ -1118,7 +1121,7 @@ export default function AccountsPage() {
   }, [freshId]);
 
   const clearToast = useCallback(() => setToast(null), []);
-  const clearPhotoToast = useCallback(() => setPhotoToast(false), []);
+  const clearPhotoToast = useCallback(() => setPhotoToast(0), []);
 
   /** 계정 만들기 창에서 비밀번호 재설정 메일을 대신 보냈어요(UG-421 D2 · MD2) — 창을 닫고 완료 알림 */
   const afterResetSent = useCallback(
@@ -1642,10 +1645,21 @@ export default function AccountsPage() {
 
       {cardPhoto && <CardPhotoViewer src={cardPhoto.src} email={cardPhoto.email} onClose={closeCardPhoto} />}
 
-      {(toast || photoToast) && (
+      {(toast || photoToast > 0) && (
         <div className="toast-stack">
           {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
-          {photoToast && <Toast title={CARD_PHOTO_TEXT.notSaved} detail={CARD_PHOTO_TEXT.notSavedDetail} tone="error" onDone={clearPhotoToast} />}
+          {/* 명함 사진을 저장하지 못한 알림은 직원이 닫을 때까지 남겨요(기획 17124) — 완료 알림은 전처럼 4초 */}
+          {photoToast > 0 && (
+            <Toast
+              key={photoToast}
+              title={CARD_PHOTO_TEXT.notSaved}
+              detail={CARD_PHOTO_TEXT.notSavedDetail}
+              tone="error"
+              persist
+              closeLabel={CARD_PHOTO_TEXT.notSavedClose}
+              onDone={clearPhotoToast}
+            />
+          )}
         </div>
       )}
     </>
@@ -3471,11 +3485,11 @@ function CreateDialog({
     else emailRef.current?.focus();
   }
 
-  // 다시 찍은 뒤의 안내(UG-451 기획 17118-1) — 다른 사람이라 지운 값은 회색, 같은 사람인지 몰라 남긴 값은 빨간색(확인해야 해요).
-  // 그 칸을 직원이 고치면 그 칸 이름이 빠지고, 모두 고치면 내려가요. 읽는 동안에는 띄우지 않아요
+  // 다시 찍은 뒤의 안내(UG-451 기획 17118-1) — 다른 사람이라 지운 값은 주황(Warning, 기획 17132 — 「명함에서 읽었습니다…」 회색과 갈리게),
+  // 같은 사람인지 몰라 남긴 값은 빨간색(확인해야 해요). 그 칸을 직원이 고치면 그 칸 이름이 빠지고, 모두 고치면 내려가요. 읽는 동안에는 띄우지 않아요
   const retakeText = scanning ? null : retakeNoteText(retakeNoted, { company, name, email, phone }, CHIP_TARGET_LABEL);
   const retakeLine = retakeText && (
-    <p className={retakeNoted?.kind === "stale" ? "error" : "help"} role="status">
+    <p className={retakeNoted?.kind === "stale" ? "error" : "warning"} role="status">
       {retakeText}
     </p>
   );

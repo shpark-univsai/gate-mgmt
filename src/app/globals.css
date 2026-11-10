@@ -24,6 +24,7 @@
   /* 계정 해지 확인 창(T3) 경고 상자 — Figma 시안 값(UG-443 기획 16925) */
   --danger-surface: #fff7f6;
   --danger-text: #bf3636;
+  --warning-text: #b45309; /* 주의 안내 글자(UG-451 기획 17132) — 흰 바탕 대비 약 5:1. 디자인 시스템에 Warning 글자 값이 없어 저희가 정함 */
   --success-600: #16a34a;
   --overlay-dark-80: rgb(14 22 42 / 0.8);
   --viewer-backdrop: #000; /* 명함 크게 보기 바탕 — 사진 앱처럼 검정으로 덮어요(UG-455 기획 17099-1). 조금이라도 비치면(0.95 · 0.98) 뒤 글자가 읽혀 불투명하게 */
@@ -168,6 +169,8 @@ p {
 /* 의심 주소 경고 아래 「명함과 같은 주소예요」(UG-451 기획 17030) — 왼쪽에 붙은 작은 테두리 버튼 */
 .suspect-confirm { align-self: flex-start; }
 .error { color: var(--danger-400); }
+/* 주의 안내(Warning) — 다시 찍은 명함이 다른 사람이라 직원이 넣은 값을 지웠을 때(UG-451 기획 17132). 상태 점의 Warning/300 은 흰 바탕 글자 대비 2.1:1 이라 글자용 진한 주황 */
+.warning { color: var(--warning-text); }
 /* 칸 두 개를 한 줄에(회사명 · 이름 / 고객 이메일 · 연락처) — 휴대폰은 위아래로 */
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .field-row > .field { min-width: 0; }
@@ -722,6 +725,21 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 .toast--error .toast-icon { color: var(--danger-400); } /* 창이 닫힌 뒤의 실패(「작성 중」 명함 저장 등) */
 .toast-title { color: var(--gray-0); font-weight: 700; }
 .toast-detail { margin-top: 2px; color: var(--gray-300); }
+.toast-body { flex: 1; min-width: 0; }
+/* 직원이 닫을 때까지 남는 알림의 「닫기」(UG-455 기획 17124) — 글자 버튼, 누르는 영역은 알림 안쪽 여백까지 넓혀요 */
+.toast-close {
+  flex: none;
+  align-self: center;
+  margin: -8px -8px -8px 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--gray-300);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
 /* 알림 둘이 함께 뜰 때(계정을 만들었습니다 + 명함 사진은 저장하지 못했습니다) 겹치지 않게 아래에서 위로 쌓아요 — 알림 하나만 있어도 같은 자리 */
 .toast-stack { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: flex; flex-direction: column-reverse; gap: 8px; }
 .toast-stack .toast { position: static; }
@@ -887,6 +905,9 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 
   .toast { left: 16px; right: 16px; bottom: 16px; }
   .toast-stack { left: 16px; right: 16px; bottom: 16px; }
+  /* 창이 열린 동안에는 알림을 화면 위로(UG-455 기획 17124 반박 리뷰 M2) — 닫을 때까지 남는 「명함 사진은 저장하지 못했습니다」가
+     창 맨 아래에 붙은 버튼 줄(다시 보내기 · 취소 · 계정 만들기)을 가리지 않게. 위에서 아래로 쌓아요 */
+  body:has(.scrim) .toast-stack { top: calc(16px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
 }
 
 /* ── 터치 기기(아이패드 등 넓은 화면 포함): 읽은 줄(칩)은 44 높이 · 8 간격(UG-451 기획 17073-10) ── */
@@ -899,6 +920,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* ── 호버: 마우스가 있는 기기에서만(터치에서 눌린 채 남지 않게) ── */
 @media (hover: hover) {
   .btn-dark:hover:not(:disabled) { background: var(--gray-800); }
+  .toast-close:hover { color: var(--gray-0); }
   .btn-outline:hover:not(:disabled) { background: var(--gray-50); border-color: var(--gray-400); }
   .btn-danger-outline:hover:not(:disabled) { background: var(--gray-50); }
   .login-card .btn:hover:not(:disabled) { background: var(--gray-100); }

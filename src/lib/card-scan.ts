@@ -3,6 +3,7 @@
 // 처음 채우기는 모양이 정해진 이메일 · 연락처, 그리고 확실한 회사명 · 이름(UG-451 기획 17100 — 아래 「회사명 · 이름 자동 채움」).
 // 회사명 · 이름은 잘못 읽는 일이 많아(한글 이름 「Sau TH」 등, 기획 16846) 확실하지 않으면 비워 두고 직원이 칩을 눌러 넣어요.
 import { emailSpellsKoName, surnameRomans, wordsSpellKoName } from "./ko-roman.ts";
+import { isKnownTld } from "./tlds.ts";
 
 export type ScanField = "company" | "name" | "email" | "phone";
 
@@ -589,7 +590,7 @@ type EmailSuspicion = { match: string; head: string; tail: string; typo: boolean
  *   (기획 17005 — 「…@bluepeak.com.sg」를 「…@bluepeak.com-s&」로 읽어 「…@bluepeak.com」이 채워진 일).
  *   라벨로 시작하면 라벨 뒤는 보지 않아요 — 끝 도메인 꼬리가 아니에요.
  * - typo: 끝 도메인이 흔한 오독 모양(TLD_TYPOS — .cor · .con · .cm 등) · 점을 놓쳐 나라 도메인이 붙은 모양(GLUED_CC_TLD_RE — 「…comsg」) ·
- *   소문자 라벨이 붙은 모양(GLUED_LOWER_LABEL_TLD_RE — 「…comtel」)
+ *   소문자 라벨이 붙은 모양(GLUED_LOWER_LABEL_TLD_RE — 「…comtel」) · 실재하지 않는 끝 도메인(tlds.ts 에 없음 — 「…company-a.qi」 ← .ai, 기획 17132)
  * - glue: 소문자 끝 도메인에 붙은 대문자 덩어리(「…comSG」 「…coM」)가 라벨이 아니거나, 한 글자 라벨인데 뒤가 전화번호가 아님
  */
 function emailSuspicion(text: string): EmailSuspicion | null {
@@ -633,7 +634,8 @@ function emailSuspicion(text: string): EmailSuspicion | null {
       (ccFragmentOnly(after, true) || cutTldLetterAfter(m[0], after) ? after : chunk && !GLUED_OK_RE.test(chunk) ? chunk : "");
   }
   const tld = extractEmail(line).split(".").pop() ?? "";
-  const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld) || GLUED_LOWER_LABEL_TLD_RE.test(tld);
+  // 실재하지 않는 끝 도메인(IANA 목록에 없음 — 「user1@company-a.qi」 ← .ai, 기획 17132)도 오독이에요. 실재하는 .cm · .om 은 TLD_TYPOS 가 따로 봐요
+  const typo = TLD_TYPOS.has(tld.toLowerCase()) || GLUED_CC_TLD_RE.test(tld) || GLUED_LOWER_LABEL_TLD_RE.test(tld) || !isKnownTld(tld);
   // @ 앞이 점으로 시작 · 끝나거나 점이 겹침(「.jung@」 「kim.@」 「kim..lee@」) — 앞 덩어리가 떨어졌거나 글자를 놓친 것이에요(반박 리뷰)
   const local = extractEmail(line).split("@")[0] ?? "";
   const dots = local.startsWith(".") || local.endsWith(".") || local.includes("..");
