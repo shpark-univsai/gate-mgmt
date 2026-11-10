@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ROTATE_START_LIMIT_MS, ROTATE_TOTAL_MS, ROTATIONS, needsRetry, pickReading, rotateBudget, type ReadingScore } from "./card-rotate.ts";
+import { ROTATE_START_LIMIT_MS, ROTATE_TOTAL_MS, ROTATIONS, isReadable, needsRetry, pickReading, rotateBudget, type ReadingScore } from "./card-rotate.ts";
 
 const score = (found: number, candidate = false, confidence = 0): ReadingScore => ({ found, candidate, confidence });
 
@@ -18,7 +18,22 @@ test("UG-451 17106-3 이메일 · 연락처를 하나도 못 찾고 메일 후�
   assert.equal(needsRetry(score(0, true)), false); // 또렷한 메일 모양 줄 — 바로 놓인 명함이에요
 });
 
-test("UG-451 17106-3 돌려 읽기 한도 — 첫 읽기 시작 20초 뒤에는 새로 돌리지 않고, 모두 45초 안에 끝나요", () => {
+test("UG-451 반박 리뷰 4 글자가 거의 없는 사진(뒷면 · 빈 사진)은 돌려 읽지 않아요", () => {
+  assert.equal(needsRetry({ ...score(0), sparse: true }), false);
+  assert.equal(needsRetry({ ...score(0), sparse: false }), true);
+});
+
+test("UG-451 반박 리뷰 4 돌려 읽다가 멈추는 것은 읽힌 방향이 나왔을 때만 — 글자가 거의 없는 방향을 고르지 않아요", () => {
+  assert.equal(isReadable(score(1)), true);
+  assert.equal(isReadable(score(0, true)), true);
+  assert.equal(isReadable({ ...score(0), sparse: true }), false);
+  // 0° 는 깨진 글자, 180° 는 글자가 거의 없음 → 어느 쪽도 읽히지 않았으니 찍힌 그대로
+  assert.equal(pickReading([score(0, false, 40), { ...score(0, false, 70), sparse: true }]), 0);
+});
+
+test("UG-451 17106-3 돌려 읽기 한도 — 첫 읽기 시작 10초 뒤에는 새로 돌리지 않고, 모두 25초 안에 끝나요", () => {
+  assert.equal(ROTATE_START_LIMIT_MS, 10_000);
+  assert.equal(ROTATE_TOTAL_MS, 25_000);
   assert.equal(rotateBudget(0), ROTATE_TOTAL_MS);
   assert.equal(rotateBudget(5_000), ROTATE_TOTAL_MS - 5_000);
   assert.equal(rotateBudget(ROTATE_START_LIMIT_MS - 1), ROTATE_TOTAL_MS - ROTATE_START_LIMIT_MS + 1);

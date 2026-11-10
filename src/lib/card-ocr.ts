@@ -7,7 +7,7 @@
 // 일꾼은 「계정 만들기」 창이 열려 있는 동안만 살려 두고, 창을 닫으면 닫아요(createCardReader).
 // 배포 화면의 CSP 는 일꾼 안에서 wasm 을 돌릴 수 있게 script-src 에 'wasm-unsafe-eval' 이 있어야 해요(nginx 설정, 플랫폼 쪽).
 
-import { ROTATIONS, needsRetry, pickReading, rotateBudget, type ReadingScore, type Rotation } from "./card-rotate.ts";
+import { ROTATIONS, isReadable, needsRetry, pickReading, rotateBudget, type ReadingScore, type Rotation } from "./card-rotate.ts";
 import type { OcrLine } from "./card-scan.ts";
 import { createRetryBudget, loadWithRetry } from "./ocr-retry.ts";
 
@@ -196,6 +196,10 @@ const closeLater = (pending: Promise<OcrWorker>) => void pending.then((w) => w.t
 export function createCardReader() {
   let worker: Promise<OcrWorker> | null = null;
   let disposed = false;
+  // 지금 하는 읽기(UG-451 반박 리뷰 4) — 돌려 읽는 동안 직원이 「명함 다시 찍기」로 새 사진을 주면 앞 읽기를 버려요.
+  // generation = 읽기 차례 번호(새 읽기가 시작되면 앞 읽기는 더 돌리지 않아요), abortCurrent = 앞 읽기가 기다리던 글자 읽기를 바로 끊는 함수
+  let generation = 0;
+  let abortCurrent: (() => void) | null = null;
   // 도구를 받는 동안의 마지막 소식 시각 · 진행률을 받을 곳(읽는 동안만)
   let lastActivity = 0;
   let onProgress: ((percent: number) => void) | null = null;
@@ -268,10 +272,38 @@ export function createCardReader() {
    * (UG-451 기획 17106-3, card-rotate.ts). 돌려 읽은 방향이 이기면 preview 도 그 방향으로 세워요 — 썸네일 · 크게 보기 · 서버에 남기는 사진이 모두 이 preview 예요.
    * 돌려 읽기는 첫 읽기 시작부터 ROTATE_START_LIMIT_MS 안에만 시작하고 ROTATE_TOTAL_MS 에 끊어요. 끊긴(멈춘) 일꾼은 버리고 그때까지의 결과를 써요.
    * 브라우저가 열지 못한 사진(그림판 없음)은 돌릴 수 없어 찍힌 그대로만 읽어요.
+   * 읽는 중에 read 가 또 불리면(돌려 읽는 동안의 「명함 다시 찍기」) 앞 읽기는 버려요 — 읽던 일꾼을 닫아 새 읽기가 기다리지 않게 하고,
+   * 앞 읽기는 더 돌리지 않고 그때까지의 결과로 바로 끝나요(화면이 그 결과를 쓰지 않아요 — 읽기 차례 번호로 걸러요).
    */
   async function read(photo: Blob, progress?: (percent: number) => void, rotate?: RotateOptions): Promise<CardReading> {
+    // 앞 읽기가 아직 돌고 있으면 버려요 — 읽던 일꾼은 닫고(읽는 중인 글자 읽기는 멈출 수 없어요) 새 일꾼으로 읽어요
+    const mine = ++generation;
+    abortCurrent?.();
+    abortCurrent = null;
     const { canvas, small, preview } = await prepare(photo);
+    if (mine !== generation) {
+      // 사진을 여는 사이 더 새 읽기가 시작됨
+      if (canvas) canvas.width = canvas.height = 0;
+      if (small) small.width = small.height = 0;
+      return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+    }
     onProgress = progress ?? null;
+    // 이 읽기가 쓰는 일꾼 — 버려지면(abort) 이 일꾼만 닫아요(그사이 새 읽기가 띄운 일꾼은 건드리지 않아요)
+    let used: Promise<OcrWorker> | null = null;
+    const dropUsed = () => {
+      if (!used) return;
+      closeLater(used);
+      if (worker === used) worker = null;
+      used = null;
+    };
+    let abort: () => void = () => undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abort = () => reject(new Error("새 명함 읽기가 시작됨"));
+    });
+    aborted.catch(() => undefined);
+    /** 글자 읽기 한 번 — 한도(ms)가 지나거나 새 읽기가 시작되면 끊어요 */
+    const recognize = (w: OcrWorker, image: HTMLCanvasElement | Blob, ms: number) =>
+      Promise.race([withTimeout(w.recognize(image, {}, OCR_OUTPUT), ms), aborted]);
     try {
       let w: OcrWorker;
       try {
@@ -282,14 +314,19 @@ export function createCardReader() {
       } finally {
         onProgress = null;
       }
+      if (mine !== generation) return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+      used = worker;
+      abortCurrent = () => {
+        dropUsed();
+        abort();
+      };
       const started = Date.now();
       let first: OcrPage;
       try {
-        ({ data: first } = await withTimeout(w.recognize(canvas ?? photo, {}, OCR_OUTPUT), READ_TIMEOUT_MS));
+        ({ data: first } = await recognize(w, canvas ?? photo, READ_TIMEOUT_MS));
       } catch {
-        // 읽다가 멈춘 일꾼은 다시 쓰지 않아요
-        if (worker) closeLater(worker);
-        worker = null;
+        // 읽다가 멈춘(또는 버려진) 일꾼은 다시 쓰지 않아요
+        dropUsed();
         return { text: null, lines: null, preview, failure: "read", rotation: 0 };
       }
       const readings: { rotation: Rotation; text: string; lines: OcrLine[] | null }[] = [{ rotation: 0, text: first.text, lines: linesOf(first) }];
@@ -297,21 +334,22 @@ export function createCardReader() {
       const scores = [rotate.judge(readings[0].text, readings[0].lines)];
       for (const rotation of ROTATIONS) {
         if (rotation === 0) continue;
-        // 방금 읽은 방향에서 찾았으면 끝 · 창을 닫았거나 한도가 지났으면 더 돌리지 않아요
+        // 방금 읽은 방향에서 찾았으면 끝 · 창을 닫았거나 새 읽기가 시작됐거나 한도가 지났으면 더 돌리지 않아요
         const budget = rotateBudget(Date.now() - started);
-        if (!needsRetry(scores[scores.length - 1]) || disposed || budget <= 0) break;
+        // 찍힌 그대로가 읽혔거나 글자가 거의 없으면 돌리지 않고, 돌려 읽다가 읽힌 방향이 나오면 멈춰요
+        const settled = scores.length === 1 ? !needsRetry(scores[0]) : isReadable(scores[scores.length - 1]);
+        if (settled || disposed || mine !== generation || budget <= 0) break;
         const turned = rotated(canvas, rotation);
         if (!turned) break;
         rotate.onRetry?.(readings.length + 1, ROTATIONS.length);
         try {
-          const { data } = await withTimeout(w.recognize(turned, {}, OCR_OUTPUT), Math.min(READ_TIMEOUT_MS, budget));
+          const { data } = await recognize(w, turned, Math.min(READ_TIMEOUT_MS, budget));
           const lines = linesOf(data);
           readings.push({ rotation, text: data.text, lines });
           scores.push(rotate.judge(data.text, lines));
         } catch {
-          // 돌려 읽다가 멈춤 · 한도 초과 — 일꾼은 버리고 그때까지 읽은 결과를 써요(읽기 실패가 아니에요)
-          if (worker) closeLater(worker);
-          worker = null;
+          // 돌려 읽다가 멈춤 · 한도 초과 · 새 읽기에 밀림 — 일꾼은 버리고 그때까지 읽은 결과를 써요(읽기 실패가 아니에요)
+          dropUsed();
           break;
         } finally {
           turned.width = turned.height = 0;
@@ -327,6 +365,7 @@ export function createCardReader() {
       }
       return { text: best.text, lines: best.lines, preview: upright, failure: null, rotation: best.rotation };
     } finally {
+      if (mine === generation) abortCurrent = null;
       // 그림판 메모리도 바로 비워요
       if (canvas) canvas.width = canvas.height = 0;
       if (small) small.width = small.height = 0;
@@ -344,6 +383,9 @@ export function createCardReader() {
 
   function dispose() {
     disposed = true;
+    // 읽는 중이면 바로 끊어요(그림판 · 일꾼을 기다리지 않고 정리)
+    abortCurrent?.();
+    abortCurrent = null;
     if (attempt) attempt.live = false;
     attempt = null;
     if (worker) closeLater(worker);

@@ -9,19 +9,29 @@ export type Rotation = (typeof ROTATIONS)[number];
 
 /**
  * 한 방향으로 읽은 결과의 점수(card-scan.ts scanCard 가 줘요).
- * found = 채운 이메일 · 연락처 수, candidate = 채우진 못했지만 또렷이 읽은 메일 모양 줄이 있음(「확인하지 못했습니다」), confidence = 줄 점수 평균
+ * found = 채운 이메일 · 연락처 수, candidate = 채우진 못했지만 바로 놓인 명함으로 보임(또렷이 읽은 메일 모양 글자 · 또렷한 글자 줄 여럿),
+ * confidence = 줄 점수 평균, sparse = 글자가 거의 읽히지 않은 사진(뒷면 · 빈 사진)
  */
-export type ReadingScore = { found: number; candidate: boolean; confidence: number };
+export type ReadingScore = { found: number; candidate: boolean; confidence: number; sparse?: boolean };
 
-/** 다른 방향으로 다시 읽어야 하는지 — 이메일 · 연락처를 하나도 못 찾았고 쓸 만한 메일 후보도 없을 때(화면이 「명함을 읽지 못했습니다」를 띄울 결과) */
-export const needsRetry = (score: ReadingScore): boolean => score.found === 0 && !score.candidate;
+/** 그 방향으로 읽힌 것으로 보는지 — 이메일 · 연락처를 찾았거나 바로 놓인 명함으로 보임. 돌려 읽다가 이런 방향이 나오면 멈춰요 */
+export const isReadable = (score: ReadingScore): boolean => score.found > 0 || score.candidate;
 
 /**
- * 돌려 읽기를 새로 시작해도 되는 한도 — 첫 읽기를 시작한 뒤 이만큼 지났으면 더 돌리지 않아요(아이패드에서 한 번 읽는 데 몇 초).
- * 돌려 읽는 한 번은 첫 읽기 시작부터 ROTATE_TOTAL_MS 안에 끝나야 해요(넘으면 끊고 그때까지 가장 나은 결과를 써요).
+ * 찍힌 그대로(0°) 읽은 결과를 보고, 다른 방향으로 돌려 읽기 시작할지 — 읽히지 않았을 때(isReadable 아님).
+ * 글자가 거의 없는 사진(sparse)은 돌려도 나올 것이 없어 건너뛰어요 — 거꾸로 · 옆으로 찍힌 명함은 깨진 글자가 많이 읽혀요(UG-451 반박 리뷰 4).
  */
-export const ROTATE_START_LIMIT_MS = 20_000;
-export const ROTATE_TOTAL_MS = 45_000;
+export const needsRetry = (first: ReadingScore): boolean => !isReadable(first) && !first.sparse;
+
+/**
+ * 돌려 읽기를 새로 시작해도 되는 한도 — 첫 읽기를 시작한 뒤 이만큼 지났으면 더 돌리지 않아요.
+ * 돌려 읽는 한 번은 첫 읽기 시작부터 ROTATE_TOTAL_MS 안에 끝나야 해요(넘으면 끊고 그때까지 가장 나은 결과를 써요).
+ * 근거(UG-451 반박 리뷰 4, Mac 에서 지어낸 명함 그림): 못 읽는 방향 한 번은 대개 1초 안팎이라(네 방향 중앙값 3.9초) 아이패드가 두세 배 느려도
+ * 10초 안에 세 방향을 모두 시작해요. 잡음이 많아 한 번에 6~10초 걸리는 사진(네 방향 24~41초)은 가장 흔한 거꾸로(180°) 한 번만 더 읽고 25초에 끊어요.
+ * 그동안 직원은 「명함 다시 찍기」로 버리고 새로 찍을 수 있어요.
+ */
+export const ROTATE_START_LIMIT_MS = 10_000;
+export const ROTATE_TOTAL_MS = 25_000;
 
 /** 돌려 읽기 한 번에 줄 시간(ms) — 한도가 지났으면 0(더 돌리지 않아요). elapsed = 첫 읽기를 시작한 뒤 지난 시간 */
 export function rotateBudget(elapsed: number): number {
@@ -38,8 +48,8 @@ export function pickReading(scores: readonly ReadingScore[]): number {
   for (let i = 1; i < scores.length; i++) {
     const a = scores[i];
     const b = scores[best];
-    if (needsRetry(a)) continue;
-    if (needsRetry(b) || a.found > b.found || (a.found === b.found && (Number(a.candidate) > Number(b.candidate) || (a.candidate === b.candidate && a.confidence > b.confidence)))) {
+    if (!isReadable(a)) continue;
+    if (!isReadable(b) || a.found > b.found || (a.found === b.found && (Number(a.candidate) > Number(b.candidate) || (a.candidate === b.candidate && a.confidence > b.confidence)))) {
       best = i;
     }
   }

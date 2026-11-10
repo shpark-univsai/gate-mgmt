@@ -2310,6 +2310,11 @@ function CreateDialog({
   const [scanProgress, setScanProgress] = useState<number | null>(null);
   // 찍힌 방향으로 못 읽어 돌려 다시 읽는 중(UG-451 기획 17106-3) — 몇 번째 방향인지(아니면 null)
   const [scanRetry, setScanRetry] = useState<{ attempt: number; total: number } | null>(null);
+  // 명함 읽기 차례 번호(UG-451 반박 리뷰 4) — 돌려 읽는 동안에는 「명함 다시 찍기」를 누를 수 있어요. 새 사진을 읽기 시작하면 번호가 올라가고,
+  // 늦게 끝난 앞 읽기는 번호가 달라 결과를 버려요(앞 명함 값이 새 명함 칸 · 칩 · 사진을 덮지 않게). 처음 읽는 동안은 전처럼 버튼이 잠겨 있어요
+  const scanGen = useRef(0);
+  // 「명함 다시 찍기」를 누를 수 없는 동안 — 처음 방향을 읽는 중(돌려 읽는 중에는 풀려요)
+  const scanLocked = scanning && !scanRetry;
   const scanFailedText =
     scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "tool_reload" ? SCAN_TOOL_RELOAD : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
   const scanWaitText = scanRetry
@@ -3273,6 +3278,9 @@ function CreateDialog({
     // 보내는 중이거나 주소를 고치는 중(fix)에 늦게 온 사진은 받지 않아요 — 고치는 동안 보던 사진을 지우거나,
     // 결과 화면 뒤에 사진이 메모리에 남지 않게
     if (sending || fix || fixRef.current || keepingDraft) return;
+    // 이 읽기의 차례 번호 — 돌려 읽는 동안 다시 찍으면 앞 읽기(card-ocr 가 끊어요)의 늦은 결과 · 상태 정리는 아래에서 버려요
+    const gen = ++scanGen.current;
+    const live = () => gen === scanGen.current;
     // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
@@ -3284,22 +3292,28 @@ function CreateDialog({
     let preview: string | null = null;
     let failure: ReadFailure | null = null;
     try {
-      ({ text, lines, preview, failure } = await reader.read(file, setScanProgress, {
-        // 한 방향으로 읽은 결과의 점수 — 이메일 · 연락처를 하나도 못 찾고 또렷한 메일 후보도 없으면 다른 방향으로 다시 읽어요
+      ({ text, lines, preview, failure } = await reader.read(file, (percent) => live() && setScanProgress(percent), {
+        // 한 방향으로 읽은 결과의 점수 — 이메일 · 연락처를 하나도 못 찾았고 바로 놓인 명함으로 보이지도 않으면 다른 방향으로 다시 읽어요.
+        // 글자가 거의 없는 사진(뒷면 · 빈 사진)은 돌리지 않아요(card-rotate.ts needsRetry)
         judge: (readText, readLines) => {
           const r = scanCard(readText, readLines);
-          return { found: r.found, candidate: r.outcome === "unsure", confidence: r.confidence };
+          return { found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse };
         },
-        onRetry: (attempt, total) => setScanRetry({ attempt, total }),
+        onRetry: (attempt, total) => live() && setScanRetry({ attempt, total }),
       }));
     } catch {
       text = null;
       failure = "read";
     } finally {
-      setScanning(false);
-      setScanProgress(null);
-      setScanRetry(null);
+      // 새 읽기가 시작됐으면 그 읽기의 「읽는 중」 표시를 건드리지 않아요
+      if (live()) {
+        setScanning(false);
+        setScanProgress(null);
+        setScanRetry(null);
+      }
     }
+    // 돌려 읽는 동안 다시 찍어 새 읽기가 시작됐거나 창을 닫았으면 이 결과는 버려요(반박 리뷰 4)
+    if (!live() || !openRef.current) return;
     // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
     if (fixRef.current) return;
     // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교). 돌려 읽은 방향이 이겼으면 바로 세운 사진이에요
@@ -3323,6 +3337,8 @@ function CreateDialog({
       // A 가 채우고 직원이 손대지 않은 칸은 비우고 A 의 칩도 지워요. 직원이 친 · 고친 값 · 칩을 눌러 넣은 값은 그대로예요.
       // 이메일 · 연락처를 하나도 못 찾은 명함(unreadable — 거꾸로 · 옆으로 찍힘, 명함이 아닌 사진)의 깨진 줄도 같아요(기획 17106-1):
       // 칩을 보여 주지 않고(scan = null — 「작성 중」에도 남지 않아요) 회사명 · 이름 · 메일 언어도 채우지 않아요. 「명함 다시 찍기」만 남아요.
+      // 다만 바로 놓인 명함에서 이메일 · 연락처 모양만 못 찾은 것이면 scanCard 가 또렷이 읽은 줄의 칩만 돌려줘요(반박 리뷰 3) — 그 칩은 펼쳐 보여 주고
+      // (직원이 눌러 넣어요) 안내는 같은 「명함을 읽지 못했습니다…」예요.
       let companyNow = now.company;
       for (const field of ["company", "name", "phone", "email"] as const) {
         if (autoFilled.current[field] === undefined || !replaceable(field)) continue;
@@ -3332,14 +3348,16 @@ function CreateDialog({
         if (field === "company") companyNow = "";
       }
       autoLanguage(false);
-      setScan(null);
-      setChipsOpen(false);
+      const kept = result && result.chips.length > 0 ? result.chips : null;
+      setScan(kept ? { chips: kept, links: {} } : null);
+      setChipsOpen(kept !== null);
+      setConfirmedEmail(null);
       clearChipTarget();
       setEmailMissing(null);
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
       // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저).
-      // 줄을 읽었으면(칩이 생김) 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰)
-      const opened = !!result && result.chips.length > 0;
+      // 글자를 읽었으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰)
+      const opened = text !== null && /\S/.test(text);
       return setScanFailed(failure === "tool" || failure === "tool_reload" ? failure : !opened && isHeic(file) ? "format" : (failure ?? "read"));
     }
     // 처음 채우기 — 이메일 · 연락처와, 확실한 회사명 · 이름(기획 17100 규칙 1). 확실하지 않은 칸은 값이 ""라, 앞 명함이 채운 그대로인 칸은 비워져요
@@ -3485,10 +3503,11 @@ function CreateDialog({
                     type="button"
                     className="btn btn-outline btn-sm"
                     onClick={() => fileRef.current?.click()}
-                    disabled={scanning || sending}
+                    // 돌려 읽는 동안에는 누를 수 있어요 — 새로 찍으면 하던 읽기를 버려요(반박 리뷰 4)
+                    disabled={scanLocked || sending}
                     aria-busy={scanning || undefined}
                   >
-                    {scanning ? SCAN_READING : SCAN_AGAIN}
+                    {scanLocked ? SCAN_READING : SCAN_AGAIN}
                   </button>
                 </div>
                 {/* 찍은 명함 사진은 접힌 채로도 보여요(칸 값을 명함과 견줘요). 읽은 줄은 펼쳤을 때 · 메일 주소를 골라야 할 때만 */}
@@ -3536,12 +3555,12 @@ function CreateDialog({
                   type="button"
                   className="btn btn-outline scan-button"
                   onClick={() => fileRef.current?.click()}
-                  disabled={scanning || sending}
+                  disabled={scanLocked || sending}
                   aria-busy={scanning || undefined}
                 >
                   <IcCamera size={16} />
-                  {/* 못 읽은 뒤에는 「명함 다시 찍기」(기획 17106-1) */}
-                  {scanning ? SCAN_READING : scanFailed ? SCAN_AGAIN : SCAN_BUTTON}
+                  {/* 못 읽은 뒤 · 돌려 읽는 동안에는 「명함 다시 찍기」(기획 17106-1 · 반박 리뷰 4) */}
+                  {scanLocked ? SCAN_READING : scanFailed || scanning ? SCAN_AGAIN : SCAN_BUTTON}
                 </button>
                 {/* 읽는 동안(N2)은 안내 아래에 기다림 안내를 한 줄 더 — 둘 다 상태 줄 안이라 낭독기가 읽어요 */}
                 <div className="scan-status" role="status">
