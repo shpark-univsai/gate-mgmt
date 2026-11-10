@@ -209,3 +209,45 @@ test("반박 리뷰 1 재현 — 이름을 고친 뒤 이메일 없는 다른 �
   // 직원이 이름을 「Marc Yeo」로 고쳤음 — 비워요. 이메일 칸(앞 사람 주소, 자동 채움 그대로)은 화면이 비워요
   assert.deepEqual(retakePlan(verdict, { name: "Marc Yeo" }, b.chips).release, ["name"]);
 });
+
+test("기획 17132 반박 리뷰 M1 — 앞 명함의 주소가 실재하지 않는 끝 도메인이라 채우지 않았어도 메일 없는 다른 사람 명함이면 다른 사람", () => {
+  const misread = scanCard(["Company A", "Kim Minjun", "kim@company-a.qi", "010-5555-0100"].join("\n"));
+  assert.equal(misread.values.email, "");
+  const noMail = chips("Lumen Works", "Rachel Lim", "Founder", "+65 9234 5678");
+  // 앞 명함에서 읽어 채운 주소는 없지만(칸 빔) 메일 모양 칩이 있었어요 — 앞 사람 이름이 남지 않게
+  const verdict = retakeVerdict({ read: "", field: "", chips: misread.chips }, { email: "", chips: noMail });
+  assert.equal(verdict, "different");
+  assert.deepEqual(retakePlan(verdict, { name: "Kim Minjun" }, noMail).release, ["name"]);
+  // 직원이 의심 칩을 눌러 넣어 확인한 주소가 칸에 있어도 같아요
+  assert.equal(retakeVerdict({ read: "", field: "kim@company-a.qi", chips: misread.chips }, { email: "", chips: noMail }), "different");
+  // 앞 명함에 메일 모양 글자가 아예 없었으면 전처럼 알 수 없음
+  assert.equal(retakeVerdict({ read: "", field: "", chips: chips("Company A", "Kim Minjun") }, { email: "", chips: noMail }), "unknown");
+});
+
+test("기획 17132 반박 리뷰 M1 — 같은 명함을 다시 찍어 끝 도메인만 다르게 읽히면 같은 사람", () => {
+  const misread = scanCard(["Company A", "Kim Minjun", "kim@company-a.qi", "010-5555-0100"].join("\n"));
+  const correct = scanCard(["Company A", "Kim Minjun", "kim@company-a.ai", "010-5555-0100"].join("\n"));
+  assert.equal(correct.values.email, "kim@company-a.ai");
+  // 잘못 읽힘 → 제대로 읽힘(칸 빔 · 직원이 의심 칩을 눌러 넣음 · 직원이 고쳐 침)
+  assert.equal(retakeVerdict({ read: "", field: "", chips: misread.chips }, { email: correct.values.email, chips: correct.chips }), "same");
+  assert.equal(retakeVerdict({ read: "", field: "kim@company-a.qi", chips: misread.chips }, { email: correct.values.email, chips: correct.chips }), "same");
+  assert.equal(retakeVerdict({ read: "", field: "kim@company-a.ai", chips: misread.chips }, { email: correct.values.email, chips: correct.chips }), "same");
+  // 제대로 읽힘 → 잘못 읽힘(새 명함은 칸을 비워요)
+  const prev = { read: correct.values.email, field: correct.values.email, chips: correct.chips };
+  assert.equal(retakeVerdict(prev, { email: misread.values.email, chips: misread.chips }), "same");
+  // 두 번 다 같은 모양으로 잘못 읽힘
+  assert.equal(retakeVerdict({ read: "", field: "", chips: misread.chips }, { email: "", chips: misread.chips }), "same");
+  // 흔한 오독(.com → .cor · .cm)도
+  assert.equal(retakeVerdict({ read: "", field: "", chips: chips("kim@company-a.cor") }, { email: "kim@company-a.com", chips: [] }), "same");
+  assert.equal(retakeVerdict({ read: "kim@company-a.com", field: "", chips: [] }, { email: "", chips: chips("kim@company-a.cm") }), "same");
+});
+
+test("기획 17132 반박 리뷰 M1 — 끝 도메인 한 글자 차이만 같은 주소로 봐요(다른 사람 · 다른 회사는 그대로 다른 사람)", () => {
+  const misread = chips("kim@company-a.qi");
+  // @ 앞이 다름 · 도메인 앞부분이 다름
+  assert.equal(retakeVerdict({ read: "", field: "", chips: misread }, { email: "lee@company-a.ai", chips: [] }), "different");
+  assert.equal(retakeVerdict({ read: "", field: "", chips: misread }, { email: "kim@company-b.ai", chips: [] }), "different");
+  // 끝 도메인이 두 글자 다름 · 짧은 도메인 전체가 다름
+  assert.equal(retakeVerdict({ read: "kim@company-a.kr", field: "", chips: [] }, { email: "kim@company-a.sg", chips: [] }), "different");
+  assert.equal(retakeVerdict({ read: "info@ab.kr", field: "", chips: [] }, { email: "info@cd.kr", chips: [] }), "different");
+});

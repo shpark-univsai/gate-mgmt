@@ -52,6 +52,26 @@ const FIX_DISTANCE = 2;
 const nearAddress = (field: string, read: string) => editDistance(field, read, FIX_DISTANCE) <= FIX_DISTANCE;
 
 /**
+ * 끝 도메인만 한 글자 잘못 읽힌 같은 주소인지(UG-451 기획 17132 반박 리뷰 M1) — 「kim@x.ai」 ↔ 「kim@x.qi」 · 「kim@x.com」 ↔ 「kim@x.cor」.
+ * 실재하지 않는 끝 도메인은 채우지 않아 앞 · 새 명함 한쪽만 또렷하게 읽히면 글자가 달라 다른 사람이 돼요.
+ * @ 앞(로마자 · 숫자만)이 같고, 도메인(로마자 · 숫자만)이 끝 3글자 안쪽에서만 달라지며 그 차이가 한 글자(편집 거리 1)일 때만 —
+ * 「info@ab.kr」 ↔ 「info@cd.kr」 · 「kim@x.kr」 ↔ 「kim@x.sg」(두 글자)는 같은 주소로 보지 않아요. 같은 끝 도메인이면 이미 같은 글자예요.
+ */
+function tldSlip(a: string, b: string): boolean {
+  const at = (s: string) => s.lastIndexOf("@");
+  if (at(a) < 1 || at(b) < 1 || squash(a.slice(0, at(a))) !== squash(b.slice(0, at(b)))) return false;
+  const da = squash(a.slice(at(a) + 1));
+  const db = squash(b.slice(at(b) + 1));
+  if (da === db) return false;
+  let p = 0;
+  while (p < da.length && p < db.length && da[p] === db[p]) p++;
+  const ta = da.slice(p);
+  const tb = db.slice(p);
+  return p > 0 && ta.length <= 3 && tb.length <= 3 && editDistance(ta, tb, 1) <= 1;
+}
+const sameMail = (a: string, b: string) => a === b || tldSlip(a, b);
+
+/**
  * 다시 찍은 명함이 앞 명함과 같은 사람 것인지 — 이메일로만 판단해요.
  * prev.read = 앞 명함에서 읽어 채웠던 이메일(직원이 그 뒤 칸을 고쳤어도 명함에서 읽은 값, 없으면 ""), prev.field = 지금 이메일 칸 값,
  * prev.chips = 앞 명함의 칩. next.email = 다시 찍은 명함에서 읽어 채울 이메일(잘렸을 수 있어 비웠거나 못 읽었으면 ""), next.chips = 그 명함의 칩,
@@ -63,8 +83,9 @@ const nearAddress = (field: string, read: string) => editDistance(field, read, F
  * - 한쪽이 또렷한 주소 없이 메일 모양 글자(잘렸을 수 있는 칩 · 형식이 깨진 줄)만 있음: 읽은 그대로의 글자를 로마자 · 숫자 · @ 만 남겨 견줘요.
  *   하나라도 같으면 same(「haneul · jung@x.co.kr」 ↔ haneul.jung@x.co.kr), 하나도 같지 않으면 different.
  *   같은 명함을 다시 찍었는데 글자가 다르게 읽혀 different 가 될 수 있어요 — 그때도 새 명함에 그대로 적힌 값은 남겨요(retakePlan).
- * - 새 명함에 메일 모양 글자가 하나도 없음: 앞 명함에서 주소를 읽었으면(prev.read) different(반박 리뷰 1 — 같은 명함이면 메일 줄이 다시 읽히는 것이 보통이에요),
- *   읽지 않았으면 unknown.
+ * - 새 명함에 메일 모양 글자가 하나도 없음: 앞 명함에서 주소를 읽었거나(prev.read) 앞 명함에 메일 모양 글자가 있었으면(채우지 않은 의심 주소 —
+ *   기획 17132 반박 리뷰 M1) different(반박 리뷰 1 — 같은 명함이면 메일 줄이 다시 읽히는 것이 보통이에요), 아니면 unknown.
+ * - 주소를 견줄 때 끝 도메인만 한 글자 잘못 읽힌 것(tldSlip — 「kim@x.ai」 ↔ 「kim@x.qi」)은 같은 주소로 봐요(반박 리뷰 M1).
  * - 앞 명함의 메일 모양 글자를 모름(이어서 만들기에서 칸이 비었음 · 메일 없는 명함): unknown.
  */
 export function retakeVerdict(
@@ -76,12 +97,13 @@ export function retakeVerdict(
   const field = EMAIL_SHAPE_RE.test(prev.field.trim()) ? addressKey(prev.field) : "";
   const prevClean = read ? [read, ...(field && field !== read && nearAddress(field, read) ? [field] : [])] : field ? [field] : [];
   const nextClean = addressKey(next.email);
-  if (nextClean && prevClean.length > 0) return prevClean.includes(nextClean) ? "same" : "different";
+  if (nextClean && prevClean.length > 0) return prevClean.some((p) => sameMail(p, nextClean)) ? "same" : "different";
   const nextKeys = nextClean ? [squash(nextClean)] : chipMailKeys(next.chips);
-  if (nextKeys.length === 0) return read ? "different" : "unknown";
+  // 앞 명함에 메일 모양 글자가 있었으면(채우지 않은 의심 주소 — 「kim@x.qi」 · 잘린 주소 포함) 주소를 읽은 것과 같아요(기획 17132 반박 리뷰 M1)
+  if (nextKeys.length === 0) return read || chipMailKeys(prev.chips).length > 0 ? "different" : "unknown";
   const prevKeys = prevClean.length > 0 ? prevClean.map(squash) : chipMailKeys(prev.chips);
   if (prevKeys.length === 0) return "unknown";
-  return nextKeys.some((key) => prevKeys.includes(key)) ? "same" : "different";
+  return nextKeys.some((key) => prevKeys.some((p) => sameMail(p, key))) ? "same" : "different";
 }
 
 /** 글자 값(회사명 · 이름)을 견줄 글자로 — 공백을 빼고 소문자로(「정 하 늘」 = 「정하늘」) */
