@@ -47,7 +47,7 @@ import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
 import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, purgeLegacyCardPhotos } from "@/lib/card-photo";
-import { RECREATE_TEXT, oldIssueAfterCreate, oldIssueLeft } from "@/lib/recreate";
+import { RECREATE_TEXT, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "@/lib/recreate";
 import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
 import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
 import {
@@ -2280,6 +2280,9 @@ function CreateDialog({
   // 주소 고쳐 새로 만든 뒤 옛 발급을 취소하지 못함(기획 17099-7) — 창에 남아 알리고 다시 취소하게 해요.
   // created = 메일까지 보낸 새 계정(안내를 닫으면 완료 알림과 함께 창을 닫아요). 메일을 못 보냈으면 null — 안내를 닫으면 그 결과 화면 · 주소 고치기로 가요
   const [staleIssue, setStaleIssue] = useState<{ old: Account; created: Account | null; notice: CreatedNotice } | null>(null);
+  // 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워짐(서버 sourceCancel = revoked, 반박 리뷰 M1) — 그 옛 발급의 번호.
+  // 고치는 대상이 그 발급인 동안 버튼 위에 알리고 [발급 취소]를 함께 둬요(목록에는 「첫 로그인 전」으로 남아 있어 직원이 알 수 없어요)
+  const [revokedOldId, setRevokedOldId] = useState<string | null>(null);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
   // 명함 읽기가 끝났을 때 고치는 모드인지 보려고(읽는 동안 바뀔 수 있어요)
@@ -2787,6 +2790,8 @@ function CreateDialog({
   const fixSame = !!fix && key.toLowerCase() === fix.email.toLowerCase();
   // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
   const fixTaken = !!fix && !fixSame && !!pending;
+  // 고치는 중인 옛 발급의 링크가 이미 막혔어요(반박 리뷰 M1) — 고치는 대상이 새 계정으로 바뀌면 사라져요
+  const oldRevoked = !!fix && revokedOldId === fix.id;
 
   useEffect(() => {
     if (!pending && langBeforePending.current) {
@@ -2902,6 +2907,8 @@ function CreateDialog({
     });
     if (!res.ok) {
       setSending(false);
+      // 옛 발급의 링크는 이미 막혔다고 서버가 알려 왔어요(반박 리뷰 M1) — 아래 실패 안내에 더해 알리고 [발급 취소]를 둬요
+      if (oldIssueRevoked(res)) setRevokedOldId(wrong.id);
       if (res.reason === "duplicate" || res.reason === "in_use") {
         // 그사이 상태가 바뀌었어요 — 서버에 다시 물어 칸 아래에 보여 줘요.
         // (runCheck 는 이 렌더의 조회 결과 「new」를 그대로 돌려줘서 다시 묻지 않아요.)
@@ -3716,6 +3723,8 @@ function CreateDialog({
             {formError}
           </p>
         )}
+        {/* 새 계정은 못 만들었는데 옛 발급의 링크는 이미 막힘(반박 리뷰 M1) — 고친 주소가 이미 있는 계정이면 다시 보내도 같아 옛 발급을 취소하게 */}
+        {oldRevoked && <Sentences text={RECREATE_TEXT.sourceRevoked} lines />}
         {keepingDraft && !keepFailed && (
           <p className="help" role="status">
             작성 중인 명함을 저장하고 있습니다…
@@ -3738,19 +3747,19 @@ function CreateDialog({
             </div>
           </>
         ) : fix ? (
-          // 주소 그대로면 [닫기] [발급 취소](I2 · C2), 고치면 [닫기] [재발송](I3 · C3)
+          // 주소 그대로면 [닫기] [발급 취소](I2 · C2), 고치면 [닫기] [재발송](I3 · C3).
+          // 옛 발급의 링크가 이미 막혔으면(반박 리뷰 M1) 고친 뒤에도 [발급 취소]를 함께 둬요 — [닫기] [발급 취소] [재발송]
           <div className="dialog-actions">
             <button type="button" className="btn btn-outline" onClick={close} disabled={cancelling || sending}>
               닫기
             </button>
-            {fixSame ? (
-              cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
-                <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling} aria-busy={cancelling || undefined}>
-                  {cancelling ? "취소하는 중…" : "발급 취소"}
-                </button>
-              )
-            ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
+            {(fixSame || oldRevoked) && cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
+              <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling || sending} aria-busy={cancelling || undefined}>
+                {cancelling ? "취소하는 중…" : "발급 취소"}
+              </button>
+            )}
+            {!fixSame && (
+              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning || cancelling} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}

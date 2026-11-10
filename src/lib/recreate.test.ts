@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, isCardPhotoStatus } from "./card-photo.ts";
-import { isSourceCancel, oldIssueAfterCreate, oldIssueLeft } from "./recreate.ts";
+import { isSourceCancel, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "./recreate.ts";
 
 test("기획 17099-5 서버가 사진을 받지 않았거나 저장하지 못했을 때만 「명함 사진은 저장하지 못했습니다」", () => {
   assert.equal(cardPhotoNotSaved({ cardPhoto: "rejected" }), true);
@@ -67,4 +67,19 @@ test("기획 17099-7 화면이 보낸 취소가 실패하면 옛 발급이 남�
 test("옛 발급 취소 결과도 아는 값일 때만 받아요", () => {
   for (const v of ["cancelled", "already_cancelled", "failed"]) assert.equal(isSourceCancel(v), true);
   for (const v of ["CANCELLED", "", null, undefined, "done"]) assert.equal(isSourceCancel(v), false);
+});
+
+test("리뷰 M1 새 계정을 만들지 못했는데 옛 발급의 링크가 이미 막혔으면(revoked) 알려요 — 어떤 실패 까닭이든", () => {
+  assert.equal(oldIssueRevoked({ ok: false, sourceCancel: "revoked" }), true);
+});
+
+test("리뷰 M1 옛 발급이 그대로인 실패 · 예전 서버(값 없음) · 성공 응답에는 알리지 않아요", () => {
+  assert.equal(oldIssueRevoked({ ok: false }), false);
+  assert.equal(oldIssueRevoked({ ok: false, sourceCancel: "failed" }), false);
+  assert.equal(oldIssueRevoked({ ok: true, sourceCancel: "cancelled" }), false);
+  assert.equal(oldIssueRevoked({ ok: true, sourceCancel: "revoked" }), false);
+});
+
+test("리뷰 M1 성공 응답의 옛 발급 결과에는 revoked 가 없어요(실패 응답 전용 값)", () => {
+  assert.equal(isSourceCancel("revoked"), false);
 });

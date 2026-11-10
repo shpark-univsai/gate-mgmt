@@ -3,7 +3,7 @@
 // 백오피스는 허용된 직원만 쓸 수 있어요(서버의 직원 허용 목록). 목록에 없으면 로그인 때 「권한 없음」으로 막혀요.
 import { isCardPhotoStatus, type CardPhotoStatus } from "./card-photo";
 import { ApiError, BACKGROUND_SESSION_ENDED, authed, publicPost, revokeRefreshToken, send, type AuthedOptions } from "./http";
-import { isSourceCancel, type SourceCancel } from "./recreate";
+import { isSourceCancel, type SourceCancel, type SourceRevoked } from "./recreate";
 import { clearSession, getTokens, saveTokens } from "./session";
 
 export type MailLanguage = "en" | "ko";
@@ -170,7 +170,8 @@ export type CreateAccountResult =
   // domain = 받는 주소의 도메인이 메일을 받을 수 없어 서버가 계정을 만들지 않음(MGMT-108 — 명함에서 도메인을 잘못 읽은 경우 등)
   // network = 응답 없음 · 시간 초과 · 5xx — 서버가 만들었는지 알 수 없어요(다시 누르면 이미 만든 계정이면 duplicate 로 와요, UG-451)
   // source_blocked = 주소 고쳐 새로 만들기에서 옛 발급을 취소할 수 없어(고객이 이미 로그인 · 해지 중) 새 계정을 만들지 않음(기획 17099-7)
-  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" | "network" | "source_blocked" };
+  // sourceCancel = revoked 면 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워졌어요(반박 리뷰 M1, recreate.ts) — 예전 서버는 주지 않아요
+  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" | "network" | "source_blocked"; sourceCancel?: SourceRevoked };
 
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨 / failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
@@ -434,7 +435,11 @@ async function createAccountOnce(input: CreateAccountInput): Promise<CreateAccou
       const mailFailureReason = isMailFailureReason(data.mailFailureReason) ? data.mailFailureReason : "unknown";
       return { ok: true, account, mailSent: false, mailFailureReason, ...extras };
     }
-    return { ok: false, reason: isCreateFailure(data.reason) ? data.reason : "failed" };
+    return {
+      ok: false,
+      reason: isCreateFailure(data.reason) ? data.reason : "failed",
+      ...(data.sourceCancel === "revoked" ? { sourceCancel: "revoked" as const } : {}),
+    };
   } catch (e) {
     if (e instanceof ApiError && e.code === RECIPIENT_DOMAIN_UNDELIVERABLE) return { ok: false, reason: "domain" };
     if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) return { ok: false, reason: "network" };

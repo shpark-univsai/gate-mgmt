@@ -9,6 +9,11 @@ export const RECREATE_TEXT = {
   oldCancelFailed: "새 계정은 만들었지만 옛 발급을 취소하지 못했습니다. [다시 시도]를 누르거나 목록의 ⋮ 「발급 취소」로 취소해 주세요.",
   /** 옛 발급을 취소할 수 없어(고객이 이미 로그인 · 해지 처리 중) 서버가 새 계정을 만들지 않음 — 버튼 위 안내 */
   sourceBlocked: "옛 발급을 취소할 수 없어 새 계정을 만들지 않았습니다. 목록에서 옛 발급의 상태를 확인해 주세요.",
+  /**
+   * 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워짐(서버 sourceCancel = revoked, 반박 리뷰 M1) — 버튼 위 안내.
+   * 창에 [재발송]과 [발급 취소]를 함께 둬요. 고친 주소가 이미 있는 계정이면 다시 보내도 같아 옛 발급을 취소하게 해요
+   */
+  sourceRevoked: "옛 발급의 링크는 이미 막혔습니다. 다시 [재발송]하거나 [발급 취소]로 옛 발급을 취소해 주세요.",
   retry: "다시 시도",
   retrying: "취소하는 중…",
 } as const;
@@ -22,6 +27,17 @@ export type SourceCancel = "cancelled" | "already_cancelled" | "failed";
 
 const SOURCE_CANCELS: readonly string[] = ["cancelled", "already_cancelled", "failed"] satisfies SourceCancel[];
 export const isSourceCancel = (v: unknown): v is SourceCancel => typeof v === "string" && SOURCE_CANCELS.includes(v);
+
+/**
+ * 새 계정을 만들지 못한 응답(ok: false)에 실리는 값 — 옛 발급의 계정은 이미 없어요(이 요청이나 앞 요청이 링크를 막음). 옛 줄은 목록에
+ * 「첫 로그인 전」으로 남아 있어 직원이 알 수 없으니 화면이 알려요. 예전 서버 · 옛 발급이 그대로인 실패에는 없어요.
+ */
+export type SourceRevoked = "revoked";
+
+/** 실패 응답이 「옛 발급의 링크는 이미 막혔다」고 알려 왔는지(반박 리뷰 M1) */
+export function oldIssueRevoked(result: { ok: boolean; sourceCancel?: string }): boolean {
+  return !result.ok && result.sourceCancel === "revoked";
+}
 
 /**
  * 새 계정을 만든 뒤 옛 발급을 어떻게 할지.
