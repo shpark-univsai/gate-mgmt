@@ -7,7 +7,7 @@
 // 일꾼은 「계정 만들기」 창이 열려 있는 동안만 살려 두고, 창을 닫으면 닫아요(createCardReader).
 // 배포 화면의 CSP 는 일꾼 안에서 wasm 을 돌릴 수 있게 script-src 에 'wasm-unsafe-eval' 이 있어야 해요(nginx 설정, 플랫폼 쪽).
 
-import { ROTATIONS, isReadable, needsRetry, pickReading, rotateBudget, type ReadingScore, type Rotation } from "./card-rotate.ts";
+import { ROTATIONS, isSettled, needsRetry, pickReading, rotateBudget, type ReadingScore, type Rotation } from "./card-rotate.ts";
 import type { OcrLine } from "./card-scan.ts";
 import { createRetryBudget, loadWithRetry } from "./ocr-retry.ts";
 
@@ -149,7 +149,24 @@ export type CardReading = {
   preview: string | null;
   failure: ReadFailure | null;
   rotation: Rotation;
+  /**
+   * 이 읽기가 「바로 놓인 명함인지 모르는데 연락처만 찾은」 것일 때 그 번호를 믿어도 되는지(scanCard 의 opts.lonePhone 으로 넘겨요).
+   * 돌려 읽고도 그런 방향이 둘 이상이거나 다 읽지 못했으면 false — 거꾸로 읽힌 번호일 수 있어 채우지 않아요(card-rotate.ts pickReading)
+   */
+  lonePhone: boolean;
 };
+
+/**
+ * 읽을 그림을 바이트로 — 일꾼에게 넘기기 전에 여기서 미리 바꿔 둬요(UG-451 반박 리뷰 후속 6).
+ * tesseract 는 그림판 · Blob 을 받으면 안에서 바이트로 바꾼 뒤(비동기) 일꾼에게 보내는데, 그 사이에 읽기를 끊어 일꾼을 닫으면
+ * 닫힌 일꾼에 보내다 난 오류(Cannot read properties of null (reading 'postMessage'))가 어디에도 잡히지 않고 남아요.
+ * 바이트를 넘기면 그 변환이 같은 차례 안에서 끝나, 끊는 일이 그 사이에 끼어들 수 없어요.
+ */
+async function imageBytes(image: HTMLCanvasElement | Blob): Promise<Uint8Array> {
+  const blob = image instanceof Blob ? image : await new Promise<Blob | null>((resolve) => image.toBlob(resolve));
+  if (!blob) throw new Error("명함 그림을 읽을 수 없음");
+  return new Uint8Array(await blob.arrayBuffer());
+}
 
 type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 type OcrLog = { status: string; progress: number };
@@ -268,7 +285,7 @@ export function createCardReader() {
    * 명함 사진에서 읽은 글자(줄바꿈 포함) · 줄 점수와 비교용 줄인 사진(data URL, 만들지 못하면 null).
    * 읽기 도구를 받지 못했거나 읽다가 실패하면 text 가 null 이고 failure 에 까닭이 있어요 — 그래도 이번 사진(preview)은 돌려줘요(앞 명함 사진이 남지 않게).
    * progress = 도구를 받는 동안의 진행률(0~100). 이미 받아 둔 도구면 부르지 않아요.
-   * rotate 를 주면 찍힌 방향으로 읽은 결과가 「못 읽음」(needsRetry)일 때만 180° → 90° → 270° 로 돌려 다시 읽고, 가장 나은 방향의 결과를 돌려줘요
+   * rotate 를 주면 찍힌 방향으로 읽은 결과가 「못 읽음」이거나 「연락처만 찾음」(needsRetry)일 때만 180° → 90° → 270° 로 돌려 다시 읽고, 가장 나은 방향의 결과를 돌려줘요
    * (UG-451 기획 17106-3, card-rotate.ts). 돌려 읽은 방향이 이기면 preview 도 그 방향으로 세워요 — 썸네일 · 크게 보기 · 서버에 남기는 사진이 모두 이 preview 예요.
    * 돌려 읽기는 첫 읽기 시작부터 ROTATE_START_LIMIT_MS 안에만 시작하고 ROTATE_TOTAL_MS 에 끊어요. 끊긴(멈춘) 일꾼은 버리고 그때까지의 결과를 써요.
    * 브라우저가 열지 못한 사진(그림판 없음)은 돌릴 수 없어 찍힌 그대로만 읽어요.
@@ -285,7 +302,7 @@ export function createCardReader() {
       // 사진을 여는 사이 더 새 읽기가 시작됨
       if (canvas) canvas.width = canvas.height = 0;
       if (small) small.width = small.height = 0;
-      return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+      return { text: null, lines: null, preview, failure: "read", rotation: 0, lonePhone: true };
     }
     onProgress = progress ?? null;
     // 이 읽기가 쓰는 일꾼 — 버려지면(abort) 이 일꾼만 닫아요(그사이 새 읽기가 띄운 일꾼은 건드리지 않아요)
@@ -302,19 +319,24 @@ export function createCardReader() {
     });
     aborted.catch(() => undefined);
     /** 글자 읽기 한 번 — 한도(ms)가 지나거나 새 읽기가 시작되면 끊어요 */
-    const recognize = (w: OcrWorker, image: HTMLCanvasElement | Blob, ms: number) =>
-      Promise.race([withTimeout(w.recognize(image, {}, OCR_OUTPUT), ms), aborted]);
+    const recognize = async (w: OcrWorker, image: HTMLCanvasElement | Blob, ms: number) => {
+      // 그림을 먼저 바이트로 바꾸고(끊기면 여기서 끝나요), 끊기지 않았을 때만 일꾼에게 넘겨요 — 닫힌 일꾼에는 보내지 않아요(imageBytes)
+      const bytes = await Promise.race([imageBytes(image), aborted]);
+      if (!used) throw new Error("읽기가 끊김");
+      // tesseract 의 타입에는 없지만 바이트(Uint8Array)를 그대로 받아요(loadImage 가 그대로 넘겨요)
+      return Promise.race([withTimeout(w.recognize(bytes as unknown as Blob, {}, OCR_OUTPUT), ms), aborted]);
+    };
     try {
       let w: OcrWorker;
       try {
         w = await ready();
       } catch {
         // 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과) — 다시 받기를 다 썼으면 새로 고치라고 안내해요
-        return { text: null, lines: null, preview, failure: retryBudget.spent ? "tool_reload" : "tool", rotation: 0 };
+        return { text: null, lines: null, preview, failure: retryBudget.spent ? "tool_reload" : "tool", rotation: 0, lonePhone: true };
       } finally {
         onProgress = null;
       }
-      if (mine !== generation) return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+      if (mine !== generation) return { text: null, lines: null, preview, failure: "read", rotation: 0, lonePhone: true };
       used = worker;
       abortCurrent = () => {
         dropUsed();
@@ -327,17 +349,18 @@ export function createCardReader() {
       } catch {
         // 읽다가 멈춘(또는 버려진) 일꾼은 다시 쓰지 않아요
         dropUsed();
-        return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+        return { text: null, lines: null, preview, failure: "read", rotation: 0, lonePhone: true };
       }
       const readings: { rotation: Rotation; text: string; lines: OcrLine[] | null }[] = [{ rotation: 0, text: first.text, lines: linesOf(first) }];
-      if (!canvas || !rotate) return { text: readings[0].text, lines: readings[0].lines, preview, failure: null, rotation: 0 };
+      if (!canvas || !rotate) return { text: readings[0].text, lines: readings[0].lines, preview, failure: null, rotation: 0, lonePhone: true };
       const scores = [rotate.judge(readings[0].text, readings[0].lines)];
       for (const rotation of ROTATIONS) {
         if (rotation === 0) continue;
         // 방금 읽은 방향에서 찾았으면 끝 · 창을 닫았거나 새 읽기가 시작됐거나 한도가 지났으면 더 돌리지 않아요
         const budget = rotateBudget(Date.now() - started);
-        // 찍힌 그대로가 읽혔거나 글자가 거의 없으면 돌리지 않고, 돌려 읽다가 읽힌 방향이 나오면 멈춰요
-        const settled = scores.length === 1 ? !needsRetry(scores[0]) : isReadable(scores[scores.length - 1]);
+        // 찍힌 그대로가 방향이 맞게 읽혔거나 글자가 거의 없으면 돌리지 않고, 돌려 읽다가 방향이 맞는 읽기가 나오면 멈춰요.
+        // 「연락처만 찾은」 방향(거꾸로 읽힌 번호일 수 있어요)에서는 멈추지 않아요(반박 리뷰 후속 1)
+        const settled = scores.length === 1 ? !needsRetry(scores[0]) : isSettled(scores[scores.length - 1]);
         if (settled || disposed || mine !== generation || budget <= 0) break;
         const turned = rotated(canvas, rotation);
         if (!turned) break;
@@ -355,7 +378,8 @@ export function createCardReader() {
           turned.width = turned.height = 0;
         }
       }
-      const best = readings[pickReading(scores)];
+      const pick = pickReading(scores, scores.length === ROTATIONS.length);
+      const best = readings[pick.index];
       let upright = preview;
       if (best.rotation !== 0 && small) {
         // 돌려 읽은 방향이 이겼으면 비교용 사진도 바로 세워요 — 만들지 못하면 찍힌 그대로
@@ -363,7 +387,7 @@ export function createCardReader() {
         upright = toPreview(turned) ?? preview;
         if (turned) turned.width = turned.height = 0;
       }
-      return { text: best.text, lines: best.lines, preview: upright, failure: null, rotation: best.rotation };
+      return { text: best.text, lines: best.lines, preview: upright, failure: null, rotation: best.rotation, lonePhone: pick.lonePhone };
     } finally {
       if (mine === generation) abortCurrent = null;
       // 그림판 메모리도 바로 비워요
