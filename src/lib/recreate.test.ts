@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, isCardPhotoStatus } from "./card-photo.ts";
-import { isSourceCancel, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "./recreate.ts";
+import { RECREATE_TEXT, isSourceCancel, newAccountMailText, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "./recreate.ts";
 
 test("기획 17099-5 서버가 사진을 받지 않았거나 저장하지 못했을 때만 「명함 사진은 저장하지 못했습니다」", () => {
   assert.equal(cardPhotoNotSaved({ cardPhoto: "rejected" }), true);
@@ -94,4 +94,11 @@ test("화면 리뷰 3 서버가 남겼다고 답하면(kept) 앞서 실패했어
   assert.equal(cardPhotoNotSaved({ cardPhoto: "kept" }, true), false);
   assert.equal(cardPhotoNotSaved({ cardPhoto: "none" }, false), false);
   assert.equal(cardPhotoNotSaved({ cardPhoto: "failed" }, false), true);
+});
+
+test("기획 17120-2 옛 발급 취소 실패 창의 「새 계정」 줄 — 메일을 보냈으면 (메일 보냄), 못 보냈으면 (메일 보내지 못함)", () => {
+  assert.equal(newAccountMailText(true), "(메일 보냄)");
+  assert.equal(newAccountMailText(false), "(메일 보내지 못함)");
+  assert.equal(RECREATE_TEXT.newAccountLabel, "새 계정");
+  assert.equal(RECREATE_TEXT.leftOldLabel, "취소하지 못한 옛 발급");
 });
