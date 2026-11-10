@@ -13,6 +13,8 @@ export const CARD_PHOTO_TEXT = {
   emailCheck: "명함과 같은지 확인해 주세요.",
   thumbLabel: "찍은 명함 크게 보기",
   viewerTitle: "찍은 명함",
+  /** 크게 보기 맨 위 이메일 줄(기획 17099-2) — 화면에는 이메일만 보이고, 낭독기에는 이 말을 앞에 읽어 줘요 */
+  viewerEmailLabel: "이메일",
   close: "닫기",
   /** 크게 보기 버튼(UG-455) — − · + 는 글자 대신 기호라 읽어 줄 이름 */
   zoomIn: "확대",
@@ -25,7 +27,45 @@ export const CARD_PHOTO_TEXT = {
   notFoundDetail: "목록을 새로 불러왔습니다",
   loadFailed: "명함 사진을 불러오지 못했습니다",
   loadFailedDetail: "잠시 후 다시 시도해 주세요",
+  /** 계정은 만들었지만 서버가 사진을 받지 않았거나 저장하지 못함(기획 17099-5) — 「계정을 만들었습니다」 알림 아래 줄 */
+  notSaved: "명함 사진은 저장하지 못했습니다",
+  /** 메일을 못 보내 창이 열려 있을 때(완료 알림이 없을 때)의 알림 아래 줄 */
+  notSavedDetail: "계정은 만들었습니다",
+  /** 발급 취소 확인 창 「삭제 대상」에 붙는 말(기획 17099-4) — 명함 사진이 있는 줄만 */
+  cancelTarget: "명함 사진",
 } as const;
+
+/**
+ * 서버가 알려 준 명함 사진 저장 결과(UG-455 기획 17099-5, 서버 cardPhoto).
+ * kept = 남김 / none = 남길 사진이 없었음 / policy = 정책상 남기지 않음(서버 보관이 꺼져 있음 · 보관 시작 전에 찍은 명함)
+ * rejected = 서버가 사진을 받지 않음(형식 · 크기) / failed = 저장하지 못함
+ */
+export type CardPhotoStatus = "kept" | "none" | "policy" | "rejected" | "failed";
+
+const CARD_PHOTO_STATUSES: readonly string[] = ["kept", "none", "policy", "rejected", "failed"] satisfies CardPhotoStatus[];
+export const isCardPhotoStatus = (v: unknown): v is CardPhotoStatus => typeof v === "string" && CARD_PHOTO_STATUSES.includes(v);
+
+/**
+ * 「명함 사진은 저장하지 못했습니다」를 보여 줄지(기획 17099-5) — 서버가 사진을 받지 않았거나(rejected) 저장하지 못했을 때(failed)만.
+ * 정책상 남기지 않은 것(policy) · 사진을 보내지 않은 발급(none) · 남긴 것(kept)에는 보여 주지 않아요.
+ * photoRejected = 서버가 사진 때문에 요청을 거절해(너무 큼 · 형식) 사진 없이 한 번 더 보내 만든 경우 — 이때 서버는 사진을 본 적이 없어
+ * none 으로 답하므로 화면이 따로 알아요. 예전 서버(cardPhoto 를 주지 않음)는 이 경우만 알 수 있어요.
+ * lostBefore = 이 창에서 앞서 만든 계정의 사진 저장이 이미 실패했어요(화면 반박 리뷰 3). 그 뒤 주소를 고쳐 재발송하면 옮길 사진이 없어
+ * 서버는 none 으로 답하지만 새 계정에도 사진은 없으니 같은 줄을 보여 줘요 — 서버가 남겼다고(kept) 답한 때만 빼요.
+ */
+export function cardPhotoNotSaved(result: { cardPhoto?: CardPhotoStatus; photoRejected?: boolean }, lostBefore = false): boolean {
+  if (result.photoRejected === true || result.cardPhoto === "rejected" || result.cardPhoto === "failed") return true;
+  return lostBefore && result.cardPhoto !== "kept";
+}
+
+/**
+ * 발급 취소 확인 창의 「삭제 대상」(기획 17099-4) — 「계정 · 데모 프로젝트(데모 기록 N건) · 명함 사진」.
+ * 데모 기록 수는 서버가 줄 때만, 명함 사진은 서버에 사진이 있는 줄(hasCardPhoto)만 붙여요.
+ */
+export function cancelTargetsText(account: { demoRecords?: number; hasCardPhoto?: boolean }): string {
+  const demo = `데모 프로젝트${account.demoRecords !== undefined ? `(데모 기록 ${account.demoRecords}건)` : ""}`;
+  return ["계정", demo, ...(account.hasCardPhoto === true ? [CARD_PHOTO_TEXT.cancelTarget] : [])].join(" · ");
+}
 
 /**
  * 예전 판들이 기기에 만든 명함 저장소 이름 — PR #17(7일 사진 보관)의 gate-mgmt-card-photos,

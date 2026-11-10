@@ -46,7 +46,8 @@ import { isTouchPrimary } from "@/lib/pointer";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
 import { ApiError } from "@/lib/http";
-import { CARD_PHOTO_TEXT, purgeLegacyCardPhotos } from "@/lib/card-photo";
+import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, purgeLegacyCardPhotos } from "@/lib/card-photo";
+import { RECREATE_TEXT, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "@/lib/recreate";
 import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
 import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
 import {
@@ -529,7 +530,11 @@ function CardEmail({ email, query, resetOn }: { email: string | null; query: str
 const statusText = (a: Account) =>
   a.status === "pending" && a.mailFailureReason ? MAIL_FAILURE_LABEL[a.mailFailureReason] : STATUS_LABEL[a.status];
 
-type ToastState = { title: string; detail: string; tone?: "error" } | null;
+// note = 알림 아래 줄(UG-455 기획 17099-5 — 「명함 사진은 저장하지 못했습니다」)
+type ToastState = { title: string; detail: string; tone?: "error"; note?: string } | null;
+
+/** 계정을 만든 뒤 목록에 알릴 것(UG-455 기획 17099-5) — photoNotSaved = 서버가 명함 사진을 받지 않았거나 저장하지 못함 */
+type CreatedNotice = { photoNotSaved?: boolean };
 
 /**
  * 계정 만들기 창을 닫을 때 「작성 중」으로 남길 것(UG-431 기획 16864). id 가 있으면 이어서 만든 그 명함을 갱신해요.
@@ -720,7 +725,7 @@ export default function AccountsPage() {
   const [resendTarget, setResendTarget] = useState<Account | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Account | null>(null);
   // 목록 ⋮ 「명함 보기」(UG-455) — 보기 화면을 연 동안만 사진(data URL)을 둬요. src 가 null 이면 받는 중. 닫으면 버려요(기기에 남기지 않아요)
-  const [cardPhoto, setCardPhoto] = useState<{ id: string; src: string | null } | null>(null);
+  const [cardPhoto, setCardPhoto] = useState<{ id: string; src: string | null; email: string } | null>(null);
   // 받는 중에 닫았거나 다른 줄을 열었으면 늦게 온 응답을 버리려고
   const cardPhotoReq = useRef(0);
   const [toast, setToast] = useState<ToastState>(null);
@@ -1043,10 +1048,11 @@ export default function AccountsPage() {
   const openCardPhoto = useCallback(
     async (account: Account) => {
       const req = ++cardPhotoReq.current;
-      setCardPhoto({ id: account.id, src: null });
+      // 보기 화면 위쪽에 그 줄의 이메일을 함께 보여 줘요(기획 17099-2)
+      setCardPhoto({ id: account.id, src: null, email: account.email });
       const res = await getAccountCardPhoto(account.id);
       if (req !== cardPhotoReq.current) return; // 그사이 닫았거나 다른 줄을 열었어요
-      if (res.ok) return setCardPhoto({ id: account.id, src: res.src });
+      if (res.ok) return setCardPhoto({ id: account.id, src: res.src, email: account.email });
       setCardPhoto(null);
       if (res.reason === "not_found") {
         // 그사이 지워졌어요(고객 요청 삭제 · 해지 등) — 목록을 새로 받아 메뉴도 맞춰요
@@ -1076,18 +1082,32 @@ export default function AccountsPage() {
   );
 
   const afterSend = useCallback(
-    (result: { kind: "created"; account: Account } | { kind: "resent" }) => {
+    (result: { kind: "created"; account: Account; photoNotSaved?: boolean } | { kind: "resent" }) => {
       setCreating(null);
       setResendTarget(null);
       if (result.kind === "created") {
         showCreated(result.account);
-        setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
+        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 아래 줄에 알려요(기획 17099-5) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음
+        setToast({
+          title: "계정을 만들었습니다",
+          detail: "안내 메일 발송을 요청했습니다",
+          ...(result.photoNotSaved ? { note: CARD_PHOTO_TEXT.notSaved } : {}),
+        });
       } else {
         reload();
         setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 비밀번호 설정 링크로 발송을 요청했습니다" });
       }
     },
     [reload, showCreated],
+  );
+
+  /** 계정은 만들었지만 메일은 못 보냄 — 창은 그대로(결과 · 주소 고치기). 명함 사진을 저장하지 못했으면 그것만 따로 알려요(기획 17099-5) */
+  const afterMailFailed = useCallback(
+    (account: Account, notice?: CreatedNotice) => {
+      showCreated(account);
+      if (notice?.photoNotSaved) setToast({ tone: "error", title: CARD_PHOTO_TEXT.notSaved, detail: CARD_PHOTO_TEXT.notSavedDetail });
+    },
+    [showCreated],
   );
 
   useEffect(() => {
@@ -1597,8 +1617,8 @@ export default function AccountsPage() {
             setCreating(null);
             reload();
           }}
-          onCreated={(account) => afterSend({ kind: "created", account })}
-          onMailFailed={showCreated}
+          onCreated={(account, notice) => afterSend({ kind: "created", account, photoNotSaved: notice?.photoNotSaved })}
+          onMailFailed={afterMailFailed}
           onResent={() => afterSend({ kind: "resent" })}
           onResendMailFailed={reload}
           onCancelled={cancelledFromFailure}
@@ -1630,19 +1650,22 @@ export default function AccountsPage() {
         />
       )}
 
-      {cardPhoto && <CardPhotoViewer src={cardPhoto.src} onClose={closeCardPhoto} />}
+      {cardPhoto && <CardPhotoViewer src={cardPhoto.src} email={cardPhoto.email} onClose={closeCardPhoto} />}
 
-      {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
+      {toast && <Toast title={toast.title} detail={toast.detail} note={toast.note} tone={toast.tone} onDone={clearToast} />}
     </>
   );
 }
 
-/** 찍은 명함 작은 사진 — 누르면 크게 봐요 */
+/** 찍은 명함 작은 사진 — 누르면 크게 봐요. 오른쪽 아래 돋보기로 눌러 볼 수 있음을 알려요(기획 17099-3 — 흰 명함은 사진인지 알기 어려워요) */
 function CardPhotoThumb({ src, onOpen }: { src: string; onOpen: () => void }) {
   return (
     <button type="button" className="card-thumb" onClick={onOpen} aria-label={CARD_PHOTO_TEXT.thumbLabel} title={CARD_PHOTO_TEXT.thumbLabel}>
       {/* eslint-disable-next-line @next/next/no-img-element -- data URL(줄인 명함 사진)이라 next/image 를 쓸 수 없어요 */}
       <img src={src} alt="" />
+      <span className="card-thumb-zoom">
+        <IcSearch size={14} />
+      </span>
     </button>
   );
 }
@@ -2062,6 +2085,70 @@ function MailFailureResult({
   );
 }
 
+/**
+ * 주소를 고쳐 새 계정은 만들었는데 잘못된 주소의 옛 발급을 취소하지 못했을 때(UG-455 기획 17099-7) — 「계정을 만들었습니다」로만 끝내지 않고
+ * 창 안에서 알리고 [다시 시도]로 바로 다시 취소하게 해요. 그래도 안 되면 목록 ⋮ 「발급 취소」로 취소할 수 있어요.
+ * 이미 취소된 줄(not_found)은 취소된 것으로 보고 닫아요. 고객이 이미 로그인 · 해지 중이면 더 취소할 수 없어 [닫기]만 남겨요.
+ */
+function OldIssueLeftResult({
+  account,
+  onDone,
+  onBusyChange,
+}: {
+  /** 취소하지 못한 옛 발급(잘못된 주소의 계정) */
+  account: Account;
+  /** 다시 취소했거나 [닫기] — 감싼 창이 다음 화면(완료 알림 · 메일 실패 결과)으로 넘어가요 */
+  onDone: () => void;
+  /** 취소하는 중 — 감싼 창이 Esc · 바깥 클릭으로 닫히지 않게(closable) */
+  onBusyChange: (busy: boolean) => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [error, setError] = useState<"" | CancelFailure>("");
+  async function retry() {
+    setRetrying(true);
+    setError("");
+    const res = await cancelIssue(account.id);
+    setRetrying(false);
+    if (!oldIssueLeft(res)) return onDone();
+    if (!res.ok) setError(res.reason);
+  }
+  useEffect(() => {
+    onBusyChange(retrying);
+  }, [retrying, onBusyChange]);
+  // 입력 칸 · 보내기 버튼이 사라지므로 초점을 「닫기」로 옮겨요.
+  useEffect(() => {
+    closeRef.current?.focus();
+  }, []);
+  return (
+    <>
+      <div className="summary">
+        <div className="summary-target">
+          {account.company && <strong>{account.company}</strong>}
+          <span>{account.email}</span>
+        </div>
+      </div>
+      {error ? (
+        <p className="error" role="alert">
+          {cancelErrorText(error)}
+        </p>
+      ) : (
+        <Sentences text={RECREATE_TEXT.oldCancelFailed} lines />
+      )}
+      <div className="dialog-actions">
+        <button ref={closeRef} type="button" className="btn btn-outline" onClick={onDone} disabled={retrying}>
+          닫기
+        </button>
+        {error !== "in_use" && error !== "closing" && (
+          <button type="button" className="btn btn-dark" onClick={retry} disabled={retrying} aria-busy={retrying || undefined}>
+            {retrying ? RECREATE_TEXT.retrying : RECREATE_TEXT.retry}
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
 const cancelErrorText = (reason: CancelFailure) =>
   reason === "closing"
     ? "해지 처리 중인 계정이라 발급을 취소할 수 없습니다."
@@ -2132,9 +2219,9 @@ function CreateDialog({
   onAutosaveSettled: () => void;
   /** 창을 닫아요(남길 것은 이미 남겼어요) */
   onClose: () => void;
-  onCreated: (a: Account) => void;
+  onCreated: (a: Account, notice?: CreatedNotice) => void;
   /** 계정은 만들었지만 메일은 못 보냄 — 창은 닫지 않고 결과를 보여 줘요(목록만 새로 고침) */
-  onMailFailed: (a: Account) => void;
+  onMailFailed: (a: Account, notice?: CreatedNotice) => void;
   onResent: () => void;
   /** 첫 로그인 전 계정에 다시 보냈지만 메일은 못 보냄(막힌 경우 포함) — 창은 닫지 않고 목록만 새로 고쳐요 */
   onResendMailFailed: () => void;
@@ -2190,6 +2277,15 @@ function CreateDialog({
   const [mailFailure, setMailFailure] = useState<{ account: Account; reason: MailFailureReason | "blocked" } | null>(null);
   // 실패 결과에서 다시 보내는 중 · 취소하는 중 — 창이 Esc · 바깥 클릭으로 닫히지 않게
   const [resultBusy, setResultBusy] = useState(false);
+  // 주소 고쳐 새로 만든 뒤 옛 발급을 취소하지 못함(기획 17099-7) — 창에 남아 알리고 다시 취소하게 해요.
+  // created = 메일까지 보낸 새 계정(안내를 닫으면 완료 알림과 함께 창을 닫아요). 메일을 못 보냈으면 null — 안내를 닫으면 그 결과 화면 · 주소 고치기로 가요
+  const [staleIssue, setStaleIssue] = useState<{ old: Account; created: Account | null; notice: CreatedNotice } | null>(null);
+  // 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워짐(서버 sourceCancel = revoked, 반박 리뷰 M1) — 그 옛 발급의 번호.
+  // 고치는 대상이 그 발급인 동안 버튼 위에 알리고 [발급 취소]를 함께 둬요(목록에는 「첫 로그인 전」으로 남아 있어 직원이 알 수 없어요)
+  const [revokedOldId, setRevokedOldId] = useState<string | null>(null);
+  // 이 창에서 만든 계정의 명함 사진 저장이 실패했어요(화면 반박 리뷰 3) — 주소를 고쳐 재발송하면 옮길 사진이 없어 서버가 none 으로
+  // 답하지만 새 계정에도 사진은 없으니, 그 완료 알림에도 「명함 사진은 저장하지 못했습니다」를 붙여요
+  const photoLostRef = useRef(false);
   // 주소 오류로 메일이 가지 않은 계정 — 이 창에서 주소를 고쳐 재발송해요(회사명 · 메일 언어는 이 계정 그대로).
   const [fix, setFix] = useState<Account | null>(null);
   // 명함 읽기가 끝났을 때 고치는 모드인지 보려고(읽는 동안 바뀔 수 있어요)
@@ -2480,7 +2576,7 @@ function CreateDialog({
 
   // 칸에 내용이 있거나 명함 사진이 있는 동안 새로고침 · 탭 닫기 · 주소 이동이면 브라우저 확인 창(UG-451 기획 16991).
   // 계정을 만든 뒤 결과 화면(mailFailure)은 남길 것이 없어 묻지 않아요. 세션 만료로 로그인 화면에 갈 때도 떠요 — [머무르기]면 값을 보고 옮겨 적을 수 있어요.
-  const unsaved = !mailFailure && (!!photo || [company, name, email, phone].some((v) => v.trim() !== ""));
+  const unsaved = !mailFailure && !staleIssue && (!!photo || [company, name, email, phone].some((v) => v.trim() !== ""));
   useEffect(() => {
     if (!unsaved) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -2697,6 +2793,8 @@ function CreateDialog({
   const fixSame = !!fix && key.toLowerCase() === fix.email.toLowerCase();
   // 고친 주소가 다른 첫 로그인 전 계정의 것 — 그 계정과 섞이지 않게 막아요
   const fixTaken = !!fix && !fixSame && !!pending;
+  // 고치는 중인 옛 발급의 링크가 이미 막혔어요(반박 리뷰 M1) — 고치는 대상이 새 계정으로 바뀌면 사라져요
+  const oldRevoked = !!fix && revokedOldId === fix.id;
 
   useEffect(() => {
     if (!pending && langBeforePending.current) {
@@ -2758,14 +2856,16 @@ function CreateDialog({
     return b64 && photoTag(b64) !== rejectedPhotoRef.current ? { photo: b64 } : {};
   }
 
-  /** 주소 고쳐 새로 만들기에 붙일 원래 기록 번호(UG-455) — 잘못된 계정에 명함 사진이 남아 있을 때만. 번호를 읽지 못하면 빼요 */
-  function sourceIssuanceInput(wrong: Account): { sourceIssuanceId?: number } {
-    if (wrong.hasCardPhoto !== true) return {};
+  /**
+   * 주소 고쳐 새로 만들기에 붙일 원래 기록 번호(UG-455) — 서버가 그 기록의 명함 사진을 새 계정으로 옮기고, 같은 요청에서 그 기록을
+   * 발급 취소해요(cancelSource, 기획 17099-7 — 요청은 한 번만 보내고 순서는 서버가 책임져요). 번호를 읽지 못하면 빼요(그때는 전처럼 화면이 따로 취소)
+   */
+  function sourceIssuanceInput(wrong: Account): { sourceIssuanceId?: number; cancelSource?: true } {
     const n = Number(wrong.id);
-    return Number.isSafeInteger(n) && n > 0 ? { sourceIssuanceId: n } : {};
+    return Number.isSafeInteger(n) && n > 0 ? { sourceIssuanceId: n, cancelSource: true } : {};
   }
 
-  /** 고친 주소로 재발송(I3 · C3 · M8b): 새 계정을 만들어 보내고, 만들어지면 잘못된 주소의 계정은 발급 취소해요. */
+  /** 고친 주소로 재발송(I3 · C3 · M8b): 한 요청으로 새 계정을 만들어 보내고 잘못된 주소의 계정은 발급 취소해요(서버가 함께 처리 — recreate.ts). */
   async function submitFix(wrong: Account) {
     if (fixSame) return; // 주소 그대로 — 버튼은 「발급 취소」라 Enter 로도 보내지 않아요
     let eError = "";
@@ -2810,6 +2910,8 @@ function CreateDialog({
     });
     if (!res.ok) {
       setSending(false);
+      // 옛 발급의 링크는 이미 막혔다고 서버가 알려 왔어요(반박 리뷰 M1) — 아래 실패 안내에 더해 알리고 [발급 취소]를 둬요
+      if (oldIssueRevoked(res)) setRevokedOldId(wrong.id);
       if (res.reason === "duplicate" || res.reason === "in_use") {
         // 그사이 상태가 바뀌었어요 — 서버에 다시 물어 칸 아래에 보여 줘요.
         // (runCheck 는 이 렌더의 조회 결과 「new」를 그대로 돌려줘서 다시 묻지 않아요.)
@@ -2821,24 +2923,42 @@ function CreateDialog({
         setEmailError(DOMAIN_ERROR_TEXT);
         return emailRef.current?.focus();
       }
+      // 옛 발급을 취소할 수 없어(고객이 이미 로그인 · 해지 중) 서버가 새 계정을 만들지 않았어요(기획 17099-7)
+      if (res.reason === "source_blocked") return setFormError(RECREATE_TEXT.sourceBlocked);
       return setFormError(res.reason === "network" ? CREATE_NETWORK_FAILED : "계정을 만들지 못했습니다. 다시 시도해 주세요.");
     }
-    // 잘못된 주소의 계정은 메일이 아무에게도 가지 않았어요 — 확인 없이 정리해요. 실패해도 목록에 「이메일 주소 오류」로 남아 직접 취소할 수 있어요.
-    await cancelIssue(wrong.id).catch(() => undefined);
+    // 잘못된 주소의 옛 발급은 서버가 같은 요청에서 취소했어요(기획 17099-7). 예전 서버(결과를 주지 않음)면 전처럼 화면이 따로 취소해요.
+    // 어느 쪽이든 옛 발급이 남았으면 「계정을 만들었습니다」로만 끝내지 않고 알려요 — 창에 남아 다시 취소할 수 있게
+    const old = oldIssueAfterCreate(res.sourceCancel);
+    const left =
+      old === "left" ||
+      (old === "legacy" && oldIssueLeft(await cancelIssue(wrong.id).catch(() => ({ ok: false as const, reason: "failed" as const }))));
     setSending(false);
+    // 앞서 만든 계정의 사진 저장이 실패했으면 새 계정에도 사진이 없어요 — 같은 줄을 보여 줘요(화면 반박 리뷰 3)
+    const notice: CreatedNotice = { photoNotSaved: cardPhotoNotSaved(res, photoLostRef.current) };
+    photoLostRef.current = notice.photoNotSaved === true;
     if (res.mailSent) {
       setPhoto(null); // 고쳐 재발송이 끝났어요 — 창의 명함 사진은 비워요(잘못된 계정에 남은 사진은 서버가 새 계정으로 옮겨요, UG-455)
-      return onCreated(res.account);
+      if (left) return setStaleIssue({ old: wrong, created: res.account, notice });
+      return onCreated(res.account, notice);
     }
+    if (left) setStaleIssue({ old: wrong, created: null, notice: {} });
     if (res.mailFailureReason === "address") {
       // 고친 주소도 받지 않음 — 새 계정을 고치는 대상으로 바꿔 같은 창에 남아요(사진도 남겨 다시 비교)
       setFix(res.account);
-      return onMailFailed(res.account);
+      return onMailFailed(res.account, notice);
     }
     setFix(null);
     setPhoto(null); // 계정은 만들어졌고 더 고칠 주소가 없어요(결과 화면) — 창의 사진은 비워요(잘못된 계정에 남은 사진은 서버가 새 계정으로 옮겨요)
     setMailFailure({ account: res.account, reason: res.mailFailureReason });
-    return onMailFailed(res.account);
+    return onMailFailed(res.account, notice);
+  }
+
+  /** 옛 발급 취소 안내를 닫아요(다시 취소했거나 [닫기]) — 메일까지 보낸 새 계정이면 완료 알림과 함께 창을 닫고, 아니면 그 결과 화면 · 주소 고치기로 */
+  function finishStale() {
+    const stale = staleIssue;
+    setStaleIssue(null);
+    if (stale?.created) onCreated(stale.created, stale.notice);
   }
 
   async function submit() {
@@ -2926,9 +3046,12 @@ function CreateDialog({
     setSending(false);
     if (res.ok) {
       endDraft(); // 계정이 만들어졌어요(메일 실패 포함) — 서버가 「작성 중」 명함을 지웠어요
+      // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 알려요(기획 17099-5) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 아무 표시 없음
+      const notice: CreatedNotice = { photoNotSaved: cardPhotoNotSaved(res) };
+      photoLostRef.current = notice.photoNotSaved === true; // 주소를 고쳐 재발송한 완료 알림에도 이어서 알려요(화면 반박 리뷰 3)
       if (res.mailSent) {
         setPhoto(null); // 계정을 만들었어요 — 창의 명함 사진은 비워요(사진은 계정과 함께 서버에 남아요, UG-455)
-        return onCreated(res.account);
+        return onCreated(res.account, notice);
       }
       // 주소 오류는 같은 창에서 이메일 칸에 안내하고 고쳐 재발송하게 해요(I2) — 고치는 동안 명함 사진은 남겨 비교해요
       if (res.mailFailureReason === "address") setFix(res.account);
@@ -2936,7 +3059,7 @@ function CreateDialog({
         setPhoto(null); // 고칠 주소가 없는 실패(결과 화면) — 창의 사진은 비워요(서버에는 계정과 함께 남아요)
         setMailFailure({ account: res.account, reason: res.mailFailureReason });
       }
-      return onMailFailed(res.account);
+      return onMailFailed(res.account, notice);
     }
     if (res.reason === "duplicate" || res.reason === "in_use") {
       // 조회와 보내기 사이에 상태가 바뀐 경우: 다시 조회해서 칸 아래에 보여 줘요.
@@ -3231,6 +3354,14 @@ function CreateDialog({
           onResetSent(result);
         }}
       />
+    );
+  }
+
+  if (staleIssue) {
+    return (
+      <Dialog title="Gate 계정 만들기" onClose={finishStale} closable={!resultBusy}>
+        <OldIssueLeftResult account={staleIssue.old} onDone={finishStale} onBusyChange={setResultBusy} />
+      </Dialog>
     );
   }
 
@@ -3598,6 +3729,8 @@ function CreateDialog({
             {formError}
           </p>
         )}
+        {/* 새 계정은 못 만들었는데 옛 발급의 링크는 이미 막힘(반박 리뷰 M1) — 고친 주소가 이미 있는 계정이면 다시 보내도 같아 옛 발급을 취소하게 */}
+        {oldRevoked && <Sentences text={RECREATE_TEXT.sourceRevoked} lines />}
         {keepingDraft && !keepFailed && (
           <p className="help" role="status">
             작성 중인 명함을 저장하고 있습니다…
@@ -3620,19 +3753,19 @@ function CreateDialog({
             </div>
           </>
         ) : fix ? (
-          // 주소 그대로면 [닫기] [발급 취소](I2 · C2), 고치면 [닫기] [재발송](I3 · C3)
+          // 주소 그대로면 [닫기] [발급 취소](I2 · C2), 고치면 [닫기] [재발송](I3 · C3).
+          // 옛 발급의 링크가 이미 막혔으면(반박 리뷰 M1) 고친 뒤에도 [발급 취소]를 함께 둬요 — [닫기] [발급 취소] [재발송]
           <div className="dialog-actions">
             <button type="button" className="btn btn-outline" onClick={close} disabled={cancelling || sending}>
               닫기
             </button>
-            {fixSame ? (
-              cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
-                <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling} aria-busy={cancelling || undefined}>
-                  {cancelling ? "취소하는 중…" : "발급 취소"}
-                </button>
-              )
-            ) : (
-              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning} aria-busy={sending || checking || undefined}>
+            {(fixSame || oldRevoked) && cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
+              <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling || sending || checking} aria-busy={cancelling || undefined}>
+                {cancelling ? "취소하는 중…" : "발급 취소"}
+              </button>
+            )}
+            {!fixSame && (
+              <button type="submit" className="btn btn-dark" disabled={inUse || closing || fixTaken || suspectBlocked || sending || scanning || cancelling} aria-busy={sending || checking || undefined}>
                 {sending ? "보내는 중…" : "재발송"}
               </button>
             )}
@@ -3664,7 +3797,8 @@ function CreateDialog({
         <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={onPhoto} />
         </fieldset>
       </form>
-      {viewingPhoto && photo && <CardPhotoViewer src={photo} onClose={() => setViewingPhoto(false)} />}
+      {/* 보기 화면 위쪽에 지금 이메일 칸의 값을 함께 보여 줘요(기획 17099-2 — 닫지 않고 0 · O, 1 · l · I 를 비교) */}
+      {viewingPhoto && photo && <CardPhotoViewer src={photo} email={trimmed} onClose={() => setViewingPhoto(false)} />}
     </Dialog>
   );
 }
@@ -3931,9 +4065,8 @@ function CancelDialog({
         <dl className="summary-rows">
           <div>
             <dt>삭제 대상</dt>
-            <dd>
-              계정 · 데모 프로젝트{account.demoRecords !== undefined && `(데모 기록 ${account.demoRecords}건)`}
-            </dd>
+            {/* 명함 사진이 있는 줄이면 「· 명함 사진」까지(기획 17099-4) */}
+            <dd>{cancelTargetsText(account)}</dd>
           </div>
           <div>
             <dt>보낸 메일</dt>
