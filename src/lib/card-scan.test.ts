@@ -799,7 +799,7 @@ test("UG-451 17030 ③ 형식이 깨진 메일 모양 글자(@ 양옆 글자)도
   assert.equal(broken.values.email, "");
   assert.equal(broken.chips.some(isEmailLikeChip), true);
   assert.equal(card("Lena Koh", "lena@koh sg").chips.some(isEmailLikeChip), true);
-  assert.equal(card("1004@naver com").chips.some(isEmailLikeChip), true);
+  assert.equal(card("test1004@naver com").chips.some(isEmailLikeChip), true);
   assert.equal(card("kim@x.com").chips.some(isEmailLikeChip), true);
   // @ 한쪽이 비었으면 메일 모양이 아니에요(@ 앞뒤 띄어쓰기는 읽을 때 붙여요 — 「a @ b」 → 「a@b」)
   for (const t of ["@acme", "acme@", "(@)", "Lena Koh"]) {

@@ -198,24 +198,23 @@ export function surnameRomans(surname: string, table: readonly string[] = []): s
 }
 
 /**
- * 로마자 한 덩어리가 「성 + 이름」 · 「이름 + 성」인지(붙여 쓴 것 — haneuljung · junghaneul), 또는 「성 이니셜 + 이름」 · 「이름 + 성 이니셜」인지(jhaneul · haneulj).
- * 이름은 모든 음절이 맞아야 해요. 이름만 적은 것(haneul)과 이니셜만 적은 것(hj · jhn)은 아니에요 —
- * 덩어리가 이름만으로도 읽히면(「우진」의 woojin 을 w + oojin 으로 읽는 것) 이니셜 꼴로 보지 않아요.
+ * 로마자 한 덩어리가 「성 + 이름」 · 「이름 + 성」을 남김없이 적은 것인지(붙여 쓴 것 — haneuljung · junghaneul). 이름은 모든 음절이 맞아야 해요.
+ * 성 이니셜 꼴(jhaneul · haneulj)은 받지 않아요(반박 리뷰 2) — 성씨는 첫 글자만 보게 되어, 성씨를 틀리게 읽은 이름
+ * (정하늘 → 「장하늘」 + jhaneul@ · 조민서 → 「주민서」 + jminseo@ · 한지훈 → 「함지훈」 + hjihun@ · 신유나 → 「선유나」 + syuna@)을 뒷받침했어요.
  */
 function spellsFullName(chunk: string, surnames: readonly string[], given: readonly (readonly string[])[]): boolean {
-  for (const s of surnames) {
-    if (chunk.length > s.length && chunk.startsWith(s) && spells(chunk.slice(s.length), given)) return true;
-    if (chunk.length > s.length && chunk.endsWith(s) && spells(chunk.slice(0, -s.length), given)) return true;
-  }
-  if (chunk.length < 2 || spells(chunk, given)) return false;
-  const initials = new Set(surnames.map((s) => s[0]));
-  return (initials.has(chunk[0]) && spells(chunk.slice(1), given)) || (initials.has(chunk[chunk.length - 1]) && spells(chunk.slice(0, -1), given));
+  return surnames.some(
+    (s) =>
+      chunk.length > s.length &&
+      ((chunk.startsWith(s) && spells(chunk.slice(s.length), given)) || (chunk.endsWith(s) && spells(chunk.slice(0, -s.length), given))),
+  );
 }
 
 /**
  * 이메일 @ 앞이 그 한글 이름(성 surname + 이름 given)을 적은 것인지 — surnames = 성씨의 로마자 표기들(surnameRomans).
- * @ 앞을 로마자 아닌 글자(. _ - + 숫자)로 나눈 조각을 이어 붙여 봐요: haneul.jung · jung.haneul · haneuljung · ha-neul.jung · jung_haneul85 ·
- * j.haneul · jhaneul · haneulj. 이어진 조각들이 성 + 이름을 남김없이 적어야 해요(이름만 · 성씨만 · 이니셜만은 아님 — haneul@ · jung@ · hj@ · hnjung@).
+ * @ 앞을 로마자 아닌 글자(. _ - + 숫자)로 나눈 조각을 이어 붙여 봐요: haneul.jung · jung.haneul · haneuljung · ha-neul.jung · jung_haneul85.
+ * 이어진 조각들이 성 + 이름을 남김없이 적어야 해요 — 이름만 · 성씨만 · 이니셜만(haneul@ · jung@ · hj@ · hnjung@)과
+ * 성 이니셜 + 이름(jhaneul@ · j.haneul@ · haneulj@)은 아니에요.
  */
 export function emailSpellsKoName(email: string, surnames: readonly string[], given: string): boolean {
   const at = email.lastIndexOf("@");

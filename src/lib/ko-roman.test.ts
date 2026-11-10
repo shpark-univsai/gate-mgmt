@@ -171,7 +171,7 @@ test("성씨 표기 — 표의 흔한 표기 + 음절 표기, 한 글자 표기�
 
 const JUNG = surnameRomans("정", ["jung", "jeong", "chung", "jeung"]);
 
-test("이메일 @ 앞 — 성 + 이름을 남김없이 적은 것만(순서 · 붙여 씀 · 하이픈 · 숫자 · 성 이니셜)", () => {
+test("이메일 @ 앞 — 성 + 이름을 남김없이 적은 것만(순서 · 붙여 씀 · 하이픈 · 숫자)", () => {
   const yes = [
     "haneul.jung@x.example",
     "jung.haneul@x.example",
@@ -186,11 +186,6 @@ test("이메일 @ 앞 — 성 + 이름을 남김없이 적은 것만(순서 · �
     "haneul.chung@x.example",
     "haneul.joung@x.example",
     "hanul.jung@x.example", // 늘 → neul · nul
-    "jhaneul@x.example",
-    "j.haneul@x.example",
-    "haneulj@x.example",
-    "haneul.j@x.example",
-    "chaneul@x.example", // chung 의 이니셜
     "team.haneul.jung@x.example",
   ];
   for (const email of yes) assert.equal(emailSpellsKoName(email, JUNG, "하늘"), true, email);
@@ -206,7 +201,13 @@ test("이메일 @ 앞 — 성 + 이름을 남김없이 적은 것만(순서 · �
     "hanal.jung@x.example", // 한 음절이 다름(날)
     "haneul.jang@x.example", // 다른 성씨
     "haneul.kim@x.example",
-    "khaneul@x.example", // 다른 성 이니셜
+    "khaneul@x.example",
+    // 성 이니셜 + 이름 · 이름 + 성 이니셜(반박 리뷰 2 — 성씨를 첫 글자만 보게 돼요)
+    "jhaneul@x.example",
+    "j.haneul@x.example",
+    "haneulj@x.example",
+    "haneul.j@x.example",
+    "chaneul@x.example",
     "sales@x.example",
     "haneuljungkr@x.example", // 한 덩어리에 다른 글자가 붙음
     "@x.example",
@@ -215,12 +216,17 @@ test("이메일 @ 앞 — 성 + 이름을 남김없이 적은 것만(순서 · �
   for (const email of no) assert.equal(emailSpellsKoName(email, JUNG, "하늘"), false, email);
 });
 
-test("이메일 @ 앞 — 이름만으로도 읽히는 덩어리는 성 이니셜 꼴로 보지 않아요", () => {
+test("이메일 @ 앞 — 이름만 적은 주소 · 성 이니셜 꼴은 아니에요(성씨 오독 재현: 장 · 주 · 함 · 선)", () => {
   const woo = surnameRomans("우", ["woo", "wu"]);
-  // 「우진」의 woojin 을 w + oojin 으로 읽지 않아요(이름만 적은 주소)
   assert.equal(emailSpellsKoName("woojin@x.example", woo, "우진"), false);
+  assert.equal(emailSpellsKoName("wwoojin@x.example", woo, "우진"), false);
   assert.equal(emailSpellsKoName("woojin.woo@x.example", woo, "우진"), true);
-  assert.equal(emailSpellsKoName("wwoojin@x.example", woo, "우진"), true);
+  // 반박 리뷰 2 재현 — 읽힌 성씨(장 · 주 · 함 · 선)의 표기와 이니셜이 같아도 근거가 아니에요
+  assert.equal(emailSpellsKoName("jhaneul@x.example", surnameRomans("장", ["jang", "chang"]), "하늘"), false);
+  assert.equal(emailSpellsKoName("haneulj@x.example", surnameRomans("장", ["jang", "chang"]), "하늘"), false);
+  assert.equal(emailSpellsKoName("jminseo@x.example", surnameRomans("주", ["joo", "ju"]), "민서"), false);
+  assert.equal(emailSpellsKoName("hjihun@x.example", surnameRomans("함", ["ham"]), "지훈"), false);
+  assert.equal(emailSpellsKoName("syuna@x.example", surnameRomans("선", ["sun", "seon"]), "유나"), false);
 });
 
 test("영문 이름 줄 — 성이 앞이든 뒤든, 대문자 · 하이픈 · 띄어 쓴 이름", () => {

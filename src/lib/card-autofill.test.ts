@@ -126,13 +126,13 @@ const SAMPLES: Sample[] = [
   },
   {
     name: "공용 메일 도메인 — 회사명 근거로 쓰지 않음",
-    lines: ["Lena Koh", "Freelance Designer", "Koh Studio", "lena.koh@gmail.com", "9123 4567"],
+    lines: ["Lena Koh", "Freelance Designer", "Koh Studio", "lena.koh.test01@gmail.com", "9123 4567"],
     truth: { company: "Koh Studio", name: "Lena Koh" },
     fill: { company: "", name: "Lena Koh" },
   },
   {
     name: "공용 메일 도메인(naver) — 도메인과 같은 낱말 줄이 있어도 회사명 아님",
-    lines: ["Naver Cafe Lovers", "윤하늘", "haneul@naver.com", "010-5678-9012"],
+    lines: ["Naver Cafe Lovers", "윤하늘", "haneul.test01@naver.com", "010-5678-9012"],
     truth: { company: "", name: "윤하늘" },
     fill: { company: "", name: "윤하늘" },
   },
@@ -387,16 +387,16 @@ test("UG-451 17100 이메일 도메인의 등록 이름 — 공용 메일 · 짧
   assert.equal(emailDomainName("lee@mail.company-a.co.kr"), "company-a");
   assert.equal(emailDomainName("user1@example.io"), "example");
   for (const email of [
-    "a@gmail.com",
-    "a@naver.com",
-    "a@daum.net",
-    "a@hanmail.net",
-    "a@kakao.com",
-    "a@outlook.com",
-    "a@hotmail.com",
-    "a@yahoo.co.kr",
-    "a@icloud.com",
-    "a@me.com",
+    "test.x1@gmail.com",
+    "test.x1@naver.com",
+    "test.x1@daum.net",
+    "test.x1@hanmail.net",
+    "test.x1@kakao.com",
+    "test.x1@outlook.com",
+    "test.x1@hotmail.com",
+    "test.x1@yahoo.co.kr",
+    "test.x1@icloud.com",
+    "test.x1@me.com",
     "a@lg.com",
     "no-at-sign",
   ]) {
@@ -457,18 +457,18 @@ test("UG-451 기획 17118-3 — 점수가 낮은 한글 이름: 이메일 @ 앞 
   const alone = (email: string, ...more: Line[]) =>
     read("주식회사 푸른별미디어", ["한서윤", 72, { 한서윤: 72 }], ...more, email, "010-5555-0142").values.name;
   // 이메일 @ 앞 — 이름.성 · 성.이름 · 붙여 씀 · 하이픈 · 숫자 · 성 이니셜 + 이름 · 이름 + 성 이니셜, 표기 변형(moon · mun, jihu · jihoo, seoyun · seoyoon · suhyun 아님)
-  for (const email of ["jihu.moon@pureunbyeol-media.co.kr", "moon.jihu@pureunbyeol-media.co.kr", "jihumoon@pureunbyeol-media.co.kr", "ji-hu.moon@pureunbyeol-media.co.kr", "jihoo_mun85@pureunbyeol-media.co.kr", "mjihu@pureunbyeol-media.co.kr", "jihum@pureunbyeol-media.co.kr", "JIHU.MOON@PUREUNBYEOL-MEDIA.CO.KR"]) {
+  for (const email of ["jihu.moon@pureunbyeol-media.co.kr", "moon.jihu@pureunbyeol-media.co.kr", "jihumoon@pureunbyeol-media.co.kr", "ji-hu.moon@pureunbyeol-media.co.kr", "jihoo_mun85@pureunbyeol-media.co.kr", "JIHU.MOON@PUREUNBYEOL-MEDIA.CO.KR"]) {
     assert.equal(titled(email), "문지후", email);
   }
-  for (const email of ["seoyun.han@pureunbyeol-media.co.kr", "han.seoyoon@pureunbyeol-media.co.kr", "hseoyun@pureunbyeol-media.co.kr"]) {
+  for (const email of ["seoyun.han@pureunbyeol-media.co.kr", "han.seoyoon@pureunbyeol-media.co.kr", "seoyunhan@pureunbyeol-media.co.kr"]) {
     assert.equal(alone(email), "한서윤", email);
   }
   // 한 음절이 다른 이름(서연)의 주소는 근거가 아니에요
   assert.equal(alone("seoyeon.han@pureunbyeol-media.co.kr"), "");
   // 공용 메일이어도 @ 앞이 이름이면 근거예요
-  assert.equal(alone("seoyun.han@gmail.com"), "한서윤");
+  assert.equal(alone("seoyun.han.test01@gmail.com"), "한서윤");
   // 맞춰 볼 수 없으면 전처럼 비워요 — 대표 메일함 · 이름만 · 성씨만 · 이니셜만 · 이름 이니셜 + 성 · 다른 사람 이름
-  for (const email of ["hello@pureunbyeol-media.co.kr", "jihu@pureunbyeol-media.co.kr", "moon@pureunbyeol-media.co.kr", "jm@pureunbyeol-media.co.kr", "mjh@pureunbyeol-media.co.kr", "jh.moon@pureunbyeol-media.co.kr", "jihun.moon@pureunbyeol-media.co.kr", "jiho.moon@pureunbyeol-media.co.kr", "jihu.min@pureunbyeol-media.co.kr"]) {
+  for (const email of ["hello@pureunbyeol-media.co.kr", "jihu@pureunbyeol-media.co.kr", "mjihu@pureunbyeol-media.co.kr", "jihum@pureunbyeol-media.co.kr", "m.jihu@pureunbyeol-media.co.kr", "moon@pureunbyeol-media.co.kr", "jm@pureunbyeol-media.co.kr", "mjh@pureunbyeol-media.co.kr", "jh.moon@pureunbyeol-media.co.kr", "jihun.moon@pureunbyeol-media.co.kr", "jiho.moon@pureunbyeol-media.co.kr", "jihu.min@pureunbyeol-media.co.kr"]) {
     assert.equal(titled(email), "", email);
   }
   // 영문 이름 줄 — 성이 앞이든 뒤든, 대문자 · 하이픈 · 띄어 쓴 이름. 이메일은 맞춰 볼 수 없는 주소
@@ -506,9 +506,27 @@ test("UG-451 기획 17118-3 — 틀리게 읽은 이름은 이메일과 한 음�
   assert.equal(misread("박지은", "jiun.park@hanbit-trade.co.kr"), "");
   assert.equal(misread("박지휘", "jihee.park@hanbit-trade.co.kr"), "");
   assert.equal(misread("박지헌", "jihyun.park@hanbit-trade.co.kr"), "");
-  // 틀리게 읽힌 성씨도 — 성 이니셜 꼴(j + 이름)은 첫 글자만 봐요(받아들인 것: 정 ↔ 장 은 이니셜이 같아요)
-  assert.equal(misread("방서준", "pseojun@hanbit-trade.co.kr"), "");
-  assert.equal(misread("김서준", "pseojun@hanbit-trade.co.kr"), "");
+  // 틀리게 읽힌 성씨도 — 성 전체가 적힌 주소와는 어긋나요
+  assert.equal(misread("방서준", "seojun.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("김서준", "seojun.park@hanbit-trade.co.kr"), "");
+});
+
+test("UG-451 반박 리뷰 2 — 성 이니셜 꼴 주소(jhaneul@ · haneulj@)는 뒷받침이 아니에요: 성씨를 틀리게 읽은 이름이 채워지지 않게", () => {
+  // 이름 줄 점수 70 — 성씨 글자를 틀리게 읽음(정 → 장 · 조 → 주 · 한 → 함 · 신 → 선), 이메일은 성 이니셜 + 이름
+  const card = (line: string, email: string) =>
+    read("주식회사 푸른별미디어", [line, 70, { [line.split(" ")[0]]: 70 }], email, "010-5555-0142").values.name;
+  assert.equal(card("장하늘 과장", "jhaneul@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("장하늘 과장", "haneulj@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("장하늘 과장", "j.haneul@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("주민서 과장", "jminseo@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("함지훈 과장", "hjihun@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("선유나 과장", "syuna@pureunbyeol-media.co.kr"), "");
+  // 맞게 읽었어도 성 이니셜 꼴만으로는 채우지 않아요(점수 90 아래) — 성 전체가 적힌 주소 · 영문 이름 줄은 채워요
+  assert.equal(card("정하늘 과장", "jhaneul@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("정하늘 과장", "haneul.jung@pureunbyeol-media.co.kr"), "정하늘");
+  // 성 전체가 적힌 주소 · 영문 이름 줄은 성씨 오독을 막아요(전과 같음)
+  assert.equal(card("장하늘 과장", "haneul.jung@pureunbyeol-media.co.kr"), "");
+  assert.equal(read("주식회사 푸른별미디어", ["장하늘 과장", 70, { 장하늘: 70 }], "Haneul Jung", "hello@pureunbyeol-media.co.kr", "010-5555-0142").values.name, "");
 });
 
 test("UG-451 17100 도구의 낱말이 띄어쓰기와 달라도(한글을 낱자 · 토막으로 나눠 줌) 점수를 맞춰 봐요", () => {
@@ -682,7 +700,7 @@ test("UG-451 반박 리뷰 1 — 부서 · 지점 · 상호 낱말이 이름 칸
   assert.equal(name("(주)가나다", "Gildong Hong", "제조부", "010-1234-5678", "gd@ganada.co.kr"), "");
   assert.equal(name("(주)가나다", "피수진 대리", "국제부", "010-1234-5678", "sj@ganada.co.kr"), "");
   assert.equal(name("가나다증권", "洪吉童", "강남점", "010-1234-5678", "gd@ganada-sec.kr"), "");
-  assert.equal(name("한우리", "홍길동 Manager", "010-1234-5678", "gd@gmail.com"), "");
+  assert.equal(name("한우리", "홍길동 Manager", "010-1234-5678", "gd.test01@gmail.com"), "");
   // 한 줄뿐일 때 채워지던 낱말(부서 · 지점 · 장소 · 상호 · 학교 · 보통 낱말) — 모두 비워요
   const words =
     "성수동 여의도 강남역 제주점 구매과 설계부 조직장 신세계 이마트 정관장 이디야 오뚜기 서울대 고려대 연세대 지마켓 김앤장 전시회 박람회 금융권 " +
@@ -711,13 +729,13 @@ test("UG-451 반박 리뷰 5 — 역할 메일함 · 문구 · 상호는 영어 
   assert.equal(name("Events Crew", "events@lumenworks.com", "+65 6123 4567"), "");
   assert.equal(name("Growth Hacker", "growth@lumenworks.com", "+65 6123 4567"), "");
   assert.equal(name("Art Curator", "curator@lumenworks.com", "+65 6123 4567"), "");
-  assert.equal(name("Sunny Bakery", "+65 9123 4567", "sunnybakery@gmail.com"), "");
+  assert.equal(name("Sunny Bakery", "+65 9123 4567", "sunnybakery.test01@gmail.com"), "");
   // 역할 낱말은 뒷받침으로 세지 않아요 — 이름 낱말이 @ 앞에 있을 때만
   assert.equal(name("Sales Koh", "sales@koh.sg", "+65 6123 4567"), "");
   // 채운 회사명과 낱말이 모두 겹치는 줄은 상호예요
   assert.equal(name("Lumen Works", "Lumen Works Corp.", "lumen@lumenworks.com", "+65 6123 4567"), "");
   // 사람 이름은 전처럼 채워요
-  assert.equal(name("Lena Koh", "lena.koh@gmail.com", "9123 4567"), "Lena Koh");
+  assert.equal(name("Lena Koh", "lena.koh.test01@gmail.com", "9123 4567"), "Lena Koh");
   assert.equal(name("Lumen Works Corp.", "Rachel Lim", "rachel@lumenworks.com", "+65 6123 4567"), "Rachel Lim");
 });
 
@@ -816,7 +834,7 @@ test("UG-451 반박 리뷰 후속 4 — 직함이 붙었거나 성씨로 시작�
   // 네 글자 낱말은 전처럼 이름 글자로 된 것만 후보예요(부서 줄 「기술영업」이 이름을 가리지 않게)
   assert.equal(name("기술영업", "김민수", "010-1234-5678", "info@example.com"), "김민수");
   // 공용 메일 + 「Kim Family」
-  assert.equal(name("Kim Family", "kimfamily@gmail.com", "+65 9123 4567"), "");
+  assert.equal(name("Kim Family", "kimfamily.test01@gmail.com", "+65 9123 4567"), "");
 });
 
 test("UG-451 반박 리뷰 후속 5 — 회사명을 채울 때 쉼표 앞 공백은 붙여요(칩은 읽은 그대로)", () => {
