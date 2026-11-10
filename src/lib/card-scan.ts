@@ -2,6 +2,7 @@
 // 화면 · 브라우저에 기대지 않는 순수 함수만 둬요(글자 읽기 자체는 card-ocr.ts). 칩 규칙 번호는 Figma 「칩 동작 규칙 (N3b)」.
 // 처음 채우기는 모양이 정해진 이메일 · 연락처, 그리고 확실한 회사명 · 이름(UG-451 기획 17100 — 아래 「회사명 · 이름 자동 채움」).
 // 회사명 · 이름은 잘못 읽는 일이 많아(한글 이름 「Sau TH」 등, 기획 16846) 확실하지 않으면 비워 두고 직원이 칩을 눌러 넣어요.
+import { emailSpellsKoName, surnameRomans, wordsSpellKoName } from "./ko-roman.ts";
 
 export type ScanField = "company" | "name" | "email" | "phone";
 
@@ -1446,6 +1447,7 @@ const HANJA_NAME_RE = /(?:^|\s)[\u4e00-\u9fff]{2,4}(?:\s|$)/;
  *   후보가 둘 이상이면 비워요. 하나이고 채워도 되는 줄(fillable)이면 채워요. 단:
  *   · 한자 이름 줄이 따로 있으면 비워요(이름이 다른 문자로 적힌 명함 — 한글 낱말 하나만으로는 이름인지 몰라요)
  *   · 영어 이름 모양 줄이 따로 있으면 그 줄에 이 성씨의 로마자 표기가 있을 때만 채워요(「홍길동」 「Hong Gildong」). 없으면 비워요(「이노벨」 + 「Tan Wei Ling」)
+ *   · 글자 인식 점수가 NAME_FILL_CONF 아래여도, 이름의 로마자 표기가 이메일 @ 앞이나 영문 이름 줄과 맞으면(성씨 + 이름의 모든 음절) 채워요(기획 17118-3)
  * - 한글 후보가 없으면: 이메일 @ 앞이 뒷받침하는(emailBacksName) 영어 이름 줄이 하나일 때 그 줄. 채운 회사명과 낱말이 겹치는 줄은 빼요.
  *   이메일이 뒷받침하지 않는 영어 두세 낱말 줄(「Golden Dragon」 「Marina Square」)은 사람 이름인지 알 수 없어 채우지 않아요.
  * all = 명함의 모든 칩(다시 나오는 낱말을 볼 때), company = 채운 회사명(없으면 "")
@@ -1467,7 +1469,23 @@ function certainName(texts: readonly TextChip[], all: readonly Chip[], domain: s
     const roman = KO_SURNAME_ROMAN[koSurnameOf(hit.name) ?? ""] ?? [];
     const samePerson = (b: TextChip) => (enNameTokens(b.loose) ?? []).some((token) => roman.includes(token.toLowerCase()));
     if (english.length > 0 && !english.some(samePerson)) return null;
-    return confident(hit.t, NAME_FILL_CONF, (v) => (koNameCandidates(v).some((c) => c.name === hit.name && c.fillable) ? hit.name : null));
+    const want = (v: string) => (koNameCandidates(v).some((c) => c.name === hit.name && c.fillable) ? hit.name : null);
+    const sure = confident(hit.t, NAME_FILL_CONF, want);
+    if (sure) return sure;
+    // 점수가 낮아도(NAME_FILL_CONF 아래) 그 이름의 로마자 표기가 이메일 @ 앞 · 영문 이름 줄과 맞으면 채워요(기획 17118-3, ko-roman.ts) —
+    // 한글은 글자를 맞게 읽고도 점수가 낮게 나와요. 성씨와 이름의 모든 음절이 맞아야 해서, 틀리게 읽은 이름(「박서순」 ↔ seojun.park@)은 채워지지 않아요.
+    // email 은 칸에 채운 주소뿐이에요 — 잘렸을 수 있어 비운 주소는 근거로 쓰지 않아요. 후보 조건(하나뿐 · 이름 모양 · 한자 · 영어 이름 줄)은 위 그대로.
+    // 점수 하한은 두지 않았어요: 지어낸 한글 명함 그림 320장(8명 × 글꼴 8 × 크기 5)을 실제 도구로 읽혀 보니, 이 규칙으로 새로 채워진 이름 26건(모두 맞음)의
+    // 이름 낱말 최저점은 54~92(직함까지 치면 20~89)였고 틀리게 읽은 이름 글자 11건(「윤서마」 「한지루」 「문재원」 …)은 85~93 이었어요 —
+    // 점수로는 가를 수 없고(틀린 글자가 더 높아요), 틀린 글자를 거르는 것은 로마자 대조예요. 줄의 점수를 모르면(도구가 주지 않음) 전처럼 채우지 않아요.
+    const surname = koSurnameOf(hit.name) ?? "";
+    const given = hit.name.slice(surname.length);
+    const surnames = surnameRomans(surname, roman);
+    // 영문 이름 줄은 낱말 모양을 따로 가리지 않아요(「Moon Ji-hu」처럼 하이픈 뒤가 소문자인 줄은 enNameTokens 가 이름 줄로 보지 않아요) —
+    // 성씨 낱말 + 이름의 모든 음절이 맞는 줄이면 그 사람의 영문 이름이에요
+    const spelled = (t: TextChip) => wordsSpellKoName(t.loose.split(/[\s,]+/).filter(Boolean), surnames, given);
+    const backed = emailSpellsKoName(email, surnames, given) || pool.some(spelled);
+    return backed ? confident(hit.t, 0, want) : null;
   }
   const companyWords = new Set(company.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
   const backed = english.filter((t) => {
@@ -1482,11 +1500,20 @@ function certainName(texts: readonly TextChip[], all: readonly Chip[], domain: s
 }
 
 /**
- * 한글 명함인지(규칙 6 — 메일 언어를 「한국어」로) — 채운 이름이 한글이거나, 또렷이 읽은(낱말 점수 CLEAR_CONF 이상) 글자 줄(메일 · 전화 줄 제외) 가운데
- * 한글 줄(한글 두 글자 이상)이 둘 이상이고 절반 이상일 때. 영문 명함에 한글 주소 한 줄이 있는 정도로는 한글 명함이 아니에요.
+ * 한글 명함인지(규칙 6 · 기획 17118-2 — 메일 언어를 「한국어」로). 명함을 읽은 그때 한 번 판단해요(직원이 칸에 한글을 쳐도 바꾸지 않아요 — 화면). 하나라도 맞으면:
+ * - 칸에 채운 회사명 · 이름에 한글이 있음(「주식회사 가나다테크」 — 이름을 채우지 못했어도)
+ * - 이메일이 .kr 로 끝남 — 칸에 채운 주소, 채우지 못했으면(잘렸을 수 있음 · 또렷하지 않음) 메일 칩에서 뽑은 주소
+ * - 칸에 채운 연락처가 010 · +82 로 시작
+ * - 또렷이 읽은(낱말 점수 CLEAR_CONF 이상) 글자 줄(메일 · 전화 줄 제외) 가운데 한글 줄(한글 두 글자 이상)이 둘 이상이고 절반 이상(전 규칙 —
+ *   회사명 · 이름을 채우지 못한 한글 명함). 영문 명함에 한글 주소 한 줄이 있는 정도로는 한글 명함이 아니에요.
+ * 전에는 「채운 이름이 한글」과 마지막 규칙뿐이라, 회사명을 한글로 채웠어도 이름 줄의 점수가 낮으면(이름을 못 채움 · 또렷한 한글 줄이 회사명 하나뿐)
+ * English 로 남았어요(기획 17118-2 의 예).
  */
-function isKoreanCard(texts: readonly TextChip[], name: string): boolean {
-  if (/^[가-힣]+$/.test(name)) return true;
+function isKoreanCard(texts: readonly TextChip[], values: ScanValues, chips: readonly Chip[]): boolean {
+  if (/[가-힣]/.test(values.company) || /[가-힣]/.test(values.name)) return true;
+  const emails = values.email ? [values.email] : chips.filter((c) => c.kind === "email").map((c) => extractEmail(c.value) || extractEmail(c.text));
+  if (emails.some((e) => /\.kr$/i.test(e))) return true;
+  if (/^010/.test(digitsOf(values.phone)) || /^\+82/.test(values.phone.replace(/[\s(]/g, ""))) return true;
   const sure = texts.filter((t) => t.line !== null && lineFloor(t.line) >= CLEAR_CONF);
   const ko = sure.filter((t) => (t.chip.text.match(/[가-힣]/g)?.length ?? 0) >= 2).length;
   return ko >= 2 && ko * 2 >= sure.length;
@@ -1517,7 +1544,7 @@ export type ScanResult = {
   outcome: ScanOutcome;
   /** 값 낱말을 또렷이 읽어 채운 이메일 · 연락처 수(0~2) */
   found: number;
-  /** 한글 명함(규칙 6) */
+  /** 한글 명함(규칙 6 · 기획 17118-2 — isKoreanCard). 못 읽은 명함(unreadable)은 늘 false */
   korean: boolean;
   /** 읽은 줄 점수의 평균(0~100, 점수를 모르면 0) — 돌려 읽은 방향을 견줄 때 써요(card-rotate.ts) */
   confidence: number;
@@ -1609,7 +1636,7 @@ export function scanCard(text: string, ocr?: readonly OcrLine[] | null, opts: { 
   };
   put("company", certainCompany(texts, domain));
   put("name", certainName(texts, chips, domain, values.email, values.company));
-  return { chips, values, links, outcome, found, korean: isKoreanCard(texts, values.name), confidence, upright, sparse, weak };
+  return { chips, values, links, outcome, found, korean: isKoreanCard(texts, values, chips), confidence, upright, sparse, weak };
 }
 
 /**
