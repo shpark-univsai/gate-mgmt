@@ -724,6 +724,21 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 .toast--error .toast-icon { color: var(--danger-400); } /* 창이 닫힌 뒤의 실패(「작성 중」 명함 저장 등) */
 .toast-title { color: var(--gray-0); font-weight: 700; }
 .toast-detail { margin-top: 2px; color: var(--gray-300); }
+.toast-body { flex: 1; min-width: 0; }
+/* 직원이 닫을 때까지 남는 알림의 「닫기」(UG-455 기획 17124) — 글자 버튼, 누르는 영역은 알림 안쪽 여백까지 넓혀요 */
+.toast-close {
+  flex: none;
+  align-self: center;
+  margin: -8px -8px -8px 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--gray-300);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
 /* 알림 둘이 함께 뜰 때(계정을 만들었습니다 + 명함 사진은 저장하지 못했습니다) 겹치지 않게 아래에서 위로 쌓아요 — 알림 하나만 있어도 같은 자리 */
 .toast-stack { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: flex; flex-direction: column-reverse; gap: 8px; }
 .toast-stack .toast { position: static; }
@@ -901,6 +916,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* ── 호버: 마우스가 있는 기기에서만(터치에서 눌린 채 남지 않게) ── */
 @media (hover: hover) {
   .btn-dark:hover:not(:disabled) { background: var(--gray-800); }
+  .toast-close:hover { color: var(--gray-0); }
   .btn-outline:hover:not(:disabled) { background: var(--gray-50); border-color: var(--gray-400); }
   .btn-danger-outline:hover:not(:disabled) { background: var(--gray-50); }
   .login-card .btn:hover:not(:disabled) { background: var(--gray-100); }

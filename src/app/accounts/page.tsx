@@ -1092,8 +1092,9 @@ export default function AccountsPage() {
       if (result.kind === "created") {
         showCreated(result.account);
         setToast({ title: "계정을 만들었습니다", detail: "안내 메일 발송을 요청했습니다" });
-        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 빨간 알림을 따로 띄워요(기획 17120-1) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음
-        setPhotoToast(result.photoNotSaved === true);
+        // 서버가 명함 사진을 받지 않았거나 저장하지 못했으면 빨간 알림을 따로 띄워요(기획 17120-1) — 정책상 남기지 않은 경우 · 사진 없이 만든 경우는 없음.
+        // 이미 떠 있는 알림은 직원이 닫을 때까지 남아요(기획 17124) — 다음 계정이 잘 만들어져도 내리지 않아요
+        if (result.photoNotSaved === true) setPhotoToast(true);
       } else {
         reload();
         setToast({ title: "안내 메일을 다시 보냈습니다", detail: "새 비밀번호 설정 링크로 발송을 요청했습니다" });
@@ -1106,7 +1107,7 @@ export default function AccountsPage() {
   const afterMailFailed = useCallback(
     (account: Account, notice?: CreatedNotice) => {
       showCreated(account);
-      setPhotoToast(notice?.photoNotSaved === true);
+      if (notice?.photoNotSaved === true) setPhotoToast(true);
     },
     [showCreated],
   );
@@ -1645,7 +1646,8 @@ export default function AccountsPage() {
       {(toast || photoToast) && (
         <div className="toast-stack">
           {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
-          {photoToast && <Toast title={CARD_PHOTO_TEXT.notSaved} detail={CARD_PHOTO_TEXT.notSavedDetail} tone="error" onDone={clearPhotoToast} />}
+          {/* 명함 사진을 저장하지 못한 알림은 직원이 닫을 때까지 남겨요(기획 17124) — 완료 알림은 전처럼 4초 */}
+          {photoToast && <Toast title={CARD_PHOTO_TEXT.notSaved} detail={CARD_PHOTO_TEXT.notSavedDetail} tone="error" persist onDone={clearPhotoToast} />}
         </div>
       )}
     </>
