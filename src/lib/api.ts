@@ -1,7 +1,9 @@
 // 서버 연결 지점 (UG-405). 화면은 이 파일의 함수만 불러요.
 // 로그인은 Gate 인증 서버(/api/v1/auth/...), 계정 발급은 백오피스 서버(/api/v1/mgmt/...)예요. 둘 다 게이트웨이를 거쳐요.
 // 백오피스는 허용된 직원만 쓸 수 있어요(서버의 직원 허용 목록). 목록에 없으면 로그인 때 「권한 없음」으로 막혀요.
+import { isCardPhotoStatus, type CardPhotoStatus } from "./card-photo";
 import { ApiError, BACKGROUND_SESSION_ENDED, authed, publicPost, revokeRefreshToken, send, type AuthedOptions } from "./http";
+import { isSourceCancel, type SourceCancel } from "./recreate";
 import { clearSession, getTokens, saveTokens } from "./session";
 
 export type MailLanguage = "en" | "ko";
@@ -101,6 +103,11 @@ export type CreateAccountInput = {
    * 이걸 보내면 photo 는 보내지 않아요(서버도 보지 않아요). 다시 보낸 사진으로 받은 시각이 「지금」으로 밀리지 않게.
    */
   sourceIssuanceId?: number;
+  /**
+   * 원래(잘못된) 발급을 이 요청에서 함께 취소해요(UG-455 기획 17099-7) — sourceIssuanceId 와 함께 보내요. 서버가 옛 발급의 링크부터 막고
+   * 새 계정을 만든 뒤 옛 줄을 정리하고, 결과를 sourceCancel 로 알려 줘요. 예전 서버는 이 값을 모르고 결과도 주지 않아요(recreate.ts).
+   */
+  cancelSource?: boolean;
 };
 
 /**
@@ -152,14 +159,18 @@ export type EmailCheck =
   | { status: "closing" };
 
 // photoRejected = 서버가 명함 사진을 받지 않아(너무 큼 · 형식) 사진 없이 한 번 더 보내 만들었어요(UG-455) — 창은 같은 사진을 다시 보내지 않아요
+// cardPhoto = 서버가 알려 준 명함 사진 저장 결과(기획 17099-5, card-photo.ts) — 예전 서버는 주지 않아요
+// sourceCancel = 주소 고쳐 새로 만들기(cancelSource)에서 옛 발급을 취소한 결과(기획 17099-7, recreate.ts) — 예전 서버는 주지 않아요
+type CreatedExtras = { photoRejected?: true; cardPhoto?: CardPhotoStatus; sourceCancel?: SourceCancel };
 export type CreateAccountResult =
-  | { ok: true; account: Account; mailSent: true; photoRejected?: true }
+  | ({ ok: true; account: Account; mailSent: true } & CreatedExtras)
   // 계정은 만들었지만 안내 메일은 못 보냈어요 — 까닭에 따라 목록에서 다시 보내거나 발급 취소해요
-  | { ok: true; account: Account; mailSent: false; mailFailureReason: MailFailureReason; photoRejected?: true }
+  | ({ ok: true; account: Account; mailSent: false; mailFailureReason: MailFailureReason } & CreatedExtras)
   // duplicate = 첫 로그인 전 계정이 이미 있음(다시 보내기로 안내) / in_use = 쓰던 비밀번호가 막히므로 보내지 않음
   // domain = 받는 주소의 도메인이 메일을 받을 수 없어 서버가 계정을 만들지 않음(MGMT-108 — 명함에서 도메인을 잘못 읽은 경우 등)
   // network = 응답 없음 · 시간 초과 · 5xx — 서버가 만들었는지 알 수 없어요(다시 누르면 이미 만든 계정이면 duplicate 로 와요, UG-451)
-  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" | "network" };
+  // source_blocked = 주소 고쳐 새로 만들기에서 옛 발급을 취소할 수 없어(고객이 이미 로그인 · 해지 중) 새 계정을 만들지 않음(기획 17099-7)
+  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" | "network" | "source_blocked" };
 
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨 / failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
@@ -396,23 +407,34 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
   return again.ok ? { ...again, photoRejected: true } : again;
 }
 
+/** 서버가 200 으로 알려 주는 「만들지 않음」 까닭 — 모르는 값은 failed 로 봐요 */
+const CREATE_FAILURES = ["duplicate", "in_use", "failed", "source_blocked"] as const;
+const isCreateFailure = (v: unknown): v is (typeof CREATE_FAILURES)[number] =>
+  typeof v === "string" && (CREATE_FAILURES as readonly string[]).includes(v);
+
 async function createAccountOnce(input: CreateAccountInput): Promise<CreateAccountResult | "photo"> {
   try {
     const data = await authed<{
       ok: boolean;
-      reason?: "duplicate" | "in_use" | "failed";
+      reason?: string | null;
       account?: AccountDto;
       mailSent?: boolean;
       mailFailureReason?: MailFailureReason | null;
+      cardPhoto?: string | null;
+      sourceCancel?: string | null;
     }>("POST", `${MGMT}/accounts`, input);
     if (data.ok && data.account) {
       const account = toAccount(data.account);
-      if (data.mailSent) return { ok: true, account, mailSent: true };
+      const extras: CreatedExtras = {
+        ...(isCardPhotoStatus(data.cardPhoto) ? { cardPhoto: data.cardPhoto } : {}),
+        ...(isSourceCancel(data.sourceCancel) ? { sourceCancel: data.sourceCancel } : {}),
+      };
+      if (data.mailSent) return { ok: true, account, mailSent: true, ...extras };
       // 예전 서버는 까닭을 주지 않아요 — 「메일 발송 실패」(unknown)로 보여 줘요.
       const mailFailureReason = isMailFailureReason(data.mailFailureReason) ? data.mailFailureReason : "unknown";
-      return { ok: true, account, mailSent: false, mailFailureReason };
+      return { ok: true, account, mailSent: false, mailFailureReason, ...extras };
     }
-    return { ok: false, reason: data.reason ?? "failed" };
+    return { ok: false, reason: isCreateFailure(data.reason) ? data.reason : "failed" };
   } catch (e) {
     if (e instanceof ApiError && e.code === RECIPIENT_DOMAIN_UNDELIVERABLE) return { ok: false, reason: "domain" };
     if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) return { ok: false, reason: "network" };

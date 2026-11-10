@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { browserBackLayer } from "@/lib/back-layer";
 import { CARD_PHOTO_TEXT } from "@/lib/card-photo";
 import {
   FIT,
@@ -37,11 +38,16 @@ type Gesture = { kind: "pan"; id: number; start: View; from: Point } | { kind: "
  *
  * 확대(1~4배): 두 손가락 벌리기 · 두 번 누르기 · 두 번 클릭(맞춤 ↔ 2.5배) · 휠 · 트랙패드 오므리기(ctrlKey 휠, Safari gesture*)
  * · [−] [+] [맞춤] · 키보드 + − 0. 커져 있으면 한 손가락 · 마우스로 끌어 옮겨요(사진 가장자리까지만).
- * 닫기: 「닫기」 · Esc · 맞춤 배율일 때 사진 바깥 누르기. 발급 창 안에서 열려도 Esc 는 이 화면만 닫아요(창까지 닫히지 않게 먼저 받아요).
+ * 닫기: 「닫기」 · Esc · 맞춤 배율일 때 사진 바깥 누르기 · 휴대폰 「뒤로 가기」(기획 17099-6 — 이 화면만 닫히고 뒤의 계정 발급 화면은 그대로,
+ * back-layer.ts). 발급 창 안에서 열려도 Esc 는 이 화면만 닫아요(창까지 닫히지 않게 먼저 받아요).
  * 초점은 이 화면의 버튼 사이에서만 돌고(Tab · Shift+Tab), 닫으면 연 버튼으로 돌아가요.
+ * 화면 전체를 검정으로 덮어요(기획 17099-1 — 사진 앱처럼. 뒤의 창 · 목록 글자 · 버튼이 비치지 않게 불투명).
+ * email 이 있으면 맨 위에 한 줄로 보여 줘요(기획 17099-2 — 사진과 이메일을 나란히 비교). 발급 창에서 열면 지금 이메일 칸의 값,
+ * 목록에서 열면 그 줄의 이메일. 비어 있으면 줄을 숨겨요. 긴 주소는 자르지 않고 줄을 바꿔요.
  */
-export function CardPhotoViewer({ src, onClose }: { src: string | null; onClose: () => void }) {
+export function CardPhotoViewer({ src, email, onClose }: { src: string | null; email?: string; onClose: () => void }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLParagraphElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -52,6 +58,13 @@ export function CardPhotoViewer({ src, onClose }: { src: string | null; onClose:
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  // 휴대폰 「뒤로 가기」는 이 화면만 닫아요(기획 17099-6). 다른 길로 닫히면 얹어 둔 history 칸을 빼요(back-layer.ts)
+  useEffect(() => browserBackLayer().open(() => onCloseRef.current()), []);
+
+  /** 사진이 아닌 조작부(위 이메일 줄 · 아래 버튼 줄) — 여기서 시작한 누르기는 확대 · 이동 · 바깥 누르기 닫힘으로 보지 않아요 */
+  const inChrome = (target: EventTarget | null) =>
+    !!barRef.current?.contains(target as Node) || !!headRef.current?.contains(target as Node);
 
   const [view, setView] = useState<View>(FIT);
   // 버튼 · 두 번 누르기처럼 한 번에 바뀔 때만 부드럽게(손가락을 따라갈 때는 바로)
@@ -185,7 +198,7 @@ export function CardPhotoViewer({ src, onClose }: { src: string | null; onClose:
   }
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (!loaded || barRef.current?.contains(e.target as Node)) return;
+    if (!loaded || inChrome(e.target)) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
     lastPointerType.current = e.pointerType;
     const p = { x: e.clientX, y: e.clientY };
@@ -247,15 +260,15 @@ export function CardPhotoViewer({ src, onClose }: { src: string | null; onClose:
 
   function onDoubleClick(e: React.MouseEvent<HTMLDivElement>) {
     // 손가락은 위 pointerup 에서 처리했어요(브라우저가 dblclick 을 함께 보내도 두 번 바뀌지 않게)
-    if (!loaded || lastPointerType.current !== "mouse" || barRef.current?.contains(e.target as Node)) return;
+    if (!loaded || lastPointerType.current !== "mouse" || inChrome(e.target)) return;
     closable.current = false;
     apply(toggleZoom(viewRef.current, focalOf(e.clientX, e.clientY), sizes.current.base, sizes.current.stage), true);
   }
 
   function onClick(e: React.MouseEvent<HTMLDivElement>) {
-    // 바깥 누르기 닫기 — 맞춤 배율에서만(확대 중에는 끌다 손을 뗀 것이 닫기가 되지 않게). 사진 · 버튼 줄은 빼요
+    // 바깥 누르기 닫기 — 맞춤 배율에서만(확대 중에는 끌다 손을 뗀 것이 닫기가 되지 않게). 사진 · 버튼 줄 · 이메일 줄은 빼요
     const target = e.target as Node;
-    if (barRef.current?.contains(target) || imgRef.current?.contains(target)) return;
+    if (inChrome(target) || imgRef.current?.contains(target)) return;
     if (!isFit(viewRef.current)) return;
     // 불러오는 중이면 손가락 처리를 하지 않아 closable 이 없어요 — 바깥 누르기는 그대로 닫아요
     if (loaded && (!closable.current || moved.current)) return;
@@ -302,6 +315,7 @@ export function CardPhotoViewer({ src, onClose }: { src: string | null; onClose:
   }, [apply, focalOf]);
 
   const fitted = isFit(view);
+  const shownEmail = email?.trim() ?? "";
   return (
     <div
       ref={rootRef}
@@ -318,6 +332,12 @@ export function CardPhotoViewer({ src, onClose }: { src: string | null; onClose:
       onPointerCancel={onPointerEnd}
       onDoubleClick={onDoubleClick}
     >
+      {shownEmail && (
+        <p ref={headRef} className="photo-viewer-email" translate="no">
+          <span className="visually-hidden">{CARD_PHOTO_TEXT.viewerEmailLabel} </span>
+          {shownEmail}
+        </p>
+      )}
       <div ref={stageRef} className="photo-viewer-stage">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element -- data URL(명함 사진)이라 next/image 를 쓸 수 없어요
