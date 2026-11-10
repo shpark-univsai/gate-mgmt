@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { isSettled, needsRetry, pickReading, type ReadingScore } from "./card-rotate.ts";
 import { COMPANY_FILL_CONF, NAME_FILL_CONF, emailDomainName, scanCard, type OcrLine } from "./card-scan.ts";
 
 /** 명함 한 줄 — 글자만(점수 93), [글자, 줄 점수], [글자, 줄 점수, {낱말: 점수}] */
@@ -220,10 +221,10 @@ const SAMPLES: Sample[] = [
     fill: { company: "", name: "" },
   },
   {
-    name: "성씨 글자로 시작하지만 이름 글자가 아닌 한글 상호 + 이메일이 뒷받침하는 영어 이름 — 영어 이름을 채움",
+    name: "성씨 글자로 시작하는 세 글자 한글 상호 + 영어 이름 — 상호도 이름 후보로 세어, 어느 쪽이 이름인지 몰라 비움",
     lines: ["이노벨", "Tan Wei Ling", "weiling.tan@innobell.sg", "+65 9345 6789"],
     truth: { company: "이노벨", name: "Tan Wei Ling" },
-    fill: { company: "", name: "Tan Wei Ling" },
+    fill: { company: "", name: "" },
   },
   {
     name: "이름 모양의 한글 상호 + 영어 이름(성씨 표기가 다름) — 어느 쪽이 이름인지 몰라 비움",
@@ -306,7 +307,7 @@ test("UG-451 17100 표본 — 틀리게 채우는 경우 0, 채울 값 · 비울
 
 test("UG-451 17100 점수를 모르면(도구가 줄 점수를 주지 않음) 회사명 · 이름은 채우지 않아요 — 이메일 · 연락처는 전처럼", () => {
   const text = ["주식회사 가나다테크", "김민수", "M. 010-1234-5678", "minsu.kim@ganadatech.co.kr"].join("\n");
-  for (const r of [scanCard(text), scanCard(text, null), scanCard(text, [])]) {
+  for (const r of [scanCard(text), scanCard(text, null)]) {
     assert.equal(r.values.company, "");
     assert.equal(r.values.name, "");
     assert.equal(r.values.email, "minsu.kim@ganadatech.co.kr");
@@ -626,4 +627,83 @@ test("UG-451 17106 점수를 모르면 메일 모양 줄은 전처럼 읽은 것
 test("UG-451 17106-3 줄 점수 평균 — 돌려 읽은 방향을 견줄 때 써요", () => {
   assert.equal(read(["홍길동", 90], ["010-1234-5678", 70]).confidence, 80);
   assert.equal(scanCard("홍길동").confidence, 0);
+});
+
+test("UG-451 반박 리뷰 후속 1 — 바로 놓인 명함인지 모르는데 연락처만 찾으면 weak, 믿지 않기로 하면 비워요", () => {
+  // 실제 도구: 거꾸로 놓인 「Tel. +82 2 555 0101   Mobile. +82 10 5555 0102」가 「8010 9999」(낱말 66 · 92)로 읽혀 연락처에 채워졌어요
+  const flipped = [L("8010 9999 ZO SSSS OL Z8+", 61, [["8010", 66], ["9999", 92], ["ZO", 40], ["SSSS", 35], ["OL", 30], ["Z8+", 28]]), L("woɔ˙ǝldɯɐxǝ", 20, [["woɔ˙ǝldɯɐxǝ", 20]])];
+  const text = flipped.map((l) => l.text.trim()).join("\n");
+  const r = scanCard(text, flipped);
+  assert.equal(r.weak, true);
+  assert.equal(r.outcome, "found"); // 더 나은 방향이 없고 네 방향 가운데 이 방향뿐이면 쓰는 값
+  assert.equal(r.values.phone, "8010 9999");
+  const distrusted = scanCard(text, flipped, { lonePhone: false });
+  assert.equal(distrusted.weak, true);
+  assert.equal(distrusted.outcome, "unreadable");
+  assert.equal(distrusted.found, 0);
+  assert.equal(distrusted.values.phone, "");
+  assert.deepEqual(distrusted.chips, []);
+  // 다른 재현 번호 — 「6891 8096」 「9160 6899」 「0610-9698-010」
+  for (const number of ["6891 8096", "9160 6899", "0610-9698-010"]) {
+    const one = [L(number, 80, number.split(" ").map((w) => [w, 80] as [string, number]))];
+    assert.equal(scanCard(number, one).weak, true, number);
+    assert.equal(scanCard(number, one, { lonePhone: false }).values.phone, "", number);
+  }
+  // 이메일도 찾았거나 바로 놓인 명함이면 weak 가 아니에요 — lonePhone 과 상관없이 채워요
+  const upright = [L("Acme Robotics Inc.", 94, [["Acme", 94], ["Robotics", 93], ["Inc.", 95]]), L("Rachel Lim", 95, [["Rachel", 95], ["Lim", 96]]), L("6689 0916", 90, [["6689", 90], ["0916", 91]])];
+  const up = scanCard(upright.map((l) => l.text.trim()).join("\n"), upright, { lonePhone: false });
+  assert.equal(up.weak, false);
+  assert.equal(up.values.phone, "6689 0916");
+  const withEmail = [L("rachel@acme-robotics.com", 80, [["rachel@acme-robotics.com", 80]]), L("6689 0916", 90, [["6689", 90], ["0916", 91]])];
+  const em = scanCard(withEmail.map((l) => l.text.trim()).join("\n"), withEmail, { lonePhone: false });
+  assert.equal(em.weak, false);
+  assert.equal(em.values.phone, "6689 0916");
+  // 점수를 모르면(도구가 점수를 주지 않음) 전처럼 채워요
+  assert.equal(scanCard("8010 9999", null, { lonePhone: false }).values.phone, "8010 9999");
+  assert.equal(scanCard("8010 9999").weak, false);
+});
+
+test("UG-451 반박 리뷰 후속 2 — 아무 줄도 읽히지 않은 방향은 바로 놓인 명함이 아니에요", () => {
+  const empty = scanCard("", []);
+  assert.equal(empty.upright, false);
+  assert.equal(empty.outcome, "unreadable");
+  assert.equal(empty.sparse, true);
+  // 도구가 점수를 주지 않은 것(null · 없음)만 「점수를 모름」이에요
+  assert.equal(scanCard("", null).upright, true);
+  assert.equal(scanCard("").upright, true);
+  // 글자는 있는데 줄 점수가 하나도 없으면(맞출 줄이 없음) 읽은 것으로 치지 않아요
+  assert.equal(scanCard("주식회사 가나다테크\n김민수\n010-1234-5678", []).outcome, "unreadable");
+  // 화면이 매기는 점수(page.tsx 의 judge 와 같은 식)로: 빈 방향에서 멈추지도, 그 방향을 고르지도 않아요
+  const judge = (r: ReturnType<typeof scanCard>): ReadingScore => ({ found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse, weak: r.weak });
+  const garbage = judge(read(["LZ9S-ɥEZL-OLO 'W", 31], ["ɹʞ'oɔ'ɥɔǝʇ@buoɥ", 28]));
+  assert.equal(needsRetry(garbage), true);
+  assert.equal(isSettled(judge(empty)), false);
+  assert.deepEqual(pickReading([garbage, judge(empty)], false), { index: 0, lonePhone: false });
+});
+
+test("UG-451 반박 리뷰 후속 4 — 직함이 붙었거나 성씨로 시작하는 세 글자 낱말은 이름 글자와 상관없이 후보로 세요", () => {
+  const name = (...lines: Line[]) => read(...lines).values.name;
+  // 「름」 「롬」이 이름 글자 목록에 없어 이름 줄을 세지 않아, 다른 줄의 보통 낱말이 채워졌어요
+  assert.equal(name("한서진", "김아름 대리", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("한정식", "김아름 대리", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("주유소", "김새롬 과장", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("전단지", "피수진", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("한서진", "피수진", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("한양대 교수", "옹실종", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("한양대 교수", "010-1234-5678", "info@example.com"), "");
+  // 한 줄뿐인 보통 낱말
+  for (const word of "인문학 금요일 신청서 소비자 한정식 주유소 전단지".split(" ")) assert.equal(name(word, "010-1234-5678", "info@example.com"), "", word);
+  // 채우는 조건은 그대로 — 이름 글자가 아닌 글자가 든 이름은 직함이 붙어도 채우지 않고(직원이 넣어요), 이름 글자로 된 이름은 채워요
+  assert.equal(name("김아름 대리", "010-1234-5678", "info@example.com"), "");
+  assert.equal(name("김민수 대리", "010-1234-5678", "info@example.com"), "김민수");
+  // 네 글자 낱말은 전처럼 이름 글자로 된 것만 후보예요(부서 줄 「기술영업」이 이름을 가리지 않게)
+  assert.equal(name("기술영업", "김민수", "010-1234-5678", "info@example.com"), "김민수");
+  // 공용 메일 + 「Kim Family」
+  assert.equal(name("Kim Family", "kimfamily@gmail.com", "+65 9123 4567"), "");
+});
+
+test("UG-451 반박 리뷰 후속 5 — 회사명을 채울 때 쉼표 앞 공백은 붙여요(칩은 읽은 그대로)", () => {
+  const r = read("Acme Robotics Co. , Ltd.", "+65 6123 4567", "info@example.com");
+  assert.equal(r.values.company, "Acme Robotics Co., Ltd.");
+  assert.equal(r.chips.find((c) => c.id === r.links.company)?.text, "Acme Robotics Co. , Ltd.");
 });

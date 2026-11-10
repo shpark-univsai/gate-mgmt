@@ -1126,7 +1126,7 @@ const EN_COMMON_WORDS = new Set(
     "enquiry events event crew growth art happy good great best better new next future smart simple easy fast free open real true " +
     "pure fresh daily life live love care home house room space world idea ideas story stories make made build create think " +
     "different just more first plus pro max mini super ultra premium quality original classic modern urban contact follow visit " +
-    "scan call ask get go let us we you me it is are be or not no yes all any every always never one two three"
+    "scan call ask get go let us we you me it is are be or not no yes all any every always never one two three family"
   ).split(" "),
 );
 /**
@@ -1186,7 +1186,10 @@ const KO_NOT_NAME = new Set(
     "설계사 서기관 서울시 조사관 조리장 조리사 조합장 조합원 인천시 인사부 인사과 인재원 강원도 전라도 전략실 전산실 전화기 " +
     "제주도 제작자 제작사 제약사 안내문 안내원 안전부 유한회 유선전 유튜브 유통부 유통사 임직원 임원진 원장님 원장실 선생님 성명란 " +
     "모바일 연구실 연구부 연구자 연수원 정보실 지원부 지원실 지배인 지부장 홍보실 홍보부 구매부 은행원 은행장 반장님 방송국 " +
-    "신문사 여행사 금융사 유한회사 주식회사 고객센터 기술지원 인사총무 전략기획 정보보호 고객지원 연구개발"
+    "신문사 여행사 금융사 유한회사 주식회사 고객센터 기술지원 인사총무 전략기획 정보보호 고객지원 연구개발 " +
+    // 이름 글자로만 된 보통 낱말(반박 리뷰 후속 4) — 한 줄뿐일 때 이름으로 채워지거나 다른 이름을 가렸어요
+    "인문학 금요일 신청서 소비자 한정식 주유소 전단지 안내서 설명서 제안서 지원서 이력서 주문서 신고서 인증서 고지서 소개서 " +
+    "디자인 코리아 관리자 사용자 운영자 이용자 구매자 지원자 신청자"
   ).split(" "),
 );
 
@@ -1345,13 +1348,20 @@ const KO_ADDRESS_END = /(시|도|구|군|읍|면|동|로|길|리|가|층|호)$/;
 /** 이름 줄에서 떼는 낱말(한글) — 직함 · 부서(isRoleToken · KO_NAME_TITLES)와 조직 · 장소 끝말로 끝나는 세 글자 이상 낱말 */
 const isNameSideWord = (t: string) => isRoleToken(t) || KO_NAME_TITLES.has(t) || (t.length >= 3 && /^[가-힣]+$/.test(t) && KO_ORG_END.test(t));
 
-/** 한글 이름일 수 있는 낱말 — 한글 2~4자, 이름이 아닌 흔한 낱말(직함 · 항목 이름 · 지역)이 아니고, 첫 글자(성) 뒤 글자가 모두 이름에 쓰이는 글자 */
-function isKoNameWord(t: string): boolean {
+/** 이름 후보가 될 수 있는 한글 낱말 — 한글 2~4자이고 이름이 아닌 흔한 낱말(직함 · 항목 이름 · 지역)이 아님 */
+function isKoWord(t: string): boolean {
   if (!/^[가-힣]{2,4}$/.test(t)) return false;
-  if (KO_STOPWORDS.has(t) || KO_TITLES.has(t) || KO_DEPT_SUFFIX.test(t) || KO_NOT_NAME.has(t) || KO_PLACES.has(t)) return false;
+  return !(KO_STOPWORDS.has(t) || KO_TITLES.has(t) || KO_DEPT_SUFFIX.test(t) || KO_NOT_NAME.has(t) || KO_PLACES.has(t));
+}
+
+/** 첫 글자(성) 뒤 글자가 모두 이름에 쓰이는 글자(KO_GIVEN)인지 */
+function hasGivenLetters(t: string): boolean {
   const given = t.slice((koSurnameOf(t) ?? t[0]).length);
   return given.length > 0 && [...given].every((ch) => KO_GIVEN.has(ch));
 }
+
+/** 한글 이름일 수 있는 낱말 — isKoWord 이고 성 뒤 글자가 모두 이름에 쓰이는 글자 */
+const isKoNameWord = (t: string) => isKoWord(t) && hasGivenLetters(t);
 
 /**
  * 한글 이름 후보를 채워도 될 만큼 이름 모양인지 — 성씨로 시작하는 세 글자(성 + 이름 두 자), 또는 두 글자 성씨로 시작하는 네 글자.
@@ -1382,9 +1392,17 @@ function koNameCandidates(text: string, raw: string = text): { name: string; fil
     const titled = rest.length < tokens.length;
     if (rest.length === 1) {
       const name = rest[0];
-      if (!isKoNameWord(name)) continue;
-      if (koSurnameOf(name) !== null) out.push({ name, fillable: isCertainKoName(name) && (titled || !KO_SOFT_END.test(name)) });
-      else if (titled) out.push({ name, fillable: false });
+      if (!isKoWord(name)) continue;
+      // 이름 글자(KO_GIVEN)는 「채워도 되는지」에만 써요 — 성씨로 시작하는 세 글자 낱말 · 직함이 붙은 낱말은 글자와 상관없이 후보로 세요
+      // (「김아름 대리」 「김새롬 과장」을 세지 않아 다른 줄의 「한정식」 「주유소」가 하나뿐인 후보로 채워졌어요, 반박 리뷰 후속 4).
+      // 성씨도 직함도 없는 낱말은 이름 글자로 된 것만 세요(「피수진」)
+      const given = hasGivenLetters(name);
+      const surname = koSurnameOf(name) !== null;
+      if (surname && (given || titled || name.length === 3)) {
+        // 직함이 붙어도 「○○대」(학교)는 채우지 않아요(「한양대 교수」)
+        const ending = titled ? !/대$/.test(name) : !KO_SOFT_END.test(name);
+        out.push({ name, fillable: given && isCertainKoName(name) && ending });
+      } else if (titled || given) out.push({ name, fillable: false });
     } else if ((rest.length === 2 || rest.length === 3) && !/\d/.test(raw)) {
       const [name, ...others] = rest;
       if (KO_ADDRESS_END.test(name) || others.some((t) => /^[가-힣]+$/.test(t) && KO_ADDRESS_END.test(t))) continue;
@@ -1412,7 +1430,8 @@ function confident(t: TextChip, min: number, want: (value: string) => string | n
 function certainCompany(texts: readonly TextChip[], domain: string | null): Fill | null {
   const marked = texts.filter((t) => COMPANY_MARK_RE.test(t.loose));
   if (marked.length > 1) return null;
-  if (marked.length === 1) return confident(marked[0], COMPANY_FILL_CONF, (v) => (markedCompanyOk(v) ? v : null));
+  // 채울 때 쉼표 앞 공백은 붙여요(「Acme Co. , Ltd.」 → 「Acme Co., Ltd.」) — 칩은 읽은 그대로
+  if (marked.length === 1) return confident(marked[0], COMPANY_FILL_CONF, (v) => (markedCompanyOk(v) ? v.replace(/\s+,/g, ",") : null));
   if (!domain) return null;
   const named = texts.filter((t) => !isUrlLike(t.loose) && hasDomainWord(t.loose, domain));
   return named.length === 1 ? confident(named[0], COMPANY_FILL_CONF, (v) => (domainCompanyOk(v) ? v : null)) : null;
@@ -1506,17 +1525,21 @@ export type ScanResult = {
   upright: boolean;
   /** 글자가 거의 읽히지 않은 사진(뒷면 · 빈 사진) — 돌려 읽어도 소용없어요 */
   sparse: boolean;
+  /** 바로 놓인 명함인지 모르는데 이메일 없이 연락처만 찾음 — 거꾸로 읽힌 번호일 수 있어 다른 방향도 읽어 봐요(card-rotate.ts) */
+  weak: boolean;
 };
 
 /**
  * 읽은 글자 → 칩 · 네 칸 값 · 연결 · 읽은 결과. 줄이 하나도 없으면 chips 가 비어요(읽지 못함).
  * ocr = 글자 읽기 도구가 준 줄 · 낱말 점수. 회사명 · 이름은 점수가 있을 때만 채워요(규칙 1 「글자 인식 점수가 높은 줄만」) — 없으면 이메일 · 연락처만.
+ * opts.lonePhone = 「바로 놓인 명함인지 모르는데 연락처만 찾은」 읽기(weak)의 번호를 믿을지(기본 믿음) — 돌려 읽기가 정해 줘요(card-rotate.ts pickReading).
  */
-export function scanCard(text: string, ocr?: readonly OcrLine[] | null): ScanResult {
+export function scanCard(text: string, ocr?: readonly OcrLine[] | null, opts: { lonePhone?: boolean } = {}): ScanResult {
   const { chips, lines } = readCard(text, ocr);
   const filled = autoFill(chips);
-  // 도구가 줄 점수를 주지 않았으면(없음 · 빈 목록) 전처럼 모양만 봐요
-  const scored = !!ocr && ocr.length > 0;
+  // 도구가 줄 점수를 주지 않았으면(null · 없음) 전처럼 모양만 봐요. 빈 목록은 「아무 줄도 읽히지 않은 방향」이에요 —
+  // 점수를 모르는 것이 아니라 읽힌 것이 없는 것이라 바로 놓인 명함으로 치지 않아요(반박 리뷰 후속 2)
+  const scored = ocr !== null && ocr !== undefined;
   const lineOf = (chipId: number | undefined) => lines[chips.findIndex((c) => c.id === chipId)] ?? null;
   const sure = (field: "email" | "phone", min: number) => {
     if (filled.links[field] === undefined) return false;
@@ -1540,7 +1563,13 @@ export function scanCard(text: string, ocr?: readonly OcrLine[] | null): ScanRes
   // 이메일도 찾았을 때만 찾은 것으로 쳐요
   const phone = filled.values.phone;
   const phoneShaped = phone.trim().startsWith("+") || BARE_PHONE_RE.test(digitsOf(phone));
-  const phoneSure = (upright && filled.links.phone !== undefined) || (sure("phone", FOUND_CONF) && (!scored || phoneShaped || emailSure));
+  const phoneLoose = sure("phone", FOUND_CONF) && (!scored || phoneShaped || emailSure);
+  // 바로 놓인 명함인지 모르는데 이메일 없이 연락처만 찾음(weak) — 숫자 0 · 1 · 6 · 8 · 9 위주의 번호는 거꾸로 읽혀도 번호 모양이 돼요
+  // (실제 도구: 거꾸로 놓인 「+82 10 5555 0102」 줄이 낱말 점수 66 · 92 의 「8010 9999」로, 「T. 6689 0916」이 「9160 6899」로 읽혔어요, 반박 리뷰 후속 1).
+  // 이런 읽기는 방향이 맞는지 알 수 없어, 돌려 읽기(card-rotate.ts)가 이 방향에서 멈추지 않고 남은 방향을 읽어요.
+  // opts.lonePhone === false 면(더 나은 방향이 없고 이 읽기를 믿을 수 없다고 정해졌을 때) 찾은 것으로 치지 않아요 — 틀리게 채우느니 비워요
+  const weak = scored && !upright && !emailSure && phoneLoose;
+  const phoneSure = (upright && filled.links.phone !== undefined) || (phoneLoose && !(weak && opts.lonePhone === false));
   const found = (emailSure ? 1 : 0) + (phoneSure ? 1 : 0);
   // 메일 모양 글자를 또렷이 읽었는지 — 메일 칩은 주소 낱말, 형식이 깨진 메일 모양 줄(「lena@koh sg」)은 그 줄 글자 낱말
   const readEmailLike = (chip: Chip, i: number) => {
@@ -1559,7 +1588,7 @@ export function scanCard(text: string, ocr?: readonly OcrLine[] | null): ScanRes
   if (outcome === "unreadable") {
     // 못 읽은 명함은 아무 칸도 채우지 않아요(점수 낮은 낱말에서 뽑은 번호 포함). 바로 놓인 명함이면 또렷이 읽은 줄의 칩만 남겨요
     const kept = upright ? chips.filter((_, i) => clear(i)) : [];
-    return { chips: kept, values: { company: "", name: "", email: "", phone: "" }, links: {}, outcome, found, korean: false, confidence, upright, sparse };
+    return { chips: kept, values: { company: "", name: "", email: "", phone: "" }, links: {}, outcome, found, korean: false, confidence, upright, sparse, weak };
   }
   const { values, links } = filled;
   if (outcome === "unsure") {
@@ -1580,7 +1609,7 @@ export function scanCard(text: string, ocr?: readonly OcrLine[] | null): ScanRes
   };
   put("company", certainCompany(texts, domain));
   put("name", certainName(texts, chips, domain, values.email, values.company));
-  return { chips, values, links, outcome, found, korean: isKoreanCard(texts, values.name), confidence, upright, sparse };
+  return { chips, values, links, outcome, found, korean: isKoreanCard(texts, values.name), confidence, upright, sparse, weak };
 }
 
 /**

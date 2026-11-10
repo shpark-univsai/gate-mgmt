@@ -3291,13 +3291,16 @@ function CreateDialog({
     let lines: OcrLine[] | null = null;
     let preview: string | null = null;
     let failure: ReadFailure | null = null;
+    // 「바로 놓인 명함인지 모르는데 연락처만 찾은」 읽기의 번호를 믿을지 — 돌려 읽기가 정해 줘요(반박 리뷰 후속 1)
+    let lonePhone = true;
     try {
-      ({ text, lines, preview, failure } = await reader.read(file, (percent) => live() && setScanProgress(percent), {
+      ({ text, lines, preview, failure, lonePhone } = await reader.read(file, (percent) => live() && setScanProgress(percent), {
         // 한 방향으로 읽은 결과의 점수 — 이메일 · 연락처를 하나도 못 찾았고 바로 놓인 명함으로 보이지도 않으면 다른 방향으로 다시 읽어요.
+        // 바로 놓인 명함인지 모르는데 연락처만 찾은 것(weak — 거꾸로 읽힌 번호일 수 있어요)도 다른 방향을 읽어 봐요.
         // 글자가 거의 없는 사진(뒷면 · 빈 사진)은 돌리지 않아요(card-rotate.ts needsRetry)
         judge: (readText, readLines) => {
           const r = scanCard(readText, readLines);
-          return { found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse };
+          return { found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse, weak: r.weak };
         },
         onRetry: (attempt, total) => live() && setScanRetry({ attempt, total }),
       }));
@@ -3318,7 +3321,7 @@ function CreateDialog({
     if (fixRef.current) return;
     // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교). 돌려 읽은 방향이 이겼으면 바로 세운 사진이에요
     setPhoto(preview);
-    const result = text === null ? null : scanCard(text, lines);
+    const result = text === null ? null : scanCard(text, lines, { lonePhone });
     const now = latestValues.current;
     const replaceable = (field: ScanField) => !now[field].trim() || autoFilled.current[field] === now[field];
     // 메일 언어(규칙 6): 직원이 고르지 않았을 때만 — 한글 명함이면 「한국어」, 아니면 앞 명함이 골라 둔 「한국어」를 처음 값(English)으로 되돌려요.
