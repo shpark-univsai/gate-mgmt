@@ -6,7 +6,7 @@
 // 실행 · 다시 시도만 해요. 결과 알림 메일은 만들지 않아요 — 직원이 고객의 탈퇴 요청 메일에 답장해요(Figma 규칙 10번 문안).
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Dialog, PopupSelect, Toast } from "@/components/ui";
+import { Dialog, PopupSelect, StatusChips, Toast } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { IcArrowLeft, IcArrowRight, IcInputClose, IcSearch } from "@/components/icons";
 import {
@@ -341,8 +341,8 @@ export default function ClosuresPage() {
           <button type="button" className="btn btn-outline btn-sm" onClick={onReset}>
             초기화
           </button>
-          {/* 휴대폰: 상태 칩 — PC 는 위 선택 상자 */}
-          <div className="status-chips" role="group" aria-label="상태 필터">
+          {/* 휴대폰: 상태 칩 — PC 는 위 선택 상자. 넘치면 오른쪽 끝을 흐리게(StatusChips) */}
+          <StatusChips label="상태 필터">
             {(["all", "processing", "failed", "completed", "withdrawn"] as const).map((v) => (
               <button
                 key={v}
@@ -354,7 +354,7 @@ export default function ClosuresPage() {
                 {v === "all" ? "전체" : STATUS_LABEL[v]}
               </button>
             ))}
-          </div>
+          </StatusChips>
           <span className="count">총 {total}개</span>
           {loadError && rows.length > 0 && (
             <span className="error" role="alert">

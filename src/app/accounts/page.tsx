@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Dialog, PopupSelect, Toast } from "@/components/ui";
+import { Dialog, PopupSelect, StatusChips, Toast } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { CardPhotoViewer } from "@/components/card-photo-viewer";
 import { fmtFull, fmtShort, handle, kstParts, pageItems } from "@/lib/format";
@@ -698,13 +698,6 @@ export default function AccountsPage() {
   // 검색 칸 값(keyword · status)과 실제로 조회한 조건(applied)을 나눠요 — 검색을 눌러야 목록이 바뀌어요.
   const [keyword, setKeyword] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  // 휴대폰 상태 칩: 오른쪽에 더 있으면 끝을 흐리게(옆으로 밀 수 있다는 표시)
-  const chipsRef = useRef<HTMLDivElement>(null);
-  const [chipsMore, setChipsMore] = useState(false);
-  const updateChipsMore = useCallback(() => {
-    const el = chipsRef.current;
-    if (el) setChipsMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
-  }, []);
   const [status, setStatus] = useState<AccountStatusFilter>("all");
   const [applied, setApplied] = useState<{ keyword: string; status: AccountStatusFilter }>({ keyword: "", status: "all" });
   const [version, setVersion] = useState(0);
@@ -1116,12 +1109,6 @@ export default function AccountsPage() {
     return () => clearTimeout(t);
   }, [freshId]);
 
-  useEffect(() => {
-    updateChipsMore();
-    window.addEventListener("resize", updateChipsMore);
-    return () => window.removeEventListener("resize", updateChipsMore);
-  }, [updateChipsMore, summary]);
-
   const clearToast = useCallback(() => setToast(null), []);
 
   /** 계정 만들기 창에서 비밀번호 재설정 메일을 대신 보냈어요(UG-421 D2 · MD2) — 창을 닫고 완료 알림 */
@@ -1297,14 +1284,8 @@ export default function AccountsPage() {
           <button type="button" className="btn btn-outline btn-sm" onClick={onReset}>
             초기화
           </button>
-          {/* 휴대폰: 상태 칩(개수 포함) — PC 는 위 선택 상자 */}
-          <div
-            ref={chipsRef}
-            className={`status-chips${chipsMore ? " has-more" : ""}`}
-            role="group"
-            aria-label="상태 필터"
-            onScroll={updateChipsMore}
-          >
+          {/* 휴대폰: 상태 칩(개수 포함) — PC 는 위 선택 상자. 넘치면 오른쪽 끝을 흐리게(StatusChips) */}
+          <StatusChips label="상태 필터">
             {(
               [
                 ["all", "전체", metrics?.total],
@@ -1325,7 +1306,7 @@ export default function AccountsPage() {
                 {label} {n !== undefined && <span className="status-chip-count">{n}</span>}
               </button>
             ))}
-          </div>
+          </StatusChips>
           {/* 목록을 받지 못했으면(처음 불러오는 중 포함) 「총 N개」를 가려요 — 요약 칩은 「전체 42」인데 목록 위가 「총 0개」로 읽혔어요(UG-451 기획 17005).
               자리는 남겨(visibility) 옆 안내 · 아래 목록이 움직이지 않게 해요. 다시 받으면 보여요. */}
           <span className={`count${loaded && !loadError ? "" : " is-hidden"}`} aria-hidden={loaded && !loadError ? undefined : true}>
