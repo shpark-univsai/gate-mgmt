@@ -49,6 +49,7 @@ import { ApiError } from "@/lib/http";
 import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, purgeLegacyCardPhotos } from "@/lib/card-photo";
 import { RECREATE_TEXT, newAccountMailText, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "@/lib/recreate";
 import { chipsForDraft, draftField, photoForDraft, photoFromDraft, scanFromDraft } from "@/lib/card-draft";
+import { retakeNote, retakeNoteText, retakePlan, retakeVerdict, type RetakeNote, type RetakeVerdict } from "@/lib/card-retake";
 import { createAutosaver, draftContentKey, photoTag, type AutosaveResult, type Autosaver } from "@/lib/draft-autosave";
 import {
   LOST_CLOCK_SKEW_MS,
@@ -2369,6 +2370,11 @@ function CreateDialog({
   });
   // 명함 읽기가 자동으로 채운 값(칸별). 칸 값이 이것과 같으면 직원이 손대지 않은 것으로 보고 다시 찍을 때 바꿔요(UG-451 기획 16991)
   const autoFilled = useRef<Partial<Record<ScanField, string>>>({});
+  // 지금 칸 값이 기대는 명함에서 읽은 이메일(UG-451 기획 17118-1) — 다시 찍은 명함의 이메일과 견줘 다른 사람이면 직원이 넣은 값도 비워요(card-retake.ts).
+  // 직원이 그 뒤 이메일 칸을 고쳐도 · 다음 명함을 읽지 못해도 그대로 둬요. 「이어서 만들기」로 연 명함은 읽은 주소를 몰라 비어 있어요(칸 값으로 견줘요)
+  const cardEmail = useRef("");
+  // 다시 찍은 뒤의 안내 — 다른 사람이라 직원이 넣은 값을 지웠거나, 같은 사람인지 알 수 없어 남긴 값이 있을 때. 그 칸을 직원이 고치면 내려가요
+  const [retakeNoted, setRetakeNoted] = useState<RetakeNote | null>(null);
 
   const trimmed = email.trim();
   // 조회 결과는 적힌 그대로(대소문자 구분)의 이메일로 맞춰요 — auth 가 대소문자를 가르므로 대소문자만 고쳐도 다른 계정이에요(UG-421)
@@ -3297,6 +3303,9 @@ function CreateDialog({
     // 이 읽기의 차례 번호 — 돌려 읽는 동안 다시 찍으면 앞 읽기(card-ocr 가 끊어요)의 늦은 결과 · 상태 정리는 아래에서 버려요
     const gen = ++scanGen.current;
     const live = () => gen === scanGen.current;
+    // 다시 찍기인지(앞 명함의 사진 · 읽은 줄 · 못 읽음 안내가 있음)와 앞 명함의 칩 — 다른 사람 명함인지 볼 때 써요(UG-451 기획 17118-1)
+    const retake = photo !== null || scan !== null || scanFailed !== null;
+    const prevChips = scan?.chips ?? [];
     // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
@@ -3339,17 +3348,40 @@ function CreateDialog({
     setPhoto(preview);
     const result = text === null ? null : scanCard(text, lines, { lonePhone });
     const now = latestValues.current;
-    const replaceable = (field: ScanField) => !now[field].trim() || autoFilled.current[field] === now[field];
+    // 비어 있거나 앞 명함이 자동으로 채운 그대로인 칸
+    const untouched = (field: ScanField) => !now[field].trim() || autoFilled.current[field] === now[field];
+    // 다시 찍은 명함이 다른 사람 것인지(UG-451 기획 17118-1, card-retake.ts) — 이메일이 앞 명함과 다르거나, 앞 명함에서 이메일을 읽었는데 새 명함에
+    // 메일 모양 글자가 없으면(반박 리뷰 1) 직원이 넣은 값(회사명 · 이름 · 이메일 · 연락처)도 새 명함에 그대로 적혀 있지 않은 한 비우고 새 명함 값으로 채워요.
+    // 같은 사람인지 알 수 없으면(새 사진에서 읽은 줄이 없음 · 앞 명함의 이메일을 모름) 그대로 두고 안내해요.
+    // 처음 찍는 명함은 전 규칙 그대로예요(찍기 전 · 읽는 동안 직원이 친 값은 그대로)
+    const staff: Partial<ScanValues> = {};
+    for (const field of ["company", "name", "email", "phone"] as const) if (!untouched(field)) staff[field] = now[field];
+    // 읽은 줄(칩)이 있는지 — 못 읽은 명함이어도 바로 놓인 명함의 또렷한 줄은 남아요(scanCard). 빈 사진 · 거꾸로 찍혀 깨진 줄뿐이면 없어요
+    const nextChips = result?.chips ?? [];
+    const verdict: RetakeVerdict = !retake
+      ? "same"
+      : retakeVerdict(
+          { read: cardEmail.current, field: now.email, chips: prevChips },
+          { email: result?.values.email ?? "", chips: nextChips, readable: nextChips.length > 0 },
+        );
+    const plan = retakePlan(verdict, staff, nextChips);
+    const replaceable = (field: ScanField) => untouched(field) || plan.release.includes(field);
     // 메일 언어(규칙 6): 직원이 고르지 않았을 때만 — 한글 명함이면 「한국어」, 아니면 앞 명함이 골라 둔 「한국어」를 처음 값(English)으로 되돌려요.
-    // 첫 로그인 전 이메일이라 언어를 잠깐 바꿔 둔 동안이면 되돌아갈 언어(langBeforePending)를 바꿔요
-    const autoLanguage = (korean: boolean) => {
+    // 첫 로그인 전 이메일이라 언어를 잠깐 바꿔 둔 동안이면 되돌아갈 언어(langBeforePending)를 바꿔요.
+    // reset = 다른 사람 명함으로 다시 찍음(기획 17118) — 직원이 앞 사람에게 맞춰 고른 언어 · 「작성 중」에 저장된 언어도 풀고 새 명함으로 다시 골라요
+    const autoLanguage = (korean: boolean, reset = false) => {
       const lang = latestLanguage.current;
-      if (lang.chosen || (!korean && !lang.auto)) return;
+      if (!reset && (lang.chosen || (!korean && !lang.auto))) return;
       const next: MailLanguage = korean ? "ko" : "en";
       if (langBeforePending.current !== null) langBeforePending.current = next;
       else setLanguage(next);
+      if (reset) setLanguageChosen(false);
       setLanguageAuto(korean);
-      latestLanguage.current = { ...lang, language: langBeforePending.current !== null ? lang.language : next, auto: korean };
+      latestLanguage.current = {
+        language: langBeforePending.current !== null ? lang.language : next,
+        chosen: reset ? false : lang.chosen,
+        auto: korean,
+      };
     };
     if (!result || result.chips.length === 0 || result.outcome === "unreadable") {
       // 다시 찍은 명함(B)을 읽지 못함 — 사진은 B 인데 앞 명함(A)이 자동으로 채운 값으로 보내지지 않게(UG-451 반박 리뷰)
@@ -3358,21 +3390,30 @@ function CreateDialog({
       // 칩을 보여 주지 않고(scan = null — 「작성 중」에도 남지 않아요) 회사명 · 이름 · 메일 언어도 채우지 않아요. 「명함 다시 찍기」만 남아요.
       // 다만 바로 놓인 명함에서 이메일 · 연락처 모양만 못 찾은 것이면 scanCard 가 또렷이 읽은 줄의 칩만 돌려줘요(반박 리뷰 3) — 그 칩은 펼쳐 보여 주고
       // (직원이 눌러 넣어요) 안내는 같은 「명함을 읽지 못했습니다…」예요.
+      // 또렷한 줄만 읽힌 다른 사람 명함(반박 리뷰 1)이면 직원이 넣은 값도 비워요(plan.release)
       let companyNow = now.company;
+      const after = { ...now };
       for (const field of ["company", "name", "phone", "email"] as const) {
-        if (autoFilled.current[field] === undefined || !replaceable(field)) continue;
+        const release = plan.release.includes(field);
+        if (!release && (autoFilled.current[field] === undefined || !untouched(field))) continue;
         delete autoFilled.current[field];
         if (field === "email") changeEmail("", companyNow);
         else putField[field]("");
         if (field === "company") companyNow = "";
+        after[field] = "";
       }
-      autoLanguage(false);
+      // 앞 명함이 골라 둔 「한국어」는 처음 값(English)으로 되돌려요 — 직원이 고른 언어는 그대로, 다른 사람이면 그것도 풀어요
+      autoLanguage(false, plan.verdict === "different");
+      if (plan.verdict === "different") cardEmail.current = "";
       const kept = result && result.chips.length > 0 ? result.chips : null;
       setScan(kept ? { chips: kept, links: {} } : null);
       setChipsOpen(kept !== null);
       setConfirmedEmail(null);
       clearChipTarget();
       setEmailMissing(null);
+      // 알 수 없으면 직원이 넣은 값은 그대로 남아요 — 이 명함의 것인지 확인해 달라고 알려요(기획 17118-1). 또렷이 읽은 줄에 그대로 있는 값은 빼요.
+      // 다른 사람이면 지운 칸을 알려요
+      setRetakeNoted(retakeNote(plan, after));
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
       // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저).
       // 글자를 읽었으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰)
@@ -3396,7 +3437,13 @@ function CreateDialog({
     // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기는 회사명 칸이 비었을 때만 채워요(명함이 방금 채운 회사명을 덮지 않게)
     const companyNow = companyFilled ? result.values.company : now.company;
     const emailFilled = fill("email", (value) => changeEmail(value, companyNow));
-    autoLanguage(result.korean);
+    autoLanguage(result.korean, plan.verdict === "different");
+    // 이 명함에서 읽은 이메일을 기억해요(다음에 다시 찍을 때 견줘요). 못 채웠으면(잘렸을 수 있음) 앞 주소를 그대로 — 다른 사람으로 본 경우만 지워요
+    if (result.values.email) cardEmail.current = result.values.email;
+    else if (plan.verdict === "different") cardEmail.current = "";
+    const after = { ...now };
+    for (const field of plan.release) after[field] = result.values[field];
+    setRetakeNoted(retakeNote(plan, after));
     // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요
     setScan({ chips: result.chips, links });
     // 앞 명함과 견줘 한 「명함과 같은 주소예요」 확인은 새 명함에는 쓰지 않아요
@@ -3423,6 +3470,15 @@ function CreateDialog({
     if (isTouchPrimary()) moveChipTarget("email");
     else emailRef.current?.focus();
   }
+
+  // 다시 찍은 뒤의 안내(UG-451 기획 17118-1) — 다른 사람이라 지운 값은 회색, 같은 사람인지 몰라 남긴 값은 빨간색(확인해야 해요).
+  // 그 칸을 직원이 고치면 그 칸 이름이 빠지고, 모두 고치면 내려가요. 읽는 동안에는 띄우지 않아요
+  const retakeText = scanning ? null : retakeNoteText(retakeNoted, { company, name, email, phone }, CHIP_TARGET_LABEL);
+  const retakeLine = retakeText && (
+    <p className={retakeNoted?.kind === "stale" ? "error" : "help"} role="status">
+      {retakeText}
+    </p>
+  );
 
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
   const scannedEmail = scan?.links.email !== undefined;
@@ -3567,6 +3623,7 @@ function CreateDialog({
                 <p className="help" role="status">
                   {scanning ? scanWaitText : scanFailed ? scanFailedText : SCAN_DONE}
                 </p>
+                {retakeLine}
               </>
             ) : (
               <>
@@ -3596,6 +3653,7 @@ function CreateDialog({
                   </p>
                   {scanning && <p className="help">{scanWaitText}</p>}
                 </div>
+                {retakeLine}
               </>
             )}
           </div>

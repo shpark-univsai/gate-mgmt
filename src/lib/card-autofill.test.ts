@@ -126,13 +126,13 @@ const SAMPLES: Sample[] = [
   },
   {
     name: "공용 메일 도메인 — 회사명 근거로 쓰지 않음",
-    lines: ["Lena Koh", "Freelance Designer", "Koh Studio", "lena.koh@gmail.com", "9123 4567"],
+    lines: ["Lena Koh", "Freelance Designer", "Koh Studio", "lena.koh.test01@gmail.com", "9123 4567"],
     truth: { company: "Koh Studio", name: "Lena Koh" },
     fill: { company: "", name: "Lena Koh" },
   },
   {
     name: "공용 메일 도메인(naver) — 도메인과 같은 낱말 줄이 있어도 회사명 아님",
-    lines: ["Naver Cafe Lovers", "윤하늘", "haneul@naver.com", "010-5678-9012"],
+    lines: ["Naver Cafe Lovers", "윤하늘", "haneul.test01@naver.com", "010-5678-9012"],
     truth: { company: "", name: "윤하늘" },
     fill: { company: "", name: "윤하늘" },
   },
@@ -161,10 +161,18 @@ const SAMPLES: Sample[] = [
     fill: { company: "", name: "김민수" },
   },
   {
-    name: "글자 인식 점수가 낮은 회사명 · 이름 줄",
-    lines: [["주식회사 가나다테크", 62], ["김민수", 55], "M. 010-1234-5678", "minsu.kim@ganadatech.co.kr"],
+    name: "글자 인식 점수가 낮은 회사명 · 이름 줄 — 이름을 맞춰 볼 이메일이 없으면(대표 메일함) 비움",
+    lines: [["주식회사 가나다테크", 62], ["김민수", 55], "M. 010-1234-5678", "contact@ganadatech.co.kr"],
     truth: { company: "주식회사 가나다테크", name: "김민수" },
     fill: { company: "", name: "" },
+    korean: true,
+  },
+  {
+    name: "기획 17118-3 — 점수가 낮은 한글 이름도 이메일 @ 앞과 맞으면 채움(회사명은 그대로 비움)",
+    lines: [["주식회사 가나다테크", 62], ["김민수", 55], "M. 010-1234-5678", "minsu.kim@ganadatech.co.kr"],
+    truth: { company: "주식회사 가나다테크", name: "김민수" },
+    fill: { company: "", name: "김민수" },
+    korean: true,
   },
   {
     name: "줄 점수는 높아도 낱말 하나의 점수가 낮음(틀린 글자가 섞였을 수 있음)",
@@ -277,10 +285,17 @@ const SAMPLES: Sample[] = [
   },
   {
     name: "영문 명함의 한글 주소 한 줄 — 한글 명함 아님",
-    lines: ["Acme Robotics Inc.", "Rachel Lim", "Engineering Lead", "서울시 강남구 테헤란로 1", "rachel@acme-robotics.com", "+82 10-1234-5678"],
+    lines: ["Acme Robotics Inc.", "Rachel Lim", "Engineering Lead", "서울시 강남구 테헤란로 1", "rachel@acme-robotics.com", "+65 9123 4567"],
     truth: { company: "Acme Robotics Inc.", name: "Rachel Lim" },
     fill: { company: "Acme Robotics Inc.", name: "Rachel Lim" },
     korean: false,
+  },
+  {
+    name: "기획 17118-2 — 같은 영문 명함도 연락처가 +82 면 메일 언어는 한국어",
+    lines: ["Acme Robotics Inc.", "Rachel Lim", "Engineering Lead", "서울시 강남구 테헤란로 1", "rachel@acme-robotics.com", "+82 10-1234-5678"],
+    truth: { company: "Acme Robotics Inc.", name: "Rachel Lim" },
+    fill: { company: "Acme Robotics Inc.", name: "Rachel Lim" },
+    korean: true,
   },
 ];
 
@@ -312,17 +327,22 @@ test("UG-451 17100 점수를 모르면(도구가 줄 점수를 주지 않음) �
     assert.equal(r.values.name, "");
     assert.equal(r.values.email, "minsu.kim@ganadatech.co.kr");
     assert.equal(r.values.phone, "010-1234-5678");
-    assert.equal(r.korean, false);
+    // 메일 언어는 채운 이메일(.kr) · 연락처(010)로 골라요(기획 17118-2) — 점수가 없어도
+    assert.equal(r.korean, true);
   }
 });
 
 test("UG-451 17100 점수 기준 — 낱말이 모두 기준 이상일 때만 채워요(이름 · 회사명 기준은 따로)", () => {
-  const card = (company: number, name: number) =>
-    read(["주식회사 가나다테크", company], ["김민수", name], "010-1234-5678", "minsu.kim@ganadatech.co.kr").values;
+  // 이름을 맞춰 볼 수 없는 이메일(대표 메일함)일 때 — 맞춰 볼 수 있으면 점수가 낮아도 채워요(기획 17118-3, 아래 시험)
+  const card = (company: number, name: number, email = "contact@ganadatech.co.kr") =>
+    read(["주식회사 가나다테크", company], ["김민수", name], "010-1234-5678", email).values;
   assert.equal(card(COMPANY_FILL_CONF, NAME_FILL_CONF).company, "주식회사 가나다테크");
   assert.equal(card(COMPANY_FILL_CONF, NAME_FILL_CONF).name, "김민수");
   assert.equal(card(COMPANY_FILL_CONF - 1, NAME_FILL_CONF).company, "");
   assert.equal(card(COMPANY_FILL_CONF, NAME_FILL_CONF - 1).name, "");
+  assert.equal(card(COMPANY_FILL_CONF, NAME_FILL_CONF - 1, "minsu.kim@ganadatech.co.kr").name, "김민수");
+  // 회사명은 이메일과 맞춰 보지 않아요 — 점수가 낮으면 그대로 비워요
+  assert.equal(card(COMPANY_FILL_CONF - 1, NAME_FILL_CONF - 1, "minsu.kim@ganadatech.co.kr").company, "");
 });
 
 test("UG-451 반박 리뷰 2 — 틀리게 읽은 이름이 낱말 점수 80대로 나와도 채우지 않아요(「박서준」 → 「박서순」 · 박 93 · 서 93 · 순 87)", () => {
@@ -367,16 +387,16 @@ test("UG-451 17100 이메일 도메인의 등록 이름 — 공용 메일 · 짧
   assert.equal(emailDomainName("lee@mail.company-a.co.kr"), "company-a");
   assert.equal(emailDomainName("user1@example.io"), "example");
   for (const email of [
-    "a@gmail.com",
-    "a@naver.com",
-    "a@daum.net",
-    "a@hanmail.net",
-    "a@kakao.com",
-    "a@outlook.com",
-    "a@hotmail.com",
-    "a@yahoo.co.kr",
-    "a@icloud.com",
-    "a@me.com",
+    "test.x1@gmail.com",
+    "test.x1@naver.com",
+    "test.x1@daum.net",
+    "test.x1@hanmail.net",
+    "test.x1@kakao.com",
+    "test.x1@outlook.com",
+    "test.x1@hotmail.com",
+    "test.x1@yahoo.co.kr",
+    "test.x1@icloud.com",
+    "test.x1@me.com",
     "a@lg.com",
     "no-at-sign",
   ]) {
@@ -391,7 +411,122 @@ test("UG-451 17100 규칙 6 — 한글 명함 판정", () => {
   assert.equal(read("가나다테크", "기술연구소 책임연구원", "www.ganadatech.co.kr", "info@ganadatech.co.kr", "02-555-0100").korean, true);
   // 한글 줄이 하나뿐 · 점수 낮은 한글 줄은 세지 않아요
   assert.equal(read("Acme Robotics Inc.", "Engineering Lead", "서울시 강남구", "info@acme-robotics.com", "02-555-0100").korean, false);
-  assert.equal(read(["가나다테크 영업본부", 50], ["기술연구소 책임연구원", 45], "info@ganadatech.co.kr", "02-555-0100").korean, false);
+  assert.equal(read(["가나다테크 영업본부", 50], ["기술연구소 책임연구원", 45], "info@ganadatech.com", "02-555-0100").korean, false);
+});
+
+test("UG-451 기획 17118-2 — 메일 언어: 채운 회사명 · 이름에 한글, 그 밖에는 이메일 .kr · 연락처 010 · +82", () => {
+  // 기획이 본 경우 — 회사명은 한글로 채워졌는데 이름 줄의 점수가 낮아 이름을 못 채움(또렷한 한글 줄이 회사명 하나뿐). 전에는 English 였어요
+  const low = { 온: 71, 서: 93, 윤: 84 };
+  const planner = read("주식회사 푸른별미디어", ["온서윤", 80, low], "hello@pureunbyeol-media.com", "+65 6123 4567");
+  assert.equal(planner.values.company, "주식회사 푸른별미디어");
+  assert.equal(planner.values.name, "");
+  assert.equal(planner.korean, true);
+  const marked = read("(주)새솔소프트웨어", ["문지후 과장", 74, { 과장: 20 }], "hello@saesol-soft.com", "+65 6123 4567");
+  assert.equal(marked.values.company, "(주)새솔소프트웨어");
+  assert.equal(marked.korean, true);
+  // 한글을 채우지 못했어도 이메일이 .kr 로 끝나거나(대소문자 없이) 연락처가 010 · +82 로 시작하면 한국어
+  const english = (email: string, phone: string) => read("Acme Robotics Inc.", ["Engineering Lead", 93], email, phone);
+  assert.equal(english("info@acme-robotics.co.kr", "+65 6123 4567").korean, true);
+  assert.equal(english("info@acme-robotics.kr", "+65 6123 4567").korean, true);
+  assert.equal(english("INFO@ACME-ROBOTICS.CO.KR", "+65 6123 4567").korean, true);
+  assert.equal(english("info@acme-robotics.com", "010-5555-0142").korean, true);
+  assert.equal(english("info@acme-robotics.com", "M. 010 5555 0142").korean, true);
+  assert.equal(english("info@acme-robotics.com", "+82 10 5555 0142").korean, true);
+  assert.equal(english("info@acme-robotics.com", "+82-2-555-0142").korean, true);
+  // 그 밖에는 처음 값(English) — .kr 이 가운데에만 있는 주소 · 02 번호 · 다른 나라 번호 · 82 로 시작하는 싱가포르 번호
+  assert.equal(english("info@acme-robotics.com", "02-555-0142").korean, false);
+  assert.equal(english("info@acme.kr.example.com", "+65 6123 4567").korean, false);
+  assert.equal(english("info@acme-robotics.com.sg", "8210 5550").korean, false);
+  assert.equal(english("info@krobotics.com", "+65 8201 0555").korean, false);
+  // 잘렸을 수 있어 이메일 칸을 비웠어도 읽은 메일 줄의 주소가 .kr 이면 한국어(칸은 비어 있어요)
+  const cut = read("Acme Robotics Inc.", ["Engineering Lead", 93], "seoyun · on@acme-robotics.co.kr", "+65 6123 4567");
+  assert.equal(cut.values.email, "");
+  assert.equal(cut.korean, true);
+  // 팩스 번호(채우지 않는 번호)는 보지 않아요
+  assert.equal(english("info@acme-robotics.com", "F. 010-5555-0142").korean, false);
+  // 못 읽은 명함은 언어를 고르지 않아요(한글 줄이 또렷해도)
+  const unreadable = read("주식회사 푸른별미디어", "온서윤 과장", "서울시 가상구 예시로 1");
+  assert.equal(unreadable.outcome, "unreadable");
+  assert.equal(unreadable.korean, false);
+});
+
+test("UG-451 기획 17118-3 — 점수가 낮은 한글 이름: 이메일 @ 앞 · 영문 이름 줄과 맞을 때만 채워요", () => {
+  // 기획이 본 두 경우 — 직함이 붙은 이름 줄 · 홀로 있는 이름 줄, 글자는 맞게 읽었지만 낱말 점수가 90 아래
+  const titled = (email: string, ...more: Line[]) =>
+    read("주식회사 푸른별미디어", ["문지후 과장", 81, { 문지후: 84, 과장: 62 }], ...more, email, "010-5555-0142").values.name;
+  const alone = (email: string, ...more: Line[]) =>
+    read("주식회사 푸른별미디어", ["한서윤", 72, { 한서윤: 72 }], ...more, email, "010-5555-0142").values.name;
+  // 이메일 @ 앞 — 이름.성 · 성.이름 · 붙여 씀 · 하이픈 · 숫자 · 성 이니셜 + 이름 · 이름 + 성 이니셜, 표기 변형(moon · mun, jihu · jihoo, seoyun · seoyoon · suhyun 아님)
+  for (const email of ["jihu.moon@pureunbyeol-media.co.kr", "moon.jihu@pureunbyeol-media.co.kr", "jihumoon@pureunbyeol-media.co.kr", "ji-hu.moon@pureunbyeol-media.co.kr", "jihoo_mun85@pureunbyeol-media.co.kr", "JIHU.MOON@PUREUNBYEOL-MEDIA.CO.KR"]) {
+    assert.equal(titled(email), "문지후", email);
+  }
+  for (const email of ["seoyun.han@pureunbyeol-media.co.kr", "han.seoyoon@pureunbyeol-media.co.kr", "seoyunhan@pureunbyeol-media.co.kr"]) {
+    assert.equal(alone(email), "한서윤", email);
+  }
+  // 한 음절이 다른 이름(서연)의 주소는 근거가 아니에요
+  assert.equal(alone("seoyeon.han@pureunbyeol-media.co.kr"), "");
+  // 공용 메일이어도 @ 앞이 이름이면 근거예요
+  assert.equal(alone("seoyun.han.test01@gmail.com"), "한서윤");
+  // 맞춰 볼 수 없으면 전처럼 비워요 — 대표 메일함 · 이름만 · 성씨만 · 이니셜만 · 이름 이니셜 + 성 · 다른 사람 이름
+  for (const email of ["hello@pureunbyeol-media.co.kr", "jihu@pureunbyeol-media.co.kr", "mjihu@pureunbyeol-media.co.kr", "jihum@pureunbyeol-media.co.kr", "m.jihu@pureunbyeol-media.co.kr", "moon@pureunbyeol-media.co.kr", "jm@pureunbyeol-media.co.kr", "mjh@pureunbyeol-media.co.kr", "jh.moon@pureunbyeol-media.co.kr", "jihun.moon@pureunbyeol-media.co.kr", "jiho.moon@pureunbyeol-media.co.kr", "jihu.min@pureunbyeol-media.co.kr"]) {
+    assert.equal(titled(email), "", email);
+  }
+  // 영문 이름 줄 — 성이 앞이든 뒤든, 대문자 · 하이픈 · 띄어 쓴 이름. 이메일은 맞춰 볼 수 없는 주소
+  for (const en of ["Jihu Moon", "Moon Jihu", "MOON Jihu", "Moon Ji-hu", "Ji Hu Moon", "JIHOO MUN"]) {
+    assert.equal(titled("hello@pureunbyeol-media.co.kr", en), "문지후", en);
+  }
+  // 성씨만 맞는 영문 이름 줄(다른 이름)은 근거가 아니에요 — 높은 점수면 전처럼 채우지만(성씨가 맞는 영문 줄) 낮은 점수는 비워요
+  assert.equal(titled("hello@pureunbyeol-media.co.kr", "Jihun Moon"), "");
+  assert.equal(titled("hello@pureunbyeol-media.co.kr", "Mina Moon"), "");
+  // 잘렸을 수 있어 비운 이메일은 근거로 쓰지 않아요(영문 이름 줄은 근거가 돼요)
+  assert.equal(titled("jihu · moon@pureunbyeol-media.co.kr"), "");
+  assert.equal(titled("jihu · moon@pureunbyeol-media.co.kr", "Jihu Moon"), "문지후");
+  // 점수가 아주 낮아도(하한 없음) 모든 음절이 맞으면 채워요 — 직함 낱말의 점수는 이름과 상관없어요
+  assert.equal(read("주식회사 푸른별미디어", ["문지후 과장", 40, { 문지후: 31, 과장: 20 }], "jihu.moon@pureunbyeol-media.co.kr", "010-5555-0142").values.name, "문지후");
+  // 채운 이름은 그 줄의 칩과 이어져요
+  const r = read("주식회사 푸른별미디어", ["문지후 과장", 81, { 문지후: 84 }], "jihu.moon@pureunbyeol-media.co.kr", "010-5555-0142");
+  assert.equal(r.chips.find((c) => c.id === r.links.name)?.text, "문지후 과장");
+  // 줄의 점수를 모르면(도구가 주지 않음) 전처럼 채우지 않아요
+  assert.equal(scanCard(["주식회사 푸른별미디어", "문지후 과장", "jihu.moon@pureunbyeol-media.co.kr", "010-5555-0142"].join("\n")).values.name, "");
+});
+
+test("UG-451 기획 17118-3 — 틀리게 읽은 이름은 이메일과 한 음절이라도 어긋나 채워지지 않아요(「박서준」 → 「박서순」 + seojun.park@)", () => {
+  const misread = (name: string, email: string, ...more: Line[]) =>
+    read("(주)한빛물산", [`${name} 과장`, 88, { [name]: 87 }], ...more, email, "010-2345-6789").values.name;
+  assert.equal(misread("박서준", "seojun.park@hanbit-trade.co.kr"), "박서준");
+  // 읽힌 한글 그대로의 로마자로 대조해요 — 준 ↔ 순 · 춘, 서 ↔ 세 · 사, 박 ↔ 방
+  for (const wrong of ["박서순", "박서춘", "박세준", "박사준", "방서준", "박서중"]) {
+    assert.equal(misread(wrong, "seojun.park@hanbit-trade.co.kr"), "", wrong);
+    assert.equal(misread(wrong, "contact@hanbit-trade.co.kr", "Seojun Park"), "", `${wrong} — 영문 이름 줄`);
+  }
+  // 모양이 비슷해 서로 잘못 읽히는 글자끼리는 같은 표기가 되지 않아요 — 태 ↔ 대 · 필 ↔ 빌 · 재 ↔ 제 · 은 ↔ 운 · 휘 ↔ 희 · 현 ↔ 헌 · 영 ↔ 엉
+  assert.equal(misread("박대윤", "taeyoon.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("박제윤", "jaeyoon.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("박지운", "jieun.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("박지은", "jiun.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("박지휘", "jihee.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("박지헌", "jihyun.park@hanbit-trade.co.kr"), "");
+  // 틀리게 읽힌 성씨도 — 성 전체가 적힌 주소와는 어긋나요
+  assert.equal(misread("방서준", "seojun.park@hanbit-trade.co.kr"), "");
+  assert.equal(misread("김서준", "seojun.park@hanbit-trade.co.kr"), "");
+});
+
+test("UG-451 반박 리뷰 2 — 성 이니셜 꼴 주소(jhaneul@ · haneulj@)는 뒷받침이 아니에요: 성씨를 틀리게 읽은 이름이 채워지지 않게", () => {
+  // 이름 줄 점수 70 — 성씨 글자를 틀리게 읽음(정 → 장 · 조 → 주 · 한 → 함 · 신 → 선), 이메일은 성 이니셜 + 이름
+  const card = (line: string, email: string) =>
+    read("주식회사 푸른별미디어", [line, 70, { [line.split(" ")[0]]: 70 }], email, "010-5555-0142").values.name;
+  assert.equal(card("장하늘 과장", "jhaneul@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("장하늘 과장", "haneulj@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("장하늘 과장", "j.haneul@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("주민서 과장", "jminseo@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("함지훈 과장", "hjihun@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("선유나 과장", "syuna@pureunbyeol-media.co.kr"), "");
+  // 맞게 읽었어도 성 이니셜 꼴만으로는 채우지 않아요(점수 90 아래) — 성 전체가 적힌 주소 · 영문 이름 줄은 채워요
+  assert.equal(card("정하늘 과장", "jhaneul@pureunbyeol-media.co.kr"), "");
+  assert.equal(card("정하늘 과장", "haneul.jung@pureunbyeol-media.co.kr"), "정하늘");
+  // 성 전체가 적힌 주소 · 영문 이름 줄은 성씨 오독을 막아요(전과 같음)
+  assert.equal(card("장하늘 과장", "haneul.jung@pureunbyeol-media.co.kr"), "");
+  assert.equal(read("주식회사 푸른별미디어", ["장하늘 과장", 70, { 장하늘: 70 }], "Haneul Jung", "hello@pureunbyeol-media.co.kr", "010-5555-0142").values.name, "");
 });
 
 test("UG-451 17100 도구의 낱말이 띄어쓰기와 달라도(한글을 낱자 · 토막으로 나눠 줌) 점수를 맞춰 봐요", () => {
@@ -565,7 +700,7 @@ test("UG-451 반박 리뷰 1 — 부서 · 지점 · 상호 낱말이 이름 칸
   assert.equal(name("(주)가나다", "Gildong Hong", "제조부", "010-1234-5678", "gd@ganada.co.kr"), "");
   assert.equal(name("(주)가나다", "피수진 대리", "국제부", "010-1234-5678", "sj@ganada.co.kr"), "");
   assert.equal(name("가나다증권", "洪吉童", "강남점", "010-1234-5678", "gd@ganada-sec.kr"), "");
-  assert.equal(name("한우리", "홍길동 Manager", "010-1234-5678", "gd@gmail.com"), "");
+  assert.equal(name("한우리", "홍길동 Manager", "010-1234-5678", "gd.test01@gmail.com"), "");
   // 한 줄뿐일 때 채워지던 낱말(부서 · 지점 · 장소 · 상호 · 학교 · 보통 낱말) — 모두 비워요
   const words =
     "성수동 여의도 강남역 제주점 구매과 설계부 조직장 신세계 이마트 정관장 이디야 오뚜기 서울대 고려대 연세대 지마켓 김앤장 전시회 박람회 금융권 " +
@@ -594,13 +729,13 @@ test("UG-451 반박 리뷰 5 — 역할 메일함 · 문구 · 상호는 영어 
   assert.equal(name("Events Crew", "events@lumenworks.com", "+65 6123 4567"), "");
   assert.equal(name("Growth Hacker", "growth@lumenworks.com", "+65 6123 4567"), "");
   assert.equal(name("Art Curator", "curator@lumenworks.com", "+65 6123 4567"), "");
-  assert.equal(name("Sunny Bakery", "+65 9123 4567", "sunnybakery@gmail.com"), "");
+  assert.equal(name("Sunny Bakery", "+65 9123 4567", "sunnybakery.test01@gmail.com"), "");
   // 역할 낱말은 뒷받침으로 세지 않아요 — 이름 낱말이 @ 앞에 있을 때만
   assert.equal(name("Sales Koh", "sales@koh.sg", "+65 6123 4567"), "");
   // 채운 회사명과 낱말이 모두 겹치는 줄은 상호예요
   assert.equal(name("Lumen Works", "Lumen Works Corp.", "lumen@lumenworks.com", "+65 6123 4567"), "");
   // 사람 이름은 전처럼 채워요
-  assert.equal(name("Lena Koh", "lena.koh@gmail.com", "9123 4567"), "Lena Koh");
+  assert.equal(name("Lena Koh", "lena.koh.test01@gmail.com", "9123 4567"), "Lena Koh");
   assert.equal(name("Lumen Works Corp.", "Rachel Lim", "rachel@lumenworks.com", "+65 6123 4567"), "Rachel Lim");
 });
 
@@ -699,7 +834,7 @@ test("UG-451 반박 리뷰 후속 4 — 직함이 붙었거나 성씨로 시작�
   // 네 글자 낱말은 전처럼 이름 글자로 된 것만 후보예요(부서 줄 「기술영업」이 이름을 가리지 않게)
   assert.equal(name("기술영업", "김민수", "010-1234-5678", "info@example.com"), "김민수");
   // 공용 메일 + 「Kim Family」
-  assert.equal(name("Kim Family", "kimfamily@gmail.com", "+65 9123 4567"), "");
+  assert.equal(name("Kim Family", "kimfamily.test01@gmail.com", "+65 9123 4567"), "");
 });
 
 test("UG-451 반박 리뷰 후속 5 — 회사명을 채울 때 쉼표 앞 공백은 붙여요(칩은 읽은 그대로)", () => {
