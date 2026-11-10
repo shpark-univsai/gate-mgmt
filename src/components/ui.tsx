@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IcArrowDown, IcCheck, IcInputClose } from "./icons";
 import { isTouchPrimary } from "@/lib/pointer";
+import { hasMoreToRight } from "@/lib/scroll-more";
 
 /** inverse = 어두운 바탕(로그인)용: 흰색 로고 + 반전 배지 */
 export function Brand({ inverse = false }: { inverse?: boolean }) {
@@ -214,6 +215,48 @@ export function Toast({ title, detail, note, tone, onDone }: { title: string; de
         <p className="toast-title">{title}</p>
         <p className="toast-detail">{detail}</p>
         {note && <p className="toast-note">{note}</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 휴대폰 상태 칩 줄(계정 발급 · 계정 해지) — 칩이 화면보다 넓으면 옆으로 미는 줄이에요(스크롤 막대는 숨김). PC 는 선택 상자를 써서 이 줄이 숨겨져요.
+ * 오른쪽에 칩이 더 남아 있는 동안만 has-more 를 붙여 줄 끝을 흐리게 해요(globals.css 의 mask-image, UG-453 기획 17110-3) —
+ * 끝까지 밀면 떼고, 넘치지 않는 폭에서는 처음부터 붙지 않아요.
+ * 다시 재는 때: 밀 때(scroll) · 줄 폭이 바뀔 때(창 크기 · 화면 회전) · 칩 전체 폭이 바뀔 때(숫자가 늦게 옴 · 칩 수 · 글꼴이 늦게 옴).
+ * 칩 전체 폭은 안쪽 줄(status-chips-track)을 ResizeObserver 로 봐요 — 처음 observe 때도 한 번 불려요.
+ */
+export function StatusChips({ label, children }: { label: string; children: React.ReactNode }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const measure = useCallback(() => {
+    const el = boxRef.current;
+    if (el) setMore(hasMoreToRight(el.scrollLeft, el.clientWidth, el.scrollWidth));
+  }, []);
+  useEffect(() => {
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    if (boxRef.current) observer?.observe(boxRef.current);
+    if (trackRef.current) observer?.observe(trackRef.current);
+    return () => observer?.disconnect();
+  }, [measure]);
+  // 키보드로 옮겨 온 칩이 줄 끝에 걸쳐 있으면 다 보이게 밀어요 — 브라우저는 조금이라도 보이는 칩은 밀어 주지 않아 초점 테두리가 줄 끝에서 잘렸어요.
+  // 오른쪽은 흐려지는 끝만큼 비워요(globals.css 의 scroll-padding-right). 손가락 · 마우스로 누를 때(:focus-visible 아님)는 줄을 움직이지 않아요.
+  const revealFocused = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (e.target.matches(":focus-visible")) e.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+  return (
+    <div
+      ref={boxRef}
+      className={`status-chips${more ? " has-more" : ""}`}
+      role="group"
+      aria-label={label}
+      onScroll={measure}
+      onFocus={revealFocused}
+    >
+      <div ref={trackRef} className="status-chips-track">
+        {children}
       </div>
     </div>
   );
