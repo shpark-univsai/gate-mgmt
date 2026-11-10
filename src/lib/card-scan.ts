@@ -1,6 +1,7 @@
 // 명함 읽기(UG-431) — 읽은 글자를 줄(칩)로 나누고, 네 칸(회사명 · 이름 · 고객 이메일 · 연락처)에 넣는 규칙.
 // 화면 · 브라우저에 기대지 않는 순수 함수만 둬요(글자 읽기 자체는 card-ocr.ts). 칩 규칙 번호는 Figma 「칩 동작 규칙 (N3b)」.
-// 처음 채우기는 모양이 정해진 이메일 · 연락처만 — 회사명 · 이름은 잘못 읽는 일이 많아(한글 이름 「Sau TH」 등, 기획 16846) 직원이 칩을 눌러 넣어요.
+// 처음 채우기는 모양이 정해진 이메일 · 연락처, 그리고 확실한 회사명 · 이름(UG-451 기획 17100 — 아래 「회사명 · 이름 자동 채움」).
+// 회사명 · 이름은 잘못 읽는 일이 많아(한글 이름 「Sau TH」 등, 기획 16846) 확실하지 않으면 비워 두고 직원이 칩을 눌러 넣어요.
 
 export type ScanField = "company" | "name" | "email" | "phone";
 
@@ -279,7 +280,12 @@ const stripEmailOpeners = (seg: string) =>
  * 칩으로 보여 줄 조각. suspect = 앞 조각 · 앞 줄과 이어 보면 잘렸을 수 있는 메일 조각(UG-451).
  * value = 칩으로 나누며 떨어진 앞 덩어리 · 꼬리까지 이어 붙인 「읽은 그대로」의 칩 값(UG-451 기획 17022) — 앞 메일 라벨(「E.」)은 빼요
  */
-type Segment = { text: string; suspect: boolean; value?: string };
+type Segment = { text: string; suspect: boolean; value?: string; line: number };
+
+/** 읽은 한 줄 정리 — 앞 MAX_LINE 글자만, 전각 ＠ · @ 양옆 공백 · 겹친 공백을 골라요 */
+const normalizeLine = (raw: string) => raw.slice(0, MAX_LINE).replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim();
+/** 읽은 글자 → 정리한 줄들(빈 줄은 빼요). 조각의 line 은 이 목록의 차례예요 */
+const cardLines = (text: string) => text.split(/\r?\n/).map(normalizeLine).filter(Boolean);
 
 // 구분자를 남기며 나누기(앞 덩어리를 읽은 그대로 이어 붙일 때 씀)
 const SEPARATOR_SPLIT_RE = new RegExp(`(${SEPARATOR_RE.source})`);
@@ -317,10 +323,7 @@ function withEmailTail(seg: string, tails: ReadonlyMap<string, string>): { text:
 function readSegments(text: string): Segment[] {
   const seen = new Set<string>();
   const out: Segment[] = [];
-  const lines = text
-    .split(/\r?\n/)
-    .map((raw) => raw.slice(0, MAX_LINE).replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+  const lines = cardLines(text);
   lines.forEach((line, i) => {
     const pieces = line.split(SEPARATOR_SPLIT_RE);
     const parts = pieces.filter((_, k) => k % 2 === 0);
@@ -354,12 +357,12 @@ function readSegments(text: string): Segment[] {
           const headCut = lead !== null && k === 0;
           const suspect = headCut || (fragment && EMAIL_RE.test(seg));
           const tailed = fragment ? withEmailTail(seg, tails) : null;
-          if (!headCut && tailed === null) return void out.push({ text: seg, suspect });
+          if (!headCut && tailed === null) return void out.push({ text: seg, suspect, line: i });
           if (headCut && lead) {
             // 앞 덩어리 + 이 조각(값에서는 조각 앞 메일 라벨을 빼요)
             const rest = tailed?.text ?? seg;
-            out.push({ text: lead.text + rest, suspect: true, value: lead.value + rest.replace(LEADING_EMAIL_LABEL_RE, "") });
-          } else out.push({ text: tailed?.text ?? seg, suspect: true, value: tailed?.value ?? seg });
+            out.push({ text: lead.text + rest, suspect: true, value: lead.value + rest.replace(LEADING_EMAIL_LABEL_RE, ""), line: i });
+          } else out.push({ text: tailed?.text ?? seg, suspect: true, value: tailed?.value ?? seg, line: i });
         });
     });
   });
@@ -767,15 +770,24 @@ export function chipEmailAddresses(chips: readonly Chip[]): string[] {
   return [...out];
 }
 
+/**
+ * 읽은 글자 → 칩과, 칩마다 그 칩이 나온 줄의 글자 인식 점수(UG-451 기획 17100 — ocr 가 없거나 줄을 맞추지 못하면 null).
+ * 점수는 칩에 싣지 않아요(「작성 중」 저장 크기 · 형식을 그대로 두려고) — 읽은 직후의 자동 채움 판단에만 써요.
+ */
+function readCard(text: string, ocr?: readonly OcrLine[] | null): { chips: Chip[]; lines: (OcrLine | null)[] } {
+  const segs = readSegments(text).slice(0, MAX_CHIPS);
+  const aligned = alignLines(text, ocr);
+  const chips = segs.map((seg, i) => {
+    const chip: Chip = { id: i + 1, text: seg.text, ...classifyLine(seg.text) };
+    if (chip.kind !== "email" || !seg.suspect) return chip;
+    // 떨어진 앞 덩어리 · 꼬리까지 이은 칩은 값도 보이는 글자 그대로(UG-451 기획 17022 — 잘린 주소가 들어가지 않게)
+    return { ...chip, suspect: true, ...(seg.value !== undefined ? { value: seg.value } : {}) };
+  });
+  return { chips, lines: segs.map((seg) => aligned[seg.line] ?? null) };
+}
+
 export function toChips(text: string): Chip[] {
-  return readSegments(text)
-    .slice(0, MAX_CHIPS)
-    .map((seg, i) => {
-      const chip: Chip = { id: i + 1, text: seg.text, ...classifyLine(seg.text) };
-      if (chip.kind !== "email" || !seg.suspect) return chip;
-      // 떨어진 앞 덩어리 · 꼬리까지 이은 칩은 값도 보이는 글자 그대로(UG-451 기획 17022 — 잘린 주소가 들어가지 않게)
-      return { ...chip, suspect: true, ...(seg.value !== undefined ? { value: seg.value } : {}) };
-    });
+  return readCard(text).chips;
 }
 
 export const looksLikeCompany = (line: string) => COMPANY_RE.test(line);
@@ -832,8 +844,8 @@ export function chipValueFor(chip: Chip, field: ScanField): string {
 
 /**
  * 처음 채우기(동작 규칙 3 · 칩 규칙 1 · 7): 모양이 정해진 메일(@ 모양) · 연락처(숫자 묶음 — 휴대전화 → 전화 라벨 → 라벨 없음, UG-451)만 채워요.
- * 회사명 · 이름은 비워 두고 직원이 칩을 눌러 넣어요(기획 16846 — 잘못 읽은 이름 · 회사명이 칸에 들어가 그대로 보내지지 않게).
- * 못 찾은 칸도 비워요(동작 규칙 4).
+ * 회사명 · 이름은 여기서 채우지 않아요(기획 16846 — 잘못 읽은 이름 · 회사명이 칸에 들어가 그대로 보내지지 않게) —
+ * 글자 인식 점수를 아는 scanCard 가 확실할 때만 채워요(기획 17100). 못 찾은 칸도 비워요(동작 규칙 4).
  */
 export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks } {
   const values: ScanValues = { company: "", name: "", email: "", phone: "" };
@@ -863,10 +875,712 @@ export function autoFill(chips: Chip[]): { values: ScanValues; links: ScanLinks 
   return { values, links };
 }
 
-/** 읽은 글자 → 칩 · 네 칸 값 · 연결. 줄이 하나도 없으면 chips 가 비어요(읽지 못함). */
-export function scanCard(text: string): { chips: Chip[]; values: ScanValues; links: ScanLinks } {
-  const chips = toChips(text);
-  return { chips, ...autoFill(chips) };
+// ── 회사명 · 이름 자동 채움(UG-451 기획 17100 「자동 채움 규칙 M16 · M17」) · 못 읽은 명함 판정(기획 17106) ──
+// 이 화면의 회사명 · 이름은 고객에게 가는 메일 첫 줄에 찍혀요 — 틀리게 채우느니 비워요. 후보가 둘이거나 하나여도 의심스러우면 비워요.
+
+/** 글자 읽기 도구(tesseract)가 준 낱말 · 줄 — confidence = 글자 인식 점수(0~100). card-ocr.ts 가 만들어 줘요 */
+export type OcrWord = { text: string; confidence: number };
+export type OcrLine = { text: string; confidence: number; words: readonly OcrWord[] };
+
+/**
+ * 글자 인식 점수 기준(0~100, tesseract 의 낱말 점수 — 늘 「그 값을 이루는 낱말」 점수 가운데 가장 낮은 값으로 봐요).
+ * 근거는 지어낸 명함 그림을 이 도구로 읽힌 표본이에요(바로 · 기울임 · 어둡게 · 흐림 · 작은 해상도 · 아이콘 · 돌림). 표본이 작고 그림이라,
+ * 실물 사진 · 실기기(아이패드 · 휴대폰)에서는 분포가 다를 수 있어요 — 전시 뒤 실기기 표본으로 다시 봐야 해요(UG-456).
+ * 표본: 지어낸 명함 6종 × 변형 16종 = 96장을 네 방향으로 읽힘(384번), 그리고 반박 리뷰의 84장.
+ * - NAME_FILL_CONF · COMPANY_FILL_CONF(90): 이름 · 회사명은 칸에 넣을 낱말이 모두 이 점수 이상일 때만 채워요.
+ *   맞게 읽은 이름 줄 81건 가운데 71건이 최저점 90 이상(나머지 42~85)이었고, 틀리게 읽은 이름 줄은 0 · 9 · 31 · 79 · 82(「Tan Wej Ling」),
+ *   리뷰 표본에서는 82 · 86 · 87 · 88 까지 나왔어요(「박서준」 → 「박서순」의 「순」 87). 그래서 80 이 아니라 90 — 틀린 낱말이 80대로 나와요.
+ *   회사명 줄도 한글 글자를 같은 식으로 틀리게 읽을 수 있어 같은 기준이에요(맞게 읽은 86건 가운데 70건이 90 이상, 틀리게 읽은 1건은 82).
+ *   못 채우는 쪽은 괜찮아요(직원이 칩을 눌러 넣어요).
+ * - JUNK_CONF(60): 줄 끝의 한두 글자 조각은 점수가 이보다 낮을 때만 잡글자로 떼요. 점수가 높으면 이름의 일부일 수 있어(「채널 A」) 그 줄은 채우지 않아요.
+ * - FOUND_CONF(60) · EMAIL_FOUND_CONF(40): 명함이 바로 놓였는지 모를 때, 번호 · 주소를 이루는 낱말이 이 점수 이상이어야 「찾은 것」으로 쳐요.
+ *   거꾸로 · 옆으로 읽힌 방향에서 나온 번호 30건의 값 낱말 점수는 0~75(대부분 35 이하, 60 이상은 「957 6619 59」 꼴 — 번호 모양으로 걸러요),
+ *   바로 놓인 명함에서 맞게 읽은 번호 74건 가운데 70건이 75 이상이었어요. 이메일은 틀린 방향 읽기 288건에서 한 번도 주소 모양으로 채워지지 않았고
+ *   맞게 읽은 주소 58건의 낱말 점수가 46~92 라 더 낮게 잡았어요.
+ * - CLEAR_CONF(80) · UPRIGHT_LINES(2): 글자 낱말이 모두 80 이상인 줄이 둘 이상이면 바로 놓인 명함으로 봐요. 틀린 방향 읽기 288건 가운데
+ *   그런 줄이 둘 나온 것은 1건(「는 E 5」 같은 한 글자 조각 줄)뿐이라, 글자 셋 이상인 낱말이 있는 줄만 세게 했어요.
+ */
+export const NAME_FILL_CONF = 90;
+export const COMPANY_FILL_CONF = 90;
+const JUNK_CONF = 60;
+const FOUND_CONF = 60;
+const EMAIL_FOUND_CONF = 40;
+const CLEAR_CONF = 80;
+/** 또렷이 읽은 글자 줄이 이만큼 있으면 바로 놓인 명함으로 봐요 */
+const UPRIGHT_LINES = 2;
+/** 읽힌 글자 · 숫자가 이보다 적으면 글자가 거의 없는 사진(뒷면 · 빈 사진)으로 봐요 — 돌려 읽어도 소용없어요 */
+const SPARSE_CHARS = 12;
+/** 줄 끝에서 떼는 조각 수 상한 */
+const MAX_TAIL_JUNK = 3;
+/** 채울 회사명 길이 상한 — 화면의 회사명 상한(40자)과 같아요. 넘는 줄은 회사명 한 줄이 아니에요(주소 · 안내 글) */
+const COMPANY_FILL_MAX = 40;
+
+/** 읽은 글자의 줄(cardLines)마다 글자 읽기 도구의 줄을 차례대로 맞춰요 — 맞는 줄이 없으면 null(점수를 모르는 줄은 채우지 않아요) */
+function alignLines(text: string, ocr?: readonly OcrLine[] | null): (OcrLine | null)[] {
+  const lines = cardLines(text);
+  if (!ocr) return lines.map(() => null);
+  const norm = ocr.map((l) => normalizeLine(l.text.replace(/[\r\n]+/g, " ")));
+  let at = 0;
+  return lines.map((line) => {
+    for (let k = at; k < norm.length; k++) {
+      if (norm[k] !== line) continue;
+      at = k + 1;
+      return ocr[k];
+    }
+    return null;
+  });
+}
+
+const cleanWord = (word: string) => cleanSegment(normalizeLine(word));
+const squash = (text: string) => text.replace(/\s+/g, "");
+/** 글자 · 숫자가 든 낱말만 — 칩을 만들 때 지워진 기호뿐인 낱말(「|」 「~」)의 점수는 보지 않아요 */
+const lettered = (words: readonly OcrWord[]) => words.filter((w) => cleanWord(w.text) !== "");
+/** 글자 · 숫자가 하나라도 든 낱말만 — 아이콘을 읽은 기호 조각(「®」 「©」 「&」 「=」)의 점수는 보지 않아요 */
+const alnumWords = (words: readonly OcrWord[]) => words.filter((w) => /[\p{L}\p{N}]/u.test(w.text));
+/** 줄의 글자 낱말 점수 가운데 가장 낮은 값(낱말이 없으면 줄 점수) */
+const lineFloor = (line: OcrLine) => {
+  const words = alnumWords(line.words);
+  return words.length > 0 ? Math.min(...words.map((w) => w.confidence)) : line.confidence;
+};
+
+/**
+ * 값(번호 · 주소)을 이루는 낱말들의 점수 가운데 가장 낮은 값(UG-451 반박 리뷰 3) — 그 줄의 다른 낱말(라벨 · 아이콘 조각 · 줄 끝 잡음)은 보지 않아요.
+ * 글자 · 숫자 · @ 만 견줘 값을 품는 가장 짧은 낱말 묶음을 찾아요. 찾지 못하면 그 줄 글자 낱말 전체의 가장 낮은 점수, 줄을 모르면 null.
+ */
+function valueConfidence(value: string, line: OcrLine | null): number | null {
+  if (!line) return null;
+  const key = (text: string) => text.toLowerCase().replace(/[^a-z0-9@]/g, "");
+  const target = key(value);
+  const words = alnumWords(line.words);
+  let best: OcrWord[] | null = null;
+  for (let i = 0; target !== "" && i < words.length; i++) {
+    let joined = "";
+    for (let j = i; j < words.length; j++) {
+      joined += key(words[j].text);
+      if (!joined.includes(target)) continue;
+      if (best === null || j - i + 1 < best.length) best = words.slice(i, j + 1);
+      break;
+    }
+  }
+  return best ? Math.min(...best.map((w) => w.confidence)) : lineFloor(line);
+}
+
+/**
+ * 칩 글자를 이루는 낱말들(줄 안에서 이어진 낱말 묶음) — 구분자로 나뉜 조각은 그 조각의 낱말만. 찾지 못하면 null.
+ * 도구의 「낱말」은 띄어쓰기와 다를 수 있어요(한글은 「가나다테크」를 「가」 「나」 「다」 「테크」로 나눠 줘요) — 공백을 빼고 견줘요.
+ */
+function wordsOf(text: string, line: OcrLine): OcrWord[] | null {
+  const words = lettered(line.words);
+  const target = squash(text);
+  for (let i = 0; i < words.length; i++) {
+    let joined = "";
+    for (let j = i; j < words.length; j++) {
+      joined = joined ? `${joined} ${words[j].text}` : words[j].text;
+      if (squash(cleanWord(joined)) === target) return words.slice(i, j + 1);
+    }
+  }
+  return null;
+}
+
+// 한 낱말로 읽힌 법인 표시 — 한 글자 조각으로 보고 떼면 안 돼요
+const COMPANY_MARK_TOKEN_RE = /^(?:\(주\)|㈜|\(유\))[.,]?$/;
+
+/**
+ * 줄 끝의 잡글자 조각인지(규칙 2) — symbol = 글자 · 숫자가 없는 기호뿐인 낱말, piece = 한 글자(숫자 · 로마자 · 한글) · 소문자 로마자 두 글자 토막.
+ * 「Ltd.」 「Inc.」 「Co.」 「(주)」 「AI」 「24」 같은 낱말은 조각이 아니에요.
+ */
+function tailJunk(token: string): "symbol" | "piece" | null {
+  if (COMPANY_MARK_TOKEN_RE.test(token)) return null;
+  const core = coreOf(token);
+  if (core === "") return "symbol";
+  return [...core].length === 1 || /^[a-z]{2}$/.test(core) ? "piece" : null;
+}
+
+/**
+ * 줄 끝 잡글자를 뗀 글자(점수는 보지 않아요 — 후보를 세는 데 써요). dropped = 뗀 조각 수.
+ * 조각을 뗀 뒤 끝 낱말에 조사 「를」이 붙어 있으면 그것도 떼요(기획 17100 의 예와 같은 모양: 「주식회사 한빛테크를 0」 → 「주식회사 한빛테크」) —
+ * 회사명 · 이름은 「를」로 끝나지 않아요. 뒤에 잡글자가 있을 때만(잡음이 붙었다는 증거) 떼요.
+ */
+function looseStrip(text: string): { value: string; dropped: number } {
+  const tokens = text.split(" ");
+  let dropped = 0;
+  while (tokens.length > 1 && dropped < MAX_TAIL_JUNK && tailJunk(tokens[tokens.length - 1])) {
+    tokens.pop();
+    dropped++;
+  }
+  const last = tokens[tokens.length - 1];
+  if (dropped > 0 && /^[가-힣]{3,}를$/.test(last)) tokens[tokens.length - 1] = last.slice(0, -1);
+  return { value: tokens.join(" "), dropped };
+}
+
+/**
+ * 칩 글자 → 칸에 넣을 글자(줄 끝 잡글자를 뗌)와 그 점수(남은 낱말 점수 가운데 가장 낮은 값). 채우면 안 되면 null:
+ * - 그 줄의 점수를 모름
+ * - 뗄 조각의 점수를 모르거나, 기호가 아닌 조각의 점수가 높음(JUNK_CONF 이상 — 잡글자가 아니라 이름의 일부일 수 있어요)
+ * 칩은 읽은 그대로 보여 주고, 떼는 것은 칸에 채울 때만이에요.
+ */
+function settle(text: string, line: OcrLine | null): { value: string; confidence: number } | null {
+  if (!line) return null;
+  const loose = looseStrip(text);
+  const words = wordsOf(text, line);
+  if (loose.dropped === 0) {
+    const used = words ?? lettered(line.words);
+    return { value: text, confidence: Math.min(words ? 100 : line.confidence, ...used.map((w) => w.confidence)) };
+  }
+  if (!words) return null;
+  const kept = [...words];
+  const tokens = text.split(" ");
+  for (let d = 0; d < loose.dropped; d++) {
+    const token = tokens.pop() as string;
+    // 이 조각을 이루는 낱말(들)을 끝에서부터 맞춰요
+    let tail = "";
+    let low = 100;
+    while (kept.length > 0 && tail.length < token.length) {
+      const word = kept.pop() as OcrWord;
+      tail = squash(cleanWord(word.text)) + tail;
+      low = Math.min(low, word.confidence);
+    }
+    if (tail !== token) return null;
+    if (tailJunk(token) === "piece" && low >= JUNK_CONF) return null;
+  }
+  // 끝 낱말에서 뗀 「를」이 따로 읽힌 낱말이면 그 점수는 보지 않아요
+  if (loose.value !== tokens.join(" ") && kept.length > 1 && cleanWord(kept[kept.length - 1].text) === "를") kept.pop();
+  if (kept.length === 0) return null;
+  return { value: loose.value, confidence: Math.min(...kept.map((w) => w.confidence)) };
+}
+
+// 법인 표시(규칙 1 「주식회사 · (주) · Co., Ltd. · Inc. · Corp. · Pte. Ltd.」와 같은 뜻의 표시) — 홀로 쓴 「Co」 「Company」는 표시로 보지 않아요
+const COMPANY_MARK =
+  String.raw`\(주\)|㈜|\(유\)|주식회사|유한회사|유한책임회사|` +
+  String.raw`(?:^|[^A-Za-z0-9])(?:co\.?\s*,?\s*ltd|pte\.?\s*ltd|ltd|inc|incorporated|corp|corporation|llc|gmbh)(?![A-Za-z0-9-])|` +
+  // 「Limited」는 이름 낱말 뒤 줄 끝에 올 때만(「Acme Trading Limited」) — 「Limited Edition」 같은 문구는 법인 표시가 아니에요(반박 리뷰 6)
+  String.raw`[A-Za-z0-9가-힣).]\s+limited\.?$`;
+// 법인 표시가 들어 있어도 회사명 한 줄이 아닌 문구(인증 · 대리점 · 협력사 표시) — 이런 낱말이 섞인 줄은 회사명으로 채우지 않아요(반박 리뷰 6)
+const COMPANY_NOISE_RE =
+  /인증|공식|대리점|협력|파트너|지정|가맹|회원사|총판|특약|취급|판매점|수상|선정|(?:^|[^A-Za-z])(?:edition|authorized|authorised|certified|partner|dealer|distributor|reseller|member|official|agent|since|established)(?![A-Za-z])/i;
+const COMPANY_MARK_RE = new RegExp(COMPANY_MARK, "i");
+const COMPANY_MARK_RE_G = new RegExp(COMPANY_MARK, "gi");
+
+// 누리집 · 도메인 모양이 든 줄 — 회사명(도메인 근거) · 이름 후보에서 빼요
+const URL_LIKE_RE =
+  /(?:^|[\s(])(?:www\.|https?:)|[A-Za-z0-9-]\.(?:com|net|org|co|kr|sg|jp|cn|io|ai|biz|info|my|hk|tw|id|vn|th|ph|au|uk|us)(?:[/\s.,)]|$)/i;
+const isUrlLike = (text: string) => URL_LIKE_RE.test(text);
+
+/** 로마자 낱말을 목록과 견줄 글자로(소문자, 로마자 · - 만) */
+const enKey = (token: string) => token.toLowerCase().replace(/[^a-z-]/g, "");
+
+// 사람 직함 · 호칭(영어) — 이 낱말이 든 줄은 회사명 · 이름으로 채우지 않아요
+const EN_TITLE_WORDS = new Set(
+  (
+    "ceo cto cfo coo cmo cio cso cpo vp evp svp avp president vice chairman chairwoman chair founder co-founder cofounder owner " +
+    "manager director head lead leader senior junior chief officer engineer developer designer architect consultant advisor adviser " +
+    "representative rep partner principal executive assistant associate specialist analyst researcher scientist professor prof " +
+    "dr mr ms mrs miss mdm madam sir intern staff supervisor coordinator administrator admin secretary accountant auditor lawyer " +
+    "attorney counsel editor writer producer planner strategist agent broker trader buyer recruiter trainer instructor teacher " +
+    "lecturer technician operator controller treasurer curator hacker"
+  ).split(" "),
+);
+// 부서 · 직무(영어)
+const EN_DEPT_WORDS = new Set(
+  (
+    "sales marketing team department dept division unit hr human resources finance accounting legal operations strategy planning " +
+    "procurement purchasing support customer client success account accounts public relations office headquarters hq branch " +
+    "business development research product project program quality assurance production general affairs management"
+  ).split(" "),
+);
+// 항목 이름 · 주소 · 나라 · 도시(영어). 성씨와 겹치는 낱말(park · ho · chi · minh · hong · kong · bay · lane · york)은 넣지 않고 아래 지명 묶음으로 봐요
+const EN_PLACE_WORDS = new Set(
+  (
+    "tel telephone fax mobile phone email e-mail mail www http https web website homepage address contact " +
+    "korea seoul busan incheon daegu daejeon gwangju republic singapore malaysia indonesia jakarta thailand bangkok vietnam hanoi " +
+    "philippines manila japan tokyo osaka china beijing shanghai shenzhen taiwan taipei india mumbai delhi australia sydney " +
+    "melbourne usa america united states kingdom london california asia pacific apac europe emea " +
+    "road rd street st avenue ave boulevard blvd drive jalan building bldg floor fl level tower plaza centre center place square " +
+    "suite block blk city town district the and of for to in at by with your our"
+  ).split(" "),
+);
+// 회사 이름에 흔한 낱말(영어) — 이 낱말이 든 줄은 사람 이름이 아니에요
+const EN_BIZ_WORDS = new Set(
+  (
+    "company co corp corporation inc incorporated ltd limited llc pte gmbh plc group holdings holding partners ventures capital " +
+    "investment investments fund bank financial insurance securities asset assets trading logistics shipping freight express " +
+    "solutions solution systems system technologies technology tech software digital data cloud network networks labs lab studio " +
+    "studios media entertainment games gaming consulting consultancy advisory services service industries industrial industry " +
+    "enterprise enterprises international global worldwide electronics electric energy power motors automotive pharma " +
+    "pharmaceutical bio biotech medical healthcare health clinic hospital foods food beverage restaurant cafe coffee hotel resort " +
+    "travel tours airlines construction engineering realty property properties estate design architects law associates agency " +
+    "advertising communications telecom university college school academy institute association society foundation council club " +
+    "union federation ministry government store shop mart market retail wholesale supply supplies manufacturing factory works " +
+    "products brand brands analytics robotics dynamics semiconductor materials chemical chemicals pharmaceuticals instruments " +
+    "devices mobility aerospace marine steel textile apparel cosmetics beauty fashion creative interactive innovation innovations " +
+    "intelligence security payments commerce platform platforms bakery kitchen salon clinic dental florist flowers gallery " +
+    "photo photography print printing books bookstore pharmacy laundry cleaning repair garage farm farms bistro bar pub grill " +
+    "noodle noodles pizza burger chicken tea dessert desserts fitness gym yoga spa nails tattoo records music films pictures"
+  ).split(" "),
+);
+// 사람 이름이 아닌 흔한 영어 낱말(인사 · 문구 · 부서 이름에 쓰이는 낱말, 반박 리뷰 5 — 「Hello Tomorrow」 「Dream Big Together」 「Info Desk」) —
+// 이 낱말이 든 줄은 이름 모양이 아니에요. 이름으로도 쓰이는 낱말(Sunny · Joy · Grace · Rose · May · Moon · Sun · Star · Young)은 넣지 않았어요
+const EN_COMMON_WORDS = new Set(
+  (
+    "hello hi hey welcome thanks thank tomorrow today dream dreams big small together info desk press inquiries inquiry enquiries " +
+    "enquiry events event crew growth art happy good great best better new next future smart simple easy fast free open real true " +
+    "pure fresh daily life live love care home house room space world idea ideas story stories make made build create think " +
+    "different just more first plus pro max mini super ultra premium quality original classic modern urban contact follow visit " +
+    "scan call ask get go let us we you me it is are be or not no yes all any every always never one two three"
+  ).split(" "),
+);
+/**
+ * 사람이 아니라 역할 · 대표로 쓰는 메일함 이름(반박 리뷰 5) — @ 앞이 이런 낱말이면 영어 이름의 근거로 쓰지 않아요(hello@ · info@ · press@ · dream@),
+ * 이름 줄의 낱말이 이런 낱말이면 그 낱말로는 뒷받침하지 않아요.
+ */
+const ROLE_MAILBOX = new Set(
+  (
+    "hello hi hey info information contact contacts sales sale press pr media events event growth team office admin administrator " +
+    "support help helpdesk service services cs hr careers career jobs job recruit recruiting hiring marketing biz business shop store " +
+    "order orders booking bookings reservation reservations enquiry enquiries inquiry inquiries general mail email news newsletter " +
+    "dream ask care customer customers account accounts billing finance legal partner partners partnership webmaster postmaster " +
+    "noreply reply feedback ceo design dev tech it lab labs studio official online ops operations people privacy project projects " +
+    "purchase qa reception security ticket tickets trade training web welcome work works world master manager director staff member " +
+    "members club community company corp group global korea asia curator editor"
+  ).split(" "),
+);
+
+// 대문자로 시작하는 두세 낱말이지만 지명인 묶음
+const EN_PLACE_PHRASES = new Set("hong kong|ho chi minh|kuala lumpur|new york|new delhi|marina bay|raffles place|south korea|north america".split("|"));
+
+/**
+ * 한국 성씨 → 로마자 표기들. 한글 이름 후보는 이 성씨로 시작해야 해요(「카카오」 「디자인」 같은 낱말을 걸러요) —
+ * 또 한글 이름과 영어 이름이 함께 있는 명함에서 둘이 같은 사람인지(성씨 표기가 맞는지) 볼 때 써요.
+ * 흔한 성씨만 넣었어요 — 드문 성씨(사 · 부 · 호 · 상 · 단 …)는 뺐어요(「사무실」 「부산시」 같은 낱말이 후보가 되지 않게). 그 성씨의 이름은 직접 넣어요.
+ */
+const KO_SURNAME_ROMAN: Record<string, string[]> = Object.fromEntries(
+  (
+    "김:kim gim|이:lee yi rhee ree li i|박:park pak bak|최:choi choe|정:jung jeong chung jeung|강:kang gang|조:cho jo|윤:yoon yun|" +
+    "장:jang chang|임:lim im yim|한:han|오:oh o|서:seo suh so|신:shin sin|권:kwon gwon|황:hwang|안:ahn an|송:song|전:jeon jun chun|" +
+    "홍:hong|유:yoo yu you ryu|고:ko go koh|문:moon mun|양:yang|손:son sohn|배:bae bai|백:baek paek back|허:heo hur huh|남:nam|" +
+    "심:shim sim|노:noh roh no|하:ha|곽:kwak gwak|성:sung seong|차:cha|주:joo ju|우:woo wu|구:koo gu ku|민:min|류:ryu ryoo yoo|" +
+    "나:na ra|진:jin|지:ji jee|엄:eom um uhm|채:chae|원:won|천:chun cheon|방:bang|공:kong gong|현:hyun hyeon|함:ham|변:byun byeon|" +
+    "염:yeom yum|여:yeo yuh|추:choo chu|도:do|소:so|석:seok suk|선:sun seon|설:seol sul|마:ma|길:gil kil|연:yeon youn|위:wi wee|" +
+    "표:pyo|명:myung myeong|기:ki gi|반:ban|라:ra na|왕:wang|금:geum keum|옥:ok|육:yook yuk|인:in|맹:maeng|제:je|모:mo|탁:tak|" +
+    "국:kook guk|어:eo|은:eun|편:pyun pyeon|용:yong|예:ye|봉:bong|" +
+    "남궁:namgung namkung namgoong|황보:hwangbo|제갈:jegal|선우:sunwoo seonwoo|독고:dokgo|사공:sagong|서문:seomun"
+  )
+    .split("|")
+    .map((entry) => {
+      const [surname, roman] = entry.split(":");
+      return [surname, roman.split(" ")];
+    }),
+);
+/** 한글 낱말이 시작하는 성씨(두 글자 성씨 먼저) — 없으면 null */
+function koSurnameOf(word: string): string | null {
+  const two = word.slice(0, 2);
+  if (word.length > 2 && KO_SURNAME_ROMAN[two]) return two;
+  return KO_SURNAME_ROMAN[word[0]] ? word[0] : null;
+}
+
+// 성씨 글자로 시작하지만 이름이 아닌 흔한 낱말(직무 · 부서 · 지역 · 항목 이름) — 이름 후보에서 빼요. 직함 · 부서 끝말은 KO_TITLES · KO_DEPT_SUFFIX 가 따로 봐요
+const KO_NOT_NAME = new Set(
+  (
+    "연락처 서비스 고객사 고객님 고객명 고객팀 이사회 이사님 이름란 한국어 한국인 한의사 한의원 주소지 주무관 주방장 주식회 " +
+    "공장장 공무원 변리사 변호인 노무사 기술사 기술부 기술원 기술직 기관장 기관사 기획실 기획부 기획자 위원장 편집장 마스터 마케터 " +
+    "설계사 서기관 서울시 조사관 조리장 조리사 조합장 조합원 인천시 인사부 인사과 인재원 강원도 전라도 전략실 전산실 전화기 " +
+    "제주도 제작자 제작사 제약사 안내문 안내원 안전부 유한회 유선전 유튜브 유통부 유통사 임직원 임원진 원장님 원장실 선생님 성명란 " +
+    "모바일 연구실 연구부 연구자 연수원 정보실 지원부 지원실 지배인 지부장 홍보실 홍보부 구매부 은행원 은행장 반장님 방송국 " +
+    "신문사 여행사 금융사 유한회사 주식회사 고객센터 기술지원 인사총무 전략기획 정보보호 고객지원 연구개발"
+  ).split(" "),
+);
+
+/** 「이메일 도메인과 같은 영문 이름」의 근거로 쓰지 않는 공용 메일 도메인(등록 이름) */
+const PUBLIC_MAIL = new Set(
+  (
+    "gmail googlemail naver daum hanmail kakao nate outlook hotmail live msn yahoo ymail icloud me mac aol proton protonmail pm " +
+    "qq 163 126 sina foxmail gmx mail zoho yandex korea dreamwiz empas paran lycos chol hitel singnet starhub pacific hanmir yeah " +
+    "tutanota fastmail duck"
+  ).split(" "),
+);
+// 나라 도메인 앞에 오는 둘째 단계(「.co.kr」 「.com.sg」)
+const SECOND_LEVEL = new Set("com co net org ac or go edu gov ne re pe mil".split(" "));
+
+/**
+ * 이메일 도메인의 등록 이름(「kim@bluepeak.com.sg」 → bluepeak, 「lee@mail.company-a.co.kr」 → company-a).
+ * 공용 메일 도메인(gmail · naver …)이거나 세 글자보다 짧으면 null — 회사명 근거로 쓰지 않아요.
+ */
+export function emailDomainName(email: string): string | null {
+  const at = email.lastIndexOf("@");
+  if (at === -1) return null;
+  const labels = email
+    .slice(at + 1)
+    .toLowerCase()
+    .split(".")
+    .filter(Boolean);
+  if (labels.length < 2) return null;
+  let i = labels.length - 2;
+  if (labels.length >= 3 && labels[labels.length - 1].length === 2 && SECOND_LEVEL.has(labels[i])) i--;
+  const name = labels[i];
+  return /^[a-z0-9-]{3,}$/.test(name) && !PUBLIC_MAIL.has(name) ? name : null;
+}
+
+/** 줄에 도메인 등록 이름이 낱말로(이어진 낱말을 붙여서도 — 「Blue Peak」 · 「Miraero-Logis」) 들어 있는지 */
+function hasDomainWord(text: string, name: string): boolean {
+  const target = name.replace(/-/g, "");
+  const words = text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    let joined = "";
+    for (let j = i; j < words.length && j < i + 3; j++) {
+      joined += words[j];
+      if (joined === target) return true;
+    }
+  }
+  return false;
+}
+
+/** 이름 옆 직함 낱말인지(한글) — 직함 그대로이거나 직함으로 끝나는 낱말(「공동대표이사」). 부서 끝말(팀 · 그룹)은 회사명에도 쓰여 보지 않아요 */
+function isTitleToken(t: string): boolean {
+  if (KO_TITLES.has(t)) return true;
+  if (t.length < 3) return false;
+  for (const title of KO_TITLES) if (title.length >= 2 && t.length > title.length && t.endsWith(title)) return true;
+  return false;
+}
+
+/** 법인 표시가 든 줄을 회사명으로 채워도 되는지 — 길이 · 번호 · 주소 · 직함이 섞인 줄(한 줄짜리 꼬리말)은 채우지 않아요 */
+function markedCompanyOk(value: string): boolean {
+  if ([...value].length > COMPANY_FILL_MAX || /@|\d{3,}/.test(value) || isUrlLike(value)) return false;
+  const tokens = value.split(" ");
+  if (tokens.length > 8) return false;
+  if (tokens.some((t) => isTitleToken(coreOf(t)) || EN_TITLE_WORDS.has(enKey(t)) || EN_PLACE_WORDS.has(enKey(t)))) return false;
+  if (COMPANY_NOISE_RE.test(value)) return false;
+  // 표시만 있는 줄(「주식회사」 「Co., Ltd.」)은 회사명이 아니에요
+  return (value.replace(COMPANY_MARK_RE_G, " ").match(/\p{L}/gu)?.length ?? 0) >= 2;
+}
+
+/**
+ * 도메인 이름이 든 줄을 회사명으로 채워도 되는지 — 대문자 · 숫자로 시작하는 낱말 네 개까지(「BluePeak Logistics」),
+ * 직함 · 부서 · 주소 낱말이 없고 사람 이름 모양(대문자로 시작하는 두세 낱말, 「Blue Peak」 「Tan Wei Ling」)이 아닐 때만.
+ */
+function domainCompanyOk(value: string): boolean {
+  if ([...value].length > COMPANY_FILL_MAX || /[가-힣@]|\d{3,}/.test(value) || isUrlLike(value)) return false;
+  const tokens = value.split(" ");
+  if (tokens.length > 4) return false;
+  if (!tokens.every((t) => /^[A-Z0-9]/.test(t) || t === "&")) return false;
+  if (tokens.some((t) => EN_TITLE_WORDS.has(enKey(t)) || EN_DEPT_WORDS.has(enKey(t)) || EN_PLACE_WORDS.has(enKey(t)))) return false;
+  return enNameTokens(value) === null;
+}
+
+/** 영어 이름의 한 낱말 모양 — 대문자로 시작(「Tan」 「TAN」 「Wei-Ling」 「O'Brien」), 모음이 있고(「Ng」는 받아요), 직함 · 부서 · 회사 · 주소 낱말 · 약어가 아님 */
+function isEnNameWord(t: string): boolean {
+  if (t.length < 2 || !t.split(/[-'’]/).every((x) => /^[A-Z][a-z]*$/.test(x) || /^[A-Z]{2,}$/.test(x))) return false;
+  const key = enKey(t);
+  if (!/[aeiouy]/.test(key) && key !== "ng") return false;
+  if (CAPS_WORDS.has(t) || EN_STOPWORDS.has(key) || EN_TITLE_WORDS.has(key) || EN_DEPT_WORDS.has(key)) return false;
+  return !EN_PLACE_WORDS.has(key) && !EN_BIZ_WORDS.has(key) && !EN_COMMON_WORDS.has(key);
+}
+
+/** 줄이 「대문자로 시작하는 영어 2~3낱말만」인 이름 모양이면 그 낱말들(쉼표 · 구분자로 나뉜 조각 가운데 하나만 그럴 때), 아니면 null */
+function enNameTokens(text: string): string[] | null {
+  if (/[\d@가-힣]/.test(text)) return null;
+  const hits: string[][] = [];
+  for (const part of text.split(/\s*[,|/·•]\s*/)) {
+    const tokens = part.split(" ").filter((t) => /\p{L}/u.test(t));
+    if (tokens.length < 2 || tokens.length > 3 || !tokens.every(isEnNameWord)) continue;
+    if (EN_PLACE_PHRASES.has(tokens.join(" ").toLowerCase())) continue;
+    hits.push(tokens);
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * 영어 이름 낱말이 이메일 @ 앞에 들어 있는지(「Tan Wei Ling」 ↔ weiling.tan@ · 「Lena Koh」 ↔ lena@) — 그 줄이 이 명함 주인의 이름이라는 근거예요.
+ * 세 글자 이상 낱말은 @ 앞(로마자만 이어 붙인 것)에 들어 있으면, 두 글자 낱말(「Li」 「Ng」)은 점 · 밑줄로 나뉜 조각과 같으면 돼요.
+ * 받아들인 것(남는 위험): 「sunnylee@gmail.com」 같은 공용 메일 + 「Sunny Lee」 꼴의 상호(목록에 없는 낱말 둘)는 사람 이름과 가를 수 없어요.
+ */
+function emailBacksName(tokens: readonly string[], email: string): boolean {
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return false;
+  const local = email.slice(0, at).toLowerCase();
+  const letters = local.replace(/[^a-z]/g, "");
+  const pieces = local.split(/[^a-z]+/).filter(Boolean);
+  // 역할 · 대표 메일함(hello@ · info@ · press@ …)은 사람 이름의 근거가 아니에요(반박 리뷰 5)
+  if (ROLE_MAILBOX.has(letters) || (pieces.length > 0 && pieces.every((p) => ROLE_MAILBOX.has(p)))) return false;
+  return tokens
+    .flatMap((t) => t.toLowerCase().split(/[-'’]/))
+    .filter((n) => !ROLE_MAILBOX.has(n))
+    .some((n) => (n.length >= 3 ? letters.includes(n) : n.length === 2 && pieces.includes(n)));
+}
+
+// 이름 뒤에 붙는 직함으로 자동 채움이 더 아는 낱말(KO_TITLES 에 더해) — 「홍길동 기자」에서 홍길동을 떼어 채워요.
+// 여기에도 없는 낱말이 붙은 줄(「홍길동 주무」)은 채우지 않고 후보로만 세요
+const KO_NAME_TITLES = new Set(
+  "기자 피디 작가 감독 간호사 의사 약사 교사 강사 계장 반장 조장 점장 국장 처장 관장 원장 지배인 셰프 인턴 수습 간사 비서 팀원 실무자 사무장 주사".split(" "),
+);
+// 조직 · 장소 끝말(세 글자 이상) — 이름은 이 글자로 끝나지 않아요. 부서 · 장소 낱말로 보고 이름 줄에서 떼요
+// (「정치부」 「원무과」 「강남점」 「강남역」 「전시회」 「금융권」, 반박 리뷰 1 — 성씨 글자로 시작하는 부서 줄이 이름으로 채워졌어요)
+const KO_ORG_END = /(부|과|처|점|역|회|권)$/;
+// 이름도 이 글자로 끝날 수 있는 조직 · 장소 끝말 — 직함 없이 홀로 있는 낱말이 이 글자로 끝나면 채우지 않아요(동 이름 · 섬 이름 · 「○○대」 · 「○○장」 · 「○○리」).
+// 그 글자로 끝나는 진짜 이름(홍길동 · 이지원)도 홀로 있으면 비워요 — 빈칸이 나아요. 직함이 붙은 줄(「홍길동 과장」)은 채워요. 후보로는 세요
+const KO_SOFT_END = /(실|국|동|대|장|도|원|시|군|읍|면|구|리|로|길)$/;
+// 두 낱말 줄의 첫 낱말로 흔한 지역 이름 — 이름 후보로 세지 않아요(「인천 연수구」 「강남 사옥」)
+const KO_PLACES = new Set(
+  "서울 부산 대구 인천 광주 대전 울산 세종 경기 강원 충북 충남 전북 전남 경북 경남 제주 강남 강북 강서 강동 성남 수원 용인 고양 안양 판교 분당 송도".split(" "),
+);
+/**
+ * 한글 이름(성 뒤)에 흔히 쓰이는 글자 — 이름 후보의 성씨 뒤 글자는 모두 여기 있어야 해요. 성씨 글자로 시작하는 상호 · 학교 · 보통 낱말을 걸러요
+ * (계 · 마 · 트 · 디 · 야 · 뚜 · 켓 · 앤 · 울 · 려 · 직 처럼 이름에 드문 글자가 든 세 글자 낱말 — 시험의 「한 줄뿐일 때 채워지던 낱말」 목록).
+ * 여기 없는 글자가 든 이름은 채우지 않아요(직원이 넣어요).
+ */
+const KO_GIVEN = new Set(
+  (
+    "가 갑 강 건 겸 경 고 곤 관 광 구 국 규 균 근 금 기 길 나 남 늘 다 단 담 대 덕 도 동 두 득 라 란 람 랑 래 련 령 로 록 룡 리 린 림 " +
+    "만 명 무 문 미 민 배 백 범 별 병 보 복 봄 봉 비 빈 빛 산 삼 상 새 샘 서 석 선 설 섭 성 세 소 솔 송 수 숙 순 슬 승 시 식 신 실 심 " +
+    "아 안 애 양 여 연 열 엽 영 예 오 옥 온 완 요 용 우 욱 운 웅 원 유 윤 율 은 을 이 익 인 일 자 장 재 정 제 종 주 준 중 지 진 찬 창 " +
+    "채 철 청 초 춘 충 태 택 필 하 학 한 해 향 헌 혁 현 형 혜 호 홍 화 환 효 후 훈 휘 흥 희"
+  ).split(" "),
+);
+
+// 주소 낱말의 끝말(행정 구역 · 길 · 층) — 이런 낱말이 이어진 줄은 주소예요
+const KO_ADDRESS_END = /(시|도|구|군|읍|면|동|로|길|리|가|층|호)$/;
+
+/** 이름 줄에서 떼는 낱말(한글) — 직함 · 부서(isRoleToken · KO_NAME_TITLES)와 조직 · 장소 끝말로 끝나는 세 글자 이상 낱말 */
+const isNameSideWord = (t: string) => isRoleToken(t) || KO_NAME_TITLES.has(t) || (t.length >= 3 && /^[가-힣]+$/.test(t) && KO_ORG_END.test(t));
+
+/** 한글 이름일 수 있는 낱말 — 한글 2~4자, 이름이 아닌 흔한 낱말(직함 · 항목 이름 · 지역)이 아니고, 첫 글자(성) 뒤 글자가 모두 이름에 쓰이는 글자 */
+function isKoNameWord(t: string): boolean {
+  if (!/^[가-힣]{2,4}$/.test(t)) return false;
+  if (KO_STOPWORDS.has(t) || KO_TITLES.has(t) || KO_DEPT_SUFFIX.test(t) || KO_NOT_NAME.has(t) || KO_PLACES.has(t)) return false;
+  const given = t.slice((koSurnameOf(t) ?? t[0]).length);
+  return given.length > 0 && [...given].every((ch) => KO_GIVEN.has(ch));
+}
+
+/**
+ * 한글 이름 후보를 채워도 될 만큼 이름 모양인지 — 성씨로 시작하는 세 글자(성 + 이름 두 자), 또는 두 글자 성씨로 시작하는 네 글자.
+ * 두 글자는 채우지 않아요 — 띄어쓰기 없는 한글 두 글자 줄은 칩으로도 보이지 않고(isJunkChip — 직함 · 깨진 글자), 「전략」 「기술」 같은 낱말과 가를 수 없어요.
+ * 한 글자 성씨의 네 글자도 채우지 않아요(「기술지원」 「고객센터」 같은 낱말이 훨씬 많아요).
+ */
+function isCertainKoName(name: string): boolean {
+  const surname = koSurnameOf(name);
+  return surname !== null && (name.length === 3 || (name.length === 4 && surname.length === 2));
+}
+
+/**
+ * 줄에서 본 한글 이름 후보들(UG-451 반박 리뷰 1). fillable = 그 줄에서 이름을 떼어 채워도 되는지 — 아니면 「후보가 하나인지」 셀 때만 써요.
+ * - 직함 · 부서 낱말을 빼고 한 낱말이 남음(「홍길동」 「홍길동 팀장」 「정치부 홍길동 기자」):
+ *   성씨로 시작하면 후보. 이름 모양(isCertainKoName)이고, 직함이 붙었거나 조직 · 장소 끝말(KO_SOFT_END)로 끝나지 않으면 채워도 돼요.
+ *   성씨 목록에 없는 낱말은 직함이 붙었을 때만 후보로 세요(「피수진 대리」 — 채우지는 않아요).
+ * - 모르는 낱말이 함께 남음(「홍길동 주무」 「홍길동 Manager」 — 이름 + 모르는 직함으로 보이는 줄): 첫 낱말이 성씨로 시작하거나 직함도 붙었으면 후보로만 세요.
+ *   이름 줄이 이런 꼴이면 다른 줄의 낱말(부서 · 상호)이 「하나뿐인 후보」가 되어 채워지는 것을 막아요.
+ *   주소 줄(숫자가 있거나 「강남구 역삼동」처럼 행정 구역 끝말이 이어진 줄)은 세지 않아요.
+ * raw = 잡글자를 떼기 전의 줄(주소 줄의 번지 숫자를 보려고)
+ */
+function koNameCandidates(text: string, raw: string = text): { name: string; fillable: boolean }[] {
+  if (/[\d@]/.test(text)) return [];
+  const out: { name: string; fillable: boolean }[] = [];
+  for (const part of text.split(/\s*[,|/·•]\s*/)) {
+    const tokens = part.split(" ").filter((t) => /[\p{L}\p{N}]/u.test(t));
+    const rest = tokens.filter((t) => !isNameSideWord(t));
+    const titled = rest.length < tokens.length;
+    if (rest.length === 1) {
+      const name = rest[0];
+      if (!isKoNameWord(name)) continue;
+      if (koSurnameOf(name) !== null) out.push({ name, fillable: isCertainKoName(name) && (titled || !KO_SOFT_END.test(name)) });
+      else if (titled) out.push({ name, fillable: false });
+    } else if ((rest.length === 2 || rest.length === 3) && !/\d/.test(raw)) {
+      const [name, ...others] = rest;
+      if (KO_ADDRESS_END.test(name) || others.some((t) => /^[가-힣]+$/.test(t) && KO_ADDRESS_END.test(t))) continue;
+      if (isKoNameWord(name) && (koSurnameOf(name) !== null || titled)) out.push({ name, fillable: false });
+    }
+  }
+  return out;
+}
+
+type TextChip = { chip: Chip; line: OcrLine | null; loose: string };
+type Fill = { chip: Chip; value: string };
+
+/** 후보 줄을 채워도 되면(점수 기준 min · 잡글자 판단) 그 줄에서 want 가 뽑은 값, 아니면 null */
+function confident(t: TextChip, min: number, want: (value: string) => string | null): Fill | null {
+  const settled = settle(t.chip.text, t.line);
+  if (!settled || settled.confidence < min) return null;
+  const value = want(settled.value);
+  return value === null ? null : { chip: t.chip, value };
+}
+
+/**
+ * 회사명(규칙 1) — 법인 표시가 든 줄이 하나면 그 줄. 법인 표시 줄이 없으면 이메일 도메인과 같은 영문 이름이 든 줄이 하나일 때 그 줄.
+ * 법인 표시 줄이 둘 이상(한글 · 영문 법인명이 함께 있는 명함 등)이면 비워요. email = 처음 채우기가 채운 주소(의심 주소로 비웠으면 "" — 도메인 근거를 쓰지 않아요)
+ */
+function certainCompany(texts: readonly TextChip[], domain: string | null): Fill | null {
+  const marked = texts.filter((t) => COMPANY_MARK_RE.test(t.loose));
+  if (marked.length > 1) return null;
+  if (marked.length === 1) return confident(marked[0], COMPANY_FILL_CONF, (v) => (markedCompanyOk(v) ? v : null));
+  if (!domain) return null;
+  const named = texts.filter((t) => !isUrlLike(t.loose) && hasDomainWord(t.loose, domain));
+  return named.length === 1 ? confident(named[0], COMPANY_FILL_CONF, (v) => (domainCompanyOk(v) ? v : null)) : null;
+}
+
+// 한자 이름으로 보이는 낱말(한자 2~4자) — 이름 줄이 다른 문자로 적혀 있다는 신호예요
+const HANJA_NAME_RE = /(?:^|\s)[\u4e00-\u9fff]{2,4}(?:\s|$)/;
+
+/**
+ * 이름(규칙 1 · 반박 리뷰 1 · 5) — 회사명 줄(법인 표시 · 회사 낱말 · 도메인 이름이 든 줄)과 누리집 줄은 후보에서 빼요.
+ * - 한글 이름 후보(koNameCandidates)를 세요. 명함의 다른 줄에 다시 나오는 낱말(「한서진」 + 「주식회사 한서진푸드」)은 상호라 빼요.
+ *   후보가 둘 이상이면 비워요. 하나이고 채워도 되는 줄(fillable)이면 채워요. 단:
+ *   · 한자 이름 줄이 따로 있으면 비워요(이름이 다른 문자로 적힌 명함 — 한글 낱말 하나만으로는 이름인지 몰라요)
+ *   · 영어 이름 모양 줄이 따로 있으면 그 줄에 이 성씨의 로마자 표기가 있을 때만 채워요(「홍길동」 「Hong Gildong」). 없으면 비워요(「이노벨」 + 「Tan Wei Ling」)
+ * - 한글 후보가 없으면: 이메일 @ 앞이 뒷받침하는(emailBacksName) 영어 이름 줄이 하나일 때 그 줄. 채운 회사명과 낱말이 겹치는 줄은 빼요.
+ *   이메일이 뒷받침하지 않는 영어 두세 낱말 줄(「Golden Dragon」 「Marina Square」)은 사람 이름인지 알 수 없어 채우지 않아요.
+ * all = 명함의 모든 칩(다시 나오는 낱말을 볼 때), company = 채운 회사명(없으면 "")
+ */
+function certainName(texts: readonly TextChip[], all: readonly Chip[], domain: string | null, email: string, company: string): Fill | null {
+  const pool = texts.filter(
+    (t) => !looksLikeCompany(t.chip.text) && !COMPANY_MARK_RE.test(t.loose) && !isUrlLike(t.loose) && !(domain && hasDomainWord(t.loose, domain)),
+  );
+  const english = pool.filter((t) => enNameTokens(t.loose) !== null);
+  const ko = pool
+    .flatMap((t) => koNameCandidates(t.loose, t.chip.text).map((c) => ({ t, ...c })))
+    .filter((c) => !all.some((other) => other.id !== c.t.chip.id && other.text.includes(c.name)));
+  const koNames = new Set(ko.map((k) => k.name));
+  if (koNames.size > 1) return null;
+  if (koNames.size === 1) {
+    const hit = ko.find((k) => k.fillable);
+    if (!hit) return null;
+    if (texts.some((t) => HANJA_NAME_RE.test(t.chip.text))) return null;
+    const roman = KO_SURNAME_ROMAN[koSurnameOf(hit.name) ?? ""] ?? [];
+    const samePerson = (b: TextChip) => (enNameTokens(b.loose) ?? []).some((token) => roman.includes(token.toLowerCase()));
+    if (english.length > 0 && !english.some(samePerson)) return null;
+    return confident(hit.t, NAME_FILL_CONF, (v) => (koNameCandidates(v).some((c) => c.name === hit.name && c.fillable) ? hit.name : null));
+  }
+  const companyWords = new Set(company.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+  const backed = english.filter((t) => {
+    const tokens = enNameTokens(t.loose) ?? [];
+    return emailBacksName(tokens, email) && !tokens.every((token) => companyWords.has(token.toLowerCase()));
+  });
+  if (backed.length !== 1) return null;
+  return confident(backed[0], NAME_FILL_CONF, (v) => {
+    const tokens = enNameTokens(v);
+    return tokens && emailBacksName(tokens, email) ? tokens.join(" ") : null;
+  });
+}
+
+/**
+ * 한글 명함인지(규칙 6 — 메일 언어를 「한국어」로) — 채운 이름이 한글이거나, 또렷이 읽은(낱말 점수 CLEAR_CONF 이상) 글자 줄(메일 · 전화 줄 제외) 가운데
+ * 한글 줄(한글 두 글자 이상)이 둘 이상이고 절반 이상일 때. 영문 명함에 한글 주소 한 줄이 있는 정도로는 한글 명함이 아니에요.
+ */
+function isKoreanCard(texts: readonly TextChip[], name: string): boolean {
+  if (/^[가-힣]+$/.test(name)) return true;
+  const sure = texts.filter((t) => t.line !== null && lineFloor(t.line) >= CLEAR_CONF);
+  const ko = sure.filter((t) => (t.chip.text.match(/[가-힣]/g)?.length ?? 0) >= 2).length;
+  return ko >= 2 && ko * 2 >= sure.length;
+}
+
+/**
+ * 명함을 읽은 결과(기획 17106 · 반박 리뷰 3).
+ * - found: 이메일 · 연락처 가운데 하나라도 찾아 칸에 채움 — 명함이 바로 놓인 것으로 보이면(upright) 전처럼 읽은 모양 그대로,
+ *   아니면 「그 값을 이루는 낱말」을 또렷이 읽었을 때만(이메일 EMAIL_FOUND_CONF · 연락처 FOUND_CONF 이상 + 번호 모양).
+ *   그 줄의 다른 낱말(라벨 · 아이콘을 읽은 「®」 「©」 · 줄 끝 잡음)과 줄 점수는 보지 않아요 — 아이콘이 있거나 조금 기울어진 명함이 못 읽은 명함이 되지 않게.
+ *   거꾸로 찍힌 전화번호는 숫자로 읽혀 전화번호 모양이 되기도 해요(「010-1234-5678」 → 낱말 점수 26 의 「95-7601-010」) — 바로 놓인 명함인지 모르는데
+ *   값 낱말 점수가 낮으면 찾은 것으로 치지 않아요.
+ * - unsure: 찾은 것은 없지만 메일 모양 글자가 있고, 그 주소 낱말을 또렷이 읽었거나 명함이 바로 놓인 것으로 보임(upright).
+ *   주소는 잘렸을 수 있어 비웠고 직원이 읽은 줄에서 골라요(「메일 주소를 확인하지 못했습니다. 읽은 줄에서 고르거나 직접 입력해 주세요.」).
+ *   칩은 모두 보여 주고, 또렷이 읽지 못한 번호는 채우지 않아요. 회사명 · 이름은 확실하면 채워요.
+ * - unreadable: 그 밖 — 「명함을 읽지 못했습니다」. 아무 칸도(메일 언어도) 채우지 않아요. 거꾸로 · 옆으로 찍힌 명함의 깨진 줄은 칩으로 보여 주지 않아요.
+ *   다만 바로 놓인 명함(upright — 또렷이 읽은 글자 줄이 UPRIGHT_LINES 이상)인데 이메일 · 연락처 모양이 아예 없는 것이면 또렷이 읽은 줄의 칩은 남겨요
+ *   (chips 에 그 칩만 — 직원이 눌러 넣을 수 있어요). 깨진 칩 13~30개를 감추려는 것이지 또렷한 줄까지 없애려는 것이 아니에요.
+ * 점수를 모르면(도구가 줄 점수를 주지 않음) 전처럼 모양만 보고 칩도 모두 돌려줘요.
+ */
+export type ScanOutcome = "found" | "unsure" | "unreadable";
+
+export type ScanResult = {
+  /** 보여 줄 칩 — unreadable 이면 또렷이 읽은 줄의 칩만(바로 놓인 명함이 아니면 빔) */
+  chips: Chip[];
+  values: ScanValues;
+  links: ScanLinks;
+  outcome: ScanOutcome;
+  /** 값 낱말을 또렷이 읽어 채운 이메일 · 연락처 수(0~2) */
+  found: number;
+  /** 한글 명함(규칙 6) */
+  korean: boolean;
+  /** 읽은 줄 점수의 평균(0~100, 점수를 모르면 0) — 돌려 읽은 방향을 견줄 때 써요(card-rotate.ts) */
+  confidence: number;
+  /** 바로 놓인 명함으로 보이는지 — 또렷이 읽은 글자 줄이 UPRIGHT_LINES 이상(이메일 · 연락처를 못 찾았어도 돌려 읽을 까닭이 없어요) */
+  upright: boolean;
+  /** 글자가 거의 읽히지 않은 사진(뒷면 · 빈 사진) — 돌려 읽어도 소용없어요 */
+  sparse: boolean;
+};
+
+/**
+ * 읽은 글자 → 칩 · 네 칸 값 · 연결 · 읽은 결과. 줄이 하나도 없으면 chips 가 비어요(읽지 못함).
+ * ocr = 글자 읽기 도구가 준 줄 · 낱말 점수. 회사명 · 이름은 점수가 있을 때만 채워요(규칙 1 「글자 인식 점수가 높은 줄만」) — 없으면 이메일 · 연락처만.
+ */
+export function scanCard(text: string, ocr?: readonly OcrLine[] | null): ScanResult {
+  const { chips, lines } = readCard(text, ocr);
+  const filled = autoFill(chips);
+  // 도구가 줄 점수를 주지 않았으면(없음 · 빈 목록) 전처럼 모양만 봐요
+  const scored = !!ocr && ocr.length > 0;
+  const lineOf = (chipId: number | undefined) => lines[chips.findIndex((c) => c.id === chipId)] ?? null;
+  const sure = (field: "email" | "phone", min: number) => {
+    if (filled.links[field] === undefined) return false;
+    return !scored || (valueConfidence(filled.values[field], lineOf(filled.links[field])) ?? 0) >= min;
+  };
+  // 또렷이 읽은 글자 줄 — 글자 · 숫자 셋 이상인 낱말이 있고(옆으로 찍힌 명함의 「는 E 5」 같은 한 글자 조각 줄은 빼요) 글자 낱말 점수가 모두 CLEAR_CONF 이상.
+  // 한 줄이 여러 칩으로 나뉘어도 한 번만 세요
+  const clear = (i: number) => {
+    const line = lines[i];
+    if (!scored) return true;
+    if (line === null || lineFloor(line) < CLEAR_CONF) return false;
+    return chips[i].text.split(" ").some((token) => (token.match(/[\p{L}\p{N}]/gu)?.length ?? 0) >= 3);
+  };
+  const upright = !scored || new Set(chips.map((_, i) => (clear(i) ? lines[i] : null)).filter(Boolean)).size >= UPRIGHT_LINES;
+  // 바로 놓인 명함이면 읽은 주소 · 번호를 전처럼 찾은 것으로 쳐요 — 점수는 거꾸로 · 옆으로 찍힌 명함의 깨진 글자를 거르려는 것이고,
+  // 바로 놓인 명함의 잘못 읽은 번호는 점수로 가려지지 않아요(표본에서 틀린 번호의 값 낱말 점수가 10~94 로 고르게 퍼져 있었어요).
+  // 아이콘 옆 번호는 맞게 읽혀도 점수가 낮게 나오기도 해요(「+65 9123 4567」 41 · 41 · 95)
+  const emailSure = sure("email", EMAIL_FOUND_CONF) || (upright && filled.links.email !== undefined);
+  // 바로 놓인 명함인지 모르면 연락처는 번호 모양도 봐요 — 거꾸로 찍힌 번호는 숫자로 또렷이 읽히기도 해요(지어낸 영문 명함을 거꾸로 읽혀 보니
+  // 「+65 6123 4567」이 낱말 점수 73 · 73 · 92 의 「957 6619 59」로 채워졌어요). 나라 번호(+) · 한국 · 싱가포르 번호 모양이 아닌 「나눠 쓴 숫자 묶음」은
+  // 이메일도 찾았을 때만 찾은 것으로 쳐요
+  const phone = filled.values.phone;
+  const phoneShaped = phone.trim().startsWith("+") || BARE_PHONE_RE.test(digitsOf(phone));
+  const phoneSure = (upright && filled.links.phone !== undefined) || (sure("phone", FOUND_CONF) && (!scored || phoneShaped || emailSure));
+  const found = (emailSure ? 1 : 0) + (phoneSure ? 1 : 0);
+  // 메일 모양 글자를 또렷이 읽었는지 — 메일 칩은 주소 낱말, 형식이 깨진 메일 모양 줄(「lena@koh sg」)은 그 줄 글자 낱말
+  const readEmailLike = (chip: Chip, i: number) => {
+    if (!scored) return true;
+    const line = lines[i];
+    if (line === null) return false;
+    const address = chip.kind === "email" ? extractEmail(chip.text) : "";
+    return (address ? (valueConfidence(address, line) ?? 0) : lineFloor(line)) >= FOUND_CONF;
+  };
+  const emailLike = chips.some((c, i) => isEmailLikeChip(c) && (upright || readEmailLike(c, i)));
+  const outcome: ScanOutcome = found > 0 ? "found" : emailLike ? "unsure" : "unreadable";
+  const letters = (ocr ?? []).reduce((n, l) => n + (l.text.match(/[\p{L}\p{N}]/gu)?.length ?? 0), 0);
+  const sparse = scored && letters < SPARSE_CHARS;
+  const rated = (ocr ?? []).filter((l) => /[\p{L}\p{N}]/u.test(l.text));
+  const confidence = rated.length > 0 ? rated.reduce((sum, l) => sum + l.confidence, 0) / rated.length : 0;
+  if (outcome === "unreadable") {
+    // 못 읽은 명함은 아무 칸도 채우지 않아요(점수 낮은 낱말에서 뽑은 번호 포함). 바로 놓인 명함이면 또렷이 읽은 줄의 칩만 남겨요
+    const kept = upright ? chips.filter((_, i) => clear(i)) : [];
+    return { chips: kept, values: { company: "", name: "", email: "", phone: "" }, links: {}, outcome, found, korean: false, confidence, upright, sparse };
+  }
+  const { values, links } = filled;
+  if (outcome === "unsure") {
+    // 또렷이 읽지 못한 주소 · 번호는 채우지 않아요(칩은 남아요 — 직원이 명함과 견줘 눌러 넣어요)
+    values.email = values.phone = "";
+    delete links.email;
+    delete links.phone;
+  }
+  const texts: TextChip[] = [];
+  chips.forEach((chip, i) => {
+    if (chip.kind === "other") texts.push({ chip, line: lines[i], loose: looseStrip(chip.text).value });
+  });
+  const domain = values.email ? emailDomainName(values.email) : null;
+  const put = (field: "company" | "name", fill: Fill | null) => {
+    if (!fill) return;
+    values[field] = fill.value;
+    links[field] = fill.chip.id;
+  };
+  put("company", certainCompany(texts, domain));
+  put("name", certainName(texts, chips, domain, values.email, values.company));
+  return { chips, values, links, outcome, found, korean: isKoreanCard(texts, values.name), confidence, upright, sparse };
 }
 
 /**

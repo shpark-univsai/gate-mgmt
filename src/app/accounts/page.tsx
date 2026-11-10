@@ -79,6 +79,7 @@ import {
   tapChip,
   unlink,
   type Chip,
+  type OcrLine,
   type ScanField,
   type ScanLinks,
   type ScanValues,
@@ -130,6 +131,13 @@ const isHeic = (file: File) => /^image\/hei[cf](-sequence)?$/i.test(file.type) |
 type ScanFailure = ReadFailure | "format";
 /** 도구를 받는 동안의 기다림 안내(진행률 0~100) */
 const scanDownloading = (percent: number) => `글자 읽기 도구를 받고 있습니다… ${percent}%`;
+/** 찍힌 방향으로 못 읽어 돌려 다시 읽는 동안(UG-451 기획 17106-3) — 몇 번째 방향인지 보여 줘 멈춘 것처럼 보이지 않게 */
+const scanRotating = (attempt: number, total: number) => `명함 방향을 바꿔 다시 읽고 있습니다… (${attempt}/${total})`;
+/** 읽은 줄(칩) 펼침 글자 버튼(UG-451 기획 17100 규칙 3, M16 · M17) */
+const chipsToggleText = (open: boolean, count: number) => (open ? "읽은 줄 접기" : `읽은 줄 모두 보기 (${count})`);
+/** 명함 찍기 버튼 — 못 읽은 뒤에는 「명함 다시 찍기」(UG-451 기획 17106-1 — 깨진 줄은 보여 주지 않고 이 버튼만 남겨요) */
+const SCAN_BUTTON = "명함 찍어서 채우기";
+const SCAN_AGAIN = "명함 다시 찍기";
 /** 칩 대상 칸 이름(낭독기 알림, UG-453 리뷰 m2) — 창의 칸 이름과 같게 */
 const CHIP_TARGET_LABEL: Record<ScanField, string> = { company: "회사명", name: "이름", email: "고객 이메일", phone: "연락처" };
 
@@ -2218,6 +2226,9 @@ function CreateDialog({
   const [language, setLanguage] = useState<MailLanguage>(draft?.draft.language ?? "en");
   // 메일 언어를 고른 적이 있는지 — 고르지 않았으면(처음 골라 둔 English 그대로) 「작성 중」 목록에 「—」로 남겨요
   const [languageChosen, setLanguageChosen] = useState(!!draft?.draft.language);
+  // 한글 명함이라 메일 언어를 「한국어」로 골라 둔 상태인지(UG-451 기획 17100 규칙 6) — 직원이 직접 고르면 풀려요(그 뒤로는 자동으로 바꾸지 않아요).
+  // 「작성 중」에는 이 언어도 남겨요 — 이어서 열면 저장된 언어를 직원이 고른 것처럼 지켜요
+  const [languageAuto, setLanguageAuto] = useState(false);
   // 이어서 만든 명함의 사진(data URL)
   const [draftPhoto] = useState(() => photoFromDraft(draft?.photo ?? null));
   // 창이 기억하는 「작성 중」 명함(UG-451 기획 17009) — id = 서버 명함 번호(이어서 만든 명함 또는 자동 저장이 새로 남긴 명함),
@@ -2297,9 +2308,23 @@ function CreateDialog({
   const [scanFailed, setScanFailed] = useState<ScanFailure | null>(null);
   // 글자 읽기 도구를 받는 중의 진행률(받지 않으면 null)
   const [scanProgress, setScanProgress] = useState<number | null>(null);
+  // 찍힌 방향으로 못 읽어 돌려 다시 읽는 중(UG-451 기획 17106-3) — 몇 번째 방향인지(아니면 null)
+  const [scanRetry, setScanRetry] = useState<{ attempt: number; total: number } | null>(null);
+  // 명함 읽기 차례 번호(UG-451 반박 리뷰 4) — 돌려 읽는 동안에는 「명함 다시 찍기」를 누를 수 있어요. 새 사진을 읽기 시작하면 번호가 올라가고,
+  // 늦게 끝난 앞 읽기는 번호가 달라 결과를 버려요(앞 명함 값이 새 명함 칸 · 칩 · 사진을 덮지 않게). 처음 읽는 동안은 전처럼 버튼이 잠겨 있어요
+  const scanGen = useRef(0);
+  // 「명함 다시 찍기」를 누를 수 없는 동안 — 처음 방향을 읽는 중(돌려 읽는 중에는 풀려요)
+  const scanLocked = scanning && !scanRetry;
   const scanFailedText =
     scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "tool_reload" ? SCAN_TOOL_RELOAD : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
-  const scanWaitText = scanProgress !== null && scanProgress < 100 ? scanDownloading(scanProgress) : SCAN_WAIT;
+  const scanWaitText = scanRetry
+    ? scanRotating(scanRetry.attempt, scanRetry.total)
+    : scanProgress !== null && scanProgress < 100
+      ? scanDownloading(scanProgress)
+      : SCAN_WAIT;
+  // 읽은 줄(칩)을 펼쳤는지(UG-451 기획 17100 규칙 3 · 7) — 접어 두고 「읽은 줄 모두 보기 (n)」로 펼쳐요. 창을 닫았다 열면 접힌 채로 시작해요.
+  // 이메일 칸이 빈 「작성 중」 명함만 펼친 채로 열어요(규칙 4 — 메일 주소를 읽은 줄에서 골라야 할 수 있어요)
+  const [chipsOpen, setChipsOpen] = useState(() => !!draft && !draft.draft.email?.trim() && scanFromDraft(draft.chips) !== null);
   // 명함에서 메일 주소를 채우지 못함(N4) — 이메일 칸 아래 회색 안내. 주소가 들어오면 지워요(UG-451 기획 17022).
   // none = 메일 모양 글자를 하나도 읽지 못함, unsure = 메일 칩은 있지만 잘렸을 수 있어 채우지 않음(읽은 줄에서 고르거나 직접 입력)
   const [emailMissing, setEmailMissing] = useState<"none" | "unsure" | null>(null);
@@ -2311,16 +2336,20 @@ function CreateDialog({
   // 커서가 있는 칸(칩 규칙 3). 칩을 누르면 칸에서 초점이 빠질 수 있어서(아이패드) 방금 빠진 칸도 커서로 봐요.
   // virtual = 초점 없이 정한 대상 칸(UG-453 기획 5) — 터치 기기에서 칩을 넣은 뒤 · 명함을 읽은 뒤 다음 빈 칸. 키보드를 올리지 않으려고 초점은 주지 않아요.
   //   칸을 직접 누르면(초점) 그 칸으로 바뀌어요. 화면에는 chipTarget 으로 그 칸을 진하게 보여 줘요(.input-box.is-target)
+  //   읽은 줄이 접혀 있으면 대상 칸도 없어요(UG-451 기획 17100) — 펼칠 때 정해요(toggleChips)
   const [chipTarget, setChipTarget] = useState<ScanField | null>(() =>
-    draft && isTouchPrimary() && scanFromDraft(draft.chips) ? nextChipTarget(null, null, { company, name, email, phone }) : null,
+    chipsOpen && isTouchPrimary() ? nextChipTarget(null, null, { company, name, email, phone }) : null,
   );
   const cursor = useRef<{ field: ScanField; blurredAt: number | null; virtual?: boolean } | null>(
     chipTarget ? { field: chipTarget, blurredAt: null, virtual: true } : null,
   );
   // 명함 읽기가 끝났을 때의 칸 값 — 읽는 동안(수 초) 직원이 친 값을 보려고 늘 최신으로 둬요(onPhoto 는 누를 때의 값만 알아요)
   const latestValues = useRef<ScanValues>({ company, name, email, phone });
+  // 메일 언어도 — 읽는 동안 직원이 고른 언어 · 명함이 방금 골라 둔 언어를 보려고(규칙 6)
+  const latestLanguage = useRef({ language, chosen: languageChosen, auto: languageAuto });
   useEffect(() => {
     latestValues.current = { company, name, email, phone };
+    latestLanguage.current = { language, chosen: languageChosen, auto: languageAuto };
   });
   // 명함 읽기가 자동으로 채운 값(칸별). 칸 값이 이것과 같으면 직원이 손대지 않은 것으로 보고 다시 찍을 때 바꿔요(UG-451 기획 16991)
   const autoFilled = useRef<Partial<Record<ScanField, string>>>({});
@@ -2355,13 +2384,20 @@ function CreateDialog({
   // 경고하고 보내기 · 재설정을 막는지 — 의심 값이고 직원이 확인하지 않았을 때.
   // 「작성 중」 저장 판단도 같아요 — 확인한 값은 의심이 아닌 주소처럼 「새 계정」으로 확인되면 남겨요(기획 17030 결정)
   const suspectBlocked = !!scan && isUnconfirmedSuspect(trimmed, scan.chips, confirmedEmail);
-  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect, PC 만)
+  // 「명함과 같은 주소예요」를 눌러 버튼이 사라진 뒤(그린 다음) 초점을 이메일 칸으로 돌려요(confirmSuspect — PC · 터치 기기 모두, 기획 17100)
   const focusAfterConfirm = useRef(false);
   useEffect(() => {
     if (!focusAfterConfirm.current) return;
     focusAfterConfirm.current = false;
     emailRef.current?.focus();
   }, [confirmedEmail]);
+  // 의심 주소 경고와 「명함과 같은 주소예요」가 나타나면 그 버튼까지 보이게 스크롤해요(UG-451 기획 17100 — 누르는 범위 겹침).
+  // 휴대폰은 맨 아래 버튼 줄(취소 · 실행)이 창 위에 붙어 있어, 칩을 눌러 주소를 넣으면(칸에 초점 없음 — 창이 따로 맞춰 주지 않아요) 새로 생긴 버튼이
+  // 그 줄 밑에 몇 px 걸쳐 눌리는 범위가 겹칠 수 있었어요. 가장 가까운 자리로만 움직이고(이미 다 보이면 그대로), 휴대폰은 버튼 줄 높이 + 8 을 비워요(.scrim scroll-padding-bottom)
+  const suspectConfirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (suspectBlocked) suspectConfirmRef.current?.scrollIntoView({ block: "nearest" });
+  }, [suspectBlocked]);
   const emailGate = draftSaveGate({
     email: trimmed,
     checkable: EMAIL_RE.test(trimmed),
@@ -2374,7 +2410,8 @@ function CreateDialog({
 
   /** 첫 로그인 전 이메일: 메일 언어를 처음 보낸 언어로 미리 골라 둬요(전 언어는 기억). */
   function pickPendingLanguage(l: MailLanguage) {
-    if (langBeforePending.current === null) langBeforePending.current = language;
+    // 최신 언어로 기억해요 — 명함이 방금 「한국어」로 골라 둔 뒤 이어진 조회는 그 전 그림의 language 를 들고 있어요(UG-451 기획 17100 규칙 6)
+    if (langBeforePending.current === null) langBeforePending.current = latestLanguage.current.language;
     setLanguage(l);
   }
 
@@ -2482,7 +2519,8 @@ function CreateDialog({
     if (!Object.values(values).some(Boolean) && !plan.photo && !plan.keepPhoto) return id && !scanning ? { id, remove: true } : null;
     const chips = chipsForDraft(scan);
     // 첫 로그인 전 이메일이라 메일 언어를 잠깐 바꿨으면 직원이 고른 언어로
-    const lang = languageChosen ? (langBeforePending.current ?? language) : null;
+    // 한글 명함이라 골라 둔 「한국어」도 남겨요(규칙 6)
+    const lang = languageChosen || languageAuto ? (langBeforePending.current ?? language) : null;
     const input: CardDraftInput = {
       ...Object.fromEntries(Object.entries(values).filter(([, v]) => v)),
       ...(lang ? { language: lang } : {}),
@@ -2692,7 +2730,7 @@ function CreateDialog({
       if (unknownChipEmails) void checkChipEmailsRef.current(unknownChipEmails.split("\n"));
     }, AUTOSAVE_DELAY);
     return () => clearTimeout(timer);
-  }, [company, name, email, phone, language, languageChosen, scan, check, known, emailGate, trimmed, unknownChipEmails, fix, mailFailure]);
+  }, [company, name, email, phone, language, languageChosen, languageAuto, scan, check, known, emailGate, trimmed, unknownChipEmails, fix, mailFailure]);
   // 명함 칩의 메일 주소가 이미 있는 계정으로 드러나면(칸을 지워도 사진 · 칩에 남아요) 이 창의 자동 저장이 만든 명함을 바로 지워요(반박 리뷰 F3).
   // 칸 이메일이 「새 계정」으로 확인되면 다시 남겨요(draftSaveGate) — 지운 뒤에는 새 명함으로
   const chipsExisting = emailGate !== "open" && chipEmailsState(chipEmails, known) === "existing";
@@ -3063,7 +3101,10 @@ function CreateDialog({
   // 칩을 넣지 않을 칸(잠긴 칸) — 그 칸에 연결된 칩은 「아직 안 씀」으로 보여요
   const lockedFields: ScanField[] = [...(companyLocked ? (["company"] as const) : []), ...(personLocked ? (["name", "phone"] as const) : [])];
   /** 다음 칩이 들어갈 칸을 진하게(UG-453 기획 5) — 터치 기기에서 초점 없이 정한 대상 칸. 읽은 줄(칩)이 보일 때만 */
-  const targetClass = (field: ScanField) => (scan && !fix && chipTarget === field && !lockedFields.includes(field) ? " is-target" : "");
+  // 읽은 줄을 보여 주는지(UG-451 기획 17100) — 펼쳤거나, 메일 주소를 채우지 못해 읽은 줄에서 골라야 할 때(규칙 4 — M15 그대로: 접지 않고 늘 보여요)
+  const chipsShown = !!scan && (chipsOpen || emailMissing !== null);
+  const targetClass = (field: ScanField) =>
+    scan && !fix && chipsShown && chipTarget === field && !lockedFields.includes(field) ? " is-target" : "";
   // 터치 기기 — 칩 안내 문구 · 낭독기 대상 칸 알림(UG-453 리뷰 m2 · nit)
   const touchPrimary = isTouchPrimary();
   const targetLabel = chipTarget && targetClass(chipTarget) ? CHIP_TARGET_LABEL[chipTarget] : null;
@@ -3092,13 +3133,14 @@ function CreateDialog({
   /**
    * 「명함과 같은 주소예요」(UG-451 기획 17030) — 지금 칸 값을 직원이 명함과 견줘 맞다고 확인했어요. 그 값 그대로인 동안 경고 · 막음을 풀어요.
    * 버튼이 사라지니 초점은 이메일 칸으로 돌려요(기획 17072-2) — 실행 버튼으로 옮기면 Enter 두 번에 바로 메일이 나가요.
-   * 터치 기기는 이메일 칸에 초점을 주지 않아요(UG-453 리뷰 m3) — 키보드가 올라오고 이메일 칸이 칩 대상이 되어 다음 글자 칩이 확인한 주소를 덮어요.
-   * 대신 다음 칩이 들어갈 칸을 다시 골라요.
+   * 휴대폰 · 아이패드도 커서를 이메일 칸에 둬요(기획 17100 — 키보드가 올라와요). 누른 그 자리에서 바로 초점을 줘요 — 아이폰은 누른 동작 안에서 준
+   * 초점에만 키보드를 올려요 — 버튼이 사라진 뒤(그린 다음)에도 한 번 더 맞춰요(focusAfterConfirm).
+   * 이메일 칸에 커서가 있어도 확인한 주소는 다음 글자 칩이 덮지 않아요(UG-453 리뷰 m3 의 사고) — onChip 이 그 칩을 이메일 칸에 넣지 않아요.
    */
   function confirmSuspect() {
     setConfirmedEmail(email);
-    if (isTouchPrimary()) moveChipTarget(nextChipTarget(null, null, { company, name, email, phone }, lockedFields));
-    else focusAfterConfirm.current = true;
+    emailRef.current?.focus();
+    focusAfterConfirm.current = true;
   }
 
   /**
@@ -3183,9 +3225,32 @@ function CreateDialog({
     setChipTarget(null);
   }
 
+  /**
+   * 「읽은 줄 모두 보기 (n)」 · 「읽은 줄 접기」(UG-451 기획 17100 규칙 3). 터치 기기는 펼칠 때 다음 칩이 들어갈 칸을 정해 진하게 보여 주고
+   * (칸에 키보드가 올라와 있으면 그 칸이 대상이라 그대로), 접으면 초점 없이 정한 대상 칸을 지워요. PC 는 커서가 있는 칸 그대로예요.
+   */
+  function toggleChips() {
+    const open = !chipsOpen;
+    setChipsOpen(open);
+    if (!isTouchPrimary()) return;
+    if (!open) {
+      if (cursor.current?.virtual) clearChipTarget();
+      return;
+    }
+    const active = document.activeElement;
+    if (Object.values(fieldRef).some((r) => r.current === active)) return;
+    const next = nextChipTarget(null, null, { company, name, email, phone }, lockedFields);
+    if (next) cursor.current = { field: next, blurredAt: null, virtual: true };
+    setChipTarget(next);
+  }
+
   function onChip(chip: Chip, now: number) {
     if (!scan) return;
-    const at = cursorField(now);
+    let at = cursorField(now);
+    // 「명함과 같은 주소예요」로 확인한 주소가 그대로 있는 이메일 칸에는 글자 칩을 넣지 않아요(UG-451 기획 17100) — 확인 뒤 커서가 이메일 칸에 남아도
+    // 다음 글자 칩이 확인한 주소를 덮지 않게, 커서가 없을 때처럼 회사명 → 이름 중 빈 칸으로 가요. 메일 칩은 전처럼 이메일 칸을 바꿔요(직원이 고른 주소)
+    const confirmedHere = confirmedEmail !== null && trimmed !== "" && confirmedEmail.trim().toLowerCase() === trimmed.toLowerCase();
+    if (at === "email" && chip.kind === "other" && confirmedHere) at = null;
     const values = { company, name, email, phone };
     const r = tapChip(chip, scan.links, values, at, lockedFields);
     setScan({ ...scan, links: r.links });
@@ -3197,11 +3262,13 @@ function CreateDialog({
   }
 
   /**
-   * 명함 사진을 읽어 네 칸을 채워요(동작 규칙 1~4 · 칩 규칙 1 · 7). 원본은 이 함수 안에서만 읽고 버려요(글자 읽기는 기기 안에서).
+   * 명함 사진을 읽어 네 칸을 채워요(동작 규칙 1~4 · 칩 규칙 1 · 7 · 자동 채움 규칙 M16 · M17). 원본은 이 함수 안에서만 읽고 버려요(글자 읽기는 기기 안에서).
    * 줄인 비교용 사진만 창에 두고, 만들지 않고 닫으면 「작성 중」 명함으로 서버에 남겨요(기획 16864).
-   * 읽은 값은 비어 있는 칸 · 앞 명함이 자동으로 채우고 직원이 손대지 않은 칸에만 넣어요(UG-451 기획 16991) —
+   * 이메일 · 연락처는 모양이 맞으면, 회사명 · 이름은 확실할 때만 채워요(UG-451 기획 17100 — card-scan.ts scanCard). 애매하면 비워 둬요.
+   * 읽은 값은 비어 있는 칸 · 앞 명함이 자동으로 채우고 직원이 손대지 않은 칸에만 넣어요(UG-451 기획 16991 · 17100 규칙 5) —
    * 읽는 동안 직원이 친 값 · 직원이 고친 값 · 칩을 눌러 넣은 값은 그대로 둬요. 다시 찍으면 칩 목록은 늘 바꿔요.
-   * 읽지 못하면 칸은 그대로 두고 안내만 해요.
+   * 찍힌 방향으로 이메일 · 연락처를 하나도 못 찾으면 돌려서 다시 읽어요(기획 17106-3 — card-ocr.ts). 그래도 못 찾으면 「명함을 읽지 못했습니다」 —
+   * 깨진 줄(칩)은 보여 주지도 남기지도 않고, 칸은 그대로 두고 안내만 해요(기획 17106-1 · 2).
    */
   async function onPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const input = e.currentTarget;
@@ -3211,96 +3278,131 @@ function CreateDialog({
     // 보내는 중이거나 주소를 고치는 중(fix)에 늦게 온 사진은 받지 않아요 — 고치는 동안 보던 사진을 지우거나,
     // 결과 화면 뒤에 사진이 메모리에 남지 않게
     if (sending || fix || fixRef.current || keepingDraft) return;
+    // 이 읽기의 차례 번호 — 돌려 읽는 동안 다시 찍으면 앞 읽기(card-ocr 가 끊어요)의 늦은 결과 · 상태 정리는 아래에서 버려요
+    const gen = ++scanGen.current;
+    const live = () => gen === scanGen.current;
     // 앞 명함 사진은 바로 비워요 — 이번 읽기가 실패해도 앞 명함 사진이 이번 고객 것처럼 남지 않게
     setPhoto(null);
     setScanning(true);
     setScanFailed(null);
     setScanProgress(null);
+    setScanRetry(null);
     let text: string | null = null;
+    let lines: OcrLine[] | null = null;
     let preview: string | null = null;
     let failure: ReadFailure | null = null;
     try {
-      ({ text, preview, failure } = await reader.read(file, setScanProgress));
+      ({ text, lines, preview, failure } = await reader.read(file, (percent) => live() && setScanProgress(percent), {
+        // 한 방향으로 읽은 결과의 점수 — 이메일 · 연락처를 하나도 못 찾았고 바로 놓인 명함으로 보이지도 않으면 다른 방향으로 다시 읽어요.
+        // 글자가 거의 없는 사진(뒷면 · 빈 사진)은 돌리지 않아요(card-rotate.ts needsRetry)
+        judge: (readText, readLines) => {
+          const r = scanCard(readText, readLines);
+          return { found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse };
+        },
+        onRetry: (attempt, total) => live() && setScanRetry({ attempt, total }),
+      }));
     } catch {
       text = null;
       failure = "read";
     } finally {
-      setScanning(false);
-      setScanProgress(null);
+      // 새 읽기가 시작됐으면 그 읽기의 「읽는 중」 표시를 건드리지 않아요
+      if (live()) {
+        setScanning(false);
+        setScanProgress(null);
+        setScanRetry(null);
+      }
     }
+    // 돌려 읽는 동안 다시 찍어 새 읽기가 시작됐거나 창을 닫았으면 이 결과는 버려요(반박 리뷰 4)
+    if (!live() || !openRef.current) return;
     // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
     if (fixRef.current) return;
-    // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교)
+    // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교). 돌려 읽은 방향이 이겼으면 바로 세운 사진이에요
     setPhoto(preview);
-    const result = text === null ? null : scanCard(text);
+    const result = text === null ? null : scanCard(text, lines);
     const now = latestValues.current;
     const replaceable = (field: ScanField) => !now[field].trim() || autoFilled.current[field] === now[field];
-    if (!result || result.chips.length === 0) {
-      // 다시 찍은 명함(B)을 읽지 못함 — 사진은 B 인데 앞 명함(A)이 자동으로 채운 주소 · 번호로 보내지지 않게(UG-451 반박 리뷰)
+    // 메일 언어(규칙 6): 직원이 고르지 않았을 때만 — 한글 명함이면 「한국어」, 아니면 앞 명함이 골라 둔 「한국어」를 처음 값(English)으로 되돌려요.
+    // 첫 로그인 전 이메일이라 언어를 잠깐 바꿔 둔 동안이면 되돌아갈 언어(langBeforePending)를 바꿔요
+    const autoLanguage = (korean: boolean) => {
+      const lang = latestLanguage.current;
+      if (lang.chosen || (!korean && !lang.auto)) return;
+      const next: MailLanguage = korean ? "ko" : "en";
+      if (langBeforePending.current !== null) langBeforePending.current = next;
+      else setLanguage(next);
+      setLanguageAuto(korean);
+      latestLanguage.current = { ...lang, language: langBeforePending.current !== null ? lang.language : next, auto: korean };
+    };
+    if (!result || result.chips.length === 0 || result.outcome === "unreadable") {
+      // 다시 찍은 명함(B)을 읽지 못함 — 사진은 B 인데 앞 명함(A)이 자동으로 채운 값으로 보내지지 않게(UG-451 반박 리뷰)
       // A 가 채우고 직원이 손대지 않은 칸은 비우고 A 의 칩도 지워요. 직원이 친 · 고친 값 · 칩을 눌러 넣은 값은 그대로예요.
-      for (const field of ["email", "phone"] as const) {
+      // 이메일 · 연락처를 하나도 못 찾은 명함(unreadable — 거꾸로 · 옆으로 찍힘, 명함이 아닌 사진)의 깨진 줄도 같아요(기획 17106-1):
+      // 칩을 보여 주지 않고(scan = null — 「작성 중」에도 남지 않아요) 회사명 · 이름 · 메일 언어도 채우지 않아요. 「명함 다시 찍기」만 남아요.
+      // 다만 바로 놓인 명함에서 이메일 · 연락처 모양만 못 찾은 것이면 scanCard 가 또렷이 읽은 줄의 칩만 돌려줘요(반박 리뷰 3) — 그 칩은 펼쳐 보여 주고
+      // (직원이 눌러 넣어요) 안내는 같은 「명함을 읽지 못했습니다…」예요.
+      let companyNow = now.company;
+      for (const field of ["company", "name", "phone", "email"] as const) {
         if (autoFilled.current[field] === undefined || !replaceable(field)) continue;
         delete autoFilled.current[field];
-        if (field === "email") changeEmail("", now.company);
-        else putField.phone("");
+        if (field === "email") changeEmail("", companyNow);
+        else putField[field]("");
+        if (field === "company") companyNow = "";
       }
-      setScan(null);
+      autoLanguage(false);
+      const kept = result && result.chips.length > 0 ? result.chips : null;
+      setScan(kept ? { chips: kept, links: {} } : null);
+      setChipsOpen(kept !== null);
+      setConfirmedEmail(null);
       clearChipTarget();
       setEmailMissing(null);
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
-      // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저)
-      return setScanFailed(failure === "tool" || failure === "tool_reload" ? failure : isHeic(file) ? "format" : (failure ?? "read"));
+      // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저).
+      // 글자를 읽었으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰)
+      const opened = text !== null && /\S/.test(text);
+      return setScanFailed(failure === "tool" || failure === "tool_reload" ? failure : !opened && isHeic(file) ? "format" : (failure ?? "read"));
     }
-    // 처음 채우기는 이메일 · 연락처만(회사명 · 이름은 직원이 칩을 눌러 넣어요, 기획 16846) — 회사명 · 이름 칸은 건드리지 않아요
+    // 처음 채우기 — 이메일 · 연락처와, 확실한 회사명 · 이름(기획 17100 규칙 1). 확실하지 않은 칸은 값이 ""라, 앞 명함이 채운 그대로인 칸은 비워져요
     const links: ScanLinks = {};
-    const fill = (field: "email" | "phone") => {
+    const fill = (field: ScanField, put: (value: string) => void) => {
       if (!replaceable(field)) return false;
       const value = result.values[field];
       if (result.links[field] !== undefined) links[field] = result.links[field];
       if (value) autoFilled.current[field] = value;
       else delete autoFilled.current[field];
-      if (field === "email") changeEmail(value, now.company);
-      else putField.phone(value);
+      put(value);
       return true;
     };
-    const phoneFilled = fill("phone");
-    // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기는 회사명 칸이 비었을 때만 채워요
-    const emailFilled = fill("email");
+    const companyFilled = fill("company", putField.company);
+    fill("name", putField.name);
+    fill("phone", putField.phone);
+    // 이메일은 마지막에 — 주소 오류 기록의 회사명 미리 채우기는 회사명 칸이 비었을 때만 채워요(명함이 방금 채운 회사명을 덮지 않게)
+    const companyNow = companyFilled ? result.values.company : now.company;
+    const emailFilled = fill("email", (value) => changeEmail(value, companyNow));
+    autoLanguage(result.korean);
     // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요
     setScan({ chips: result.chips, links });
     // 앞 명함과 견줘 한 「명함과 같은 주소예요」 확인은 새 명함에는 쓰지 않아요
     setConfirmedEmail(null);
     clearChipTarget();
-    // 메일 주소 · 연락처를 하나도 찾지 못함(명함이 아닌 사진 · 90° 돌아간 명함 등) — 칩은 남기되 「읽었습니다」 대신 실패 안내(UG-451 기획 16991).
-    // 잘렸을 수 있는 메일 칩(채우지 않음)도 메일을 찾은 것으로 봐요 — 그때는 이메일 칸 아래 안내가 따로 떠요.
-    // 칩이 생겼으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 위 안내와 겹치지 않게 칸 아래 안내 · 커서는 찾은 경우만.
-    // 형식이 깨져 메일 칩이 되지 못한 메일 모양 글자(「lena@koh sg」 — @ 양옆에 글자)도 찾은 것으로 봐요(기획 17030) —
-    // 「명함을 읽지 못했습니다」 대신 「메일 주소를 확인하지 못했습니다」
-    const found = result.values.phone !== "" || result.chips.some(isEmailLikeChip);
-    const missing = found && emailFilled && !result.values.email;
-    // 메일 칩(또는 @ 가 든 줄)은 있는데 채우지 않음 = 잘렸을 수 있어 확인하지 못함, 메일 모양 글자가 하나도 없음 = 찾지 못함(UG-451 기획 17022)
-    const emailLike = result.chips.some((c) => c.kind === "email" || c.text.includes("@"));
+    // 이메일 칸을 채우지 못함(N4 · M15) — 칸 아래 안내를 띄우고 읽은 줄을 펼쳐 둬요(규칙 4). 여기까지 왔으면 이메일 · 연락처 가운데 하나는 찾았거나
+    // 또렷한 메일 모양 글자가 있어요(scanCard 의 outcome — 하나도 없으면 위에서 「명함을 읽지 못했습니다」).
+    // 메일 칩(또는 @ 가 든 줄)은 있는데 채우지 않음 = 잘렸을 수 있어 확인하지 못함, 메일 모양 글자가 하나도 없음 = 찾지 못함(UG-451 기획 17022).
+    // 형식이 깨져 메일 칩이 되지 못한 메일 모양 글자(「lena@koh sg」 — @ 양옆에 글자)도 확인하지 못한 것으로 봐요(기획 17030)
+    const missing = emailFilled && !result.values.email;
+    const emailLike = result.chips.some((c) => isEmailLikeChip(c) || c.text.includes("@"));
     setEmailMissing(missing ? (emailLike ? "unsure" : "none") : null);
-    if (!found) setScanFailed("read");
+    // 새 명함은 접힌 채로(규칙 3 · 7) — 메일 주소를 채우지 못했을 때만 펼쳐요(읽은 줄에서 골라야 해요)
+    setChipsOpen(missing);
     // 명함이 채운 이메일은 바로 확인해요 — 이미 있는 계정이면 직원이 일찍 알고, 확인이 「새 계정」으로 끝나기 전에는 「작성 중」으로 남기지 않아요(기획 17022)
     if (emailFilled && result.values.email && EMAIL_RE.test(result.values.email)) void runCheck(result.values.email, true);
     // 칸에 넣지 않은 칩 메일 주소(잘렸을 수 있어 채우지 않음 · 두 번째 주소)도 한 번 조용히 확인해요 — 끝나기 전에는 사진도 남기지 않아요(반박 리뷰 F3)
     const others = chipEmailAddresses(result.chips).filter((address) => address !== result.values.email);
     if (others.length > 0) void checkChipEmails(others);
     setScanDone((n) => n + 1); // 읽은 값 · 사진을 바로 「작성 중」에 남겨요(UG-451 기획 17009)
-    // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4). 터치 기기는 초점 없이(키보드가 칩 · 사진을 가리지 않게) 대상 칸만 진하게 —
-    // 메일을 채웠으면 차례대로 첫 빈 칸(대개 회사명)을 진하게 보여 줘요(UG-453 기획 4 · 5)
-    if (!isTouchPrimary()) {
-      if (missing) emailRef.current?.focus();
-      return;
-    }
-    const filledValues: ScanValues = {
-      company: now.company,
-      name: now.name,
-      email: emailFilled ? result.values.email : now.email,
-      phone: phoneFilled ? result.values.phone : now.phone,
-    };
-    moveChipTarget(missing ? "email" : nextChipTarget(null, null, filledValues, lockedFields));
+    // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4). 터치 기기는 초점 없이(키보드가 칩 · 사진을 가리지 않게) 이메일 칸만 진하게(UG-453 기획 4 · 5).
+    // 메일을 채웠으면 읽은 줄이 접혀 있어 대상 칸을 두지 않아요 — 펼칠 때 정해요(toggleChips)
+    if (!missing) return;
+    if (isTouchPrimary()) moveChipTarget("email");
+    else emailRef.current?.focus();
   }
 
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
@@ -3376,44 +3478,68 @@ function CreateDialog({
             {scan ? (
               <>
                 <div className="scan-head">
-                  <span className="scan-title">
-                    명함에서 읽은 줄 · {touchPrimary ? "누르면 진하게 표시된 칸에 들어갑니다" : "누르면 커서가 있는 칸에 들어갑니다"}
-                  </span>
+                  {emailMissing !== null ? (
+                    // 메일 주소를 채우지 못함(규칙 4 — M15 그대로): 읽은 줄을 접지 않고 늘 보여 줘요
+                    <span className="scan-title">
+                      명함에서 읽은 줄 · {touchPrimary ? "누르면 진하게 표시된 칸에 들어갑니다" : "누르면 커서가 있는 칸에 들어갑니다"}
+                    </span>
+                  ) : (
+                    // 읽은 줄은 접어 두고 글자 버튼으로 펼쳐요(UG-451 기획 17100 규칙 3, M16 · M17)
+                    <span className="scan-toggle-box">
+                      <button
+                        type="button"
+                        className="scan-toggle"
+                        aria-expanded={chipsOpen}
+                        aria-controls="scan-chips"
+                        // 누르는 동안 칸의 커서가 빠지지 않게(PC) — 펼친 칩이 커서가 있는 칸에 들어가요
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={toggleChips}
+                      >
+                        {chipsToggleText(chipsOpen, scan.chips.length)}
+                      </button>
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="btn btn-outline btn-sm"
                     onClick={() => fileRef.current?.click()}
-                    disabled={scanning || sending}
+                    // 돌려 읽는 동안에는 누를 수 있어요 — 새로 찍으면 하던 읽기를 버려요(반박 리뷰 4)
+                    disabled={scanLocked || sending}
                     aria-busy={scanning || undefined}
                   >
-                    {scanning ? SCAN_READING : "명함 다시 찍기"}
+                    {scanLocked ? SCAN_READING : SCAN_AGAIN}
                   </button>
                 </div>
-                <div className="scan-body">
-                  {photo && <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />}
-                  <div className="scan-chips" role="group" aria-label="명함에서 읽은 줄">
-                    {scan.chips.map((chip) => {
-                      const filled = isFilled(scan.links, chip.id, lockedFields);
-                      return (
-                        <button
-                          key={chip.id}
-                          type="button"
-                          className={`scan-chip${filled ? " is-filled" : ""}`}
-                          aria-pressed={filled}
-                          title={chip.text}
-                          // 누르는 동안 칸의 커서가 빠지지 않게(PC). 아이패드는 cursorField 가 방금 빠진 칸을 기억해요.
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={(e) => onChip(chip, e.timeStamp)}
-                          disabled={scanning}
-                        >
-                          {chip.text}
-                        </button>
-                      );
-                    })}
+                {/* 찍은 명함 사진은 접힌 채로도 보여요(칸 값을 명함과 견줘요). 읽은 줄은 펼쳤을 때 · 메일 주소를 골라야 할 때만 */}
+                {(photo || chipsShown) && (
+                  <div className="scan-body">
+                    {photo && <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />}
+                    {chipsShown && (
+                      <div id="scan-chips" className="scan-chips" role="group" aria-label="명함에서 읽은 줄">
+                        {scan.chips.map((chip) => {
+                          const filled = isFilled(scan.links, chip.id, lockedFields);
+                          return (
+                            <button
+                              key={chip.id}
+                              type="button"
+                              className={`scan-chip${filled ? " is-filled" : ""}`}
+                              aria-pressed={filled}
+                              title={chip.text}
+                              // 누르는 동안 칸의 커서가 빠지지 않게(PC). 아이패드는 cursorField 가 방금 빠진 칸을 기억해요.
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={(e) => onChip(chip, e.timeStamp)}
+                              disabled={scanning}
+                            >
+                              {chip.text}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
                 {/* 터치 기기에서 진하게 보인 대상 칸을 낭독기에도 알려요(UG-453 리뷰 m2) */}
-                {touchPrimary && (
+                {touchPrimary && chipsShown && (
                   <span className="visually-hidden" aria-live="polite">
                     {targetLabel ? `다음 줄은 ${targetLabel} 칸에 들어갑니다` : ""}
                   </span>
@@ -3429,11 +3555,12 @@ function CreateDialog({
                   type="button"
                   className="btn btn-outline scan-button"
                   onClick={() => fileRef.current?.click()}
-                  disabled={scanning || sending}
+                  disabled={scanLocked || sending}
                   aria-busy={scanning || undefined}
                 >
                   <IcCamera size={16} />
-                  {scanning ? SCAN_READING : "명함 찍어서 채우기"}
+                  {/* 못 읽은 뒤 · 돌려 읽는 동안에는 「명함 다시 찍기」(기획 17106-1 · 반박 리뷰 4) */}
+                  {scanLocked ? SCAN_READING : scanFailed || scanning ? SCAN_AGAIN : SCAN_BUTTON}
                 </button>
                 {/* 읽는 동안(N2)은 안내 아래에 기다림 안내를 한 줄 더 — 둘 다 상태 줄 안이라 낭독기가 읽어요 */}
                 <div className="scan-status" role="status">
@@ -3605,6 +3732,7 @@ function CreateDialog({
             {suspectBlocked && (
               <button
                 type="button"
+                ref={suspectConfirmRef}
                 className="btn btn-outline btn-sm suspect-confirm"
                 aria-describedby="email-suspect"
                 disabled={sending || scanning}
@@ -3650,6 +3778,7 @@ function CreateDialog({
                       langBeforePending.current = null; // 직접 고르면 되돌리지 않아요
                       setLanguage(value);
                       setLanguageChosen(true);
+                      setLanguageAuto(false);
                     }}
                   >
                     <Flag />

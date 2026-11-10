@@ -7,6 +7,8 @@
 // 일꾼은 「계정 만들기」 창이 열려 있는 동안만 살려 두고, 창을 닫으면 닫아요(createCardReader).
 // 배포 화면의 CSP 는 일꾼 안에서 wasm 을 돌릴 수 있게 script-src 에 'wasm-unsafe-eval' 이 있어야 해요(nginx 설정, 플랫폼 쪽).
 
+import { ROTATIONS, isReadable, needsRetry, pickReading, rotateBudget, type ReadingScore, type Rotation } from "./card-rotate.ts";
+import type { OcrLine } from "./card-scan.ts";
 import { createRetryBudget, loadWithRetry } from "./ocr-retry.ts";
 
 /** 사진의 긴 변을 이만큼으로 줄여 읽어요 — 아이패드 원본(4000px 안팎)은 느리고 글자 인식에도 득이 없어요. */
@@ -63,34 +65,91 @@ function drawScaled(bitmap: ImageBitmap, maxSide: number): HTMLCanvasElement | n
   return canvas;
 }
 
+/** 그림판 → 비교용 JPEG(data URL). 만들지 못하면 null */
+function toPreview(canvas: HTMLCanvasElement | null): string | null {
+  if (!canvas) return null;
+  try {
+    return canvas.toDataURL("image/jpeg", PREVIEW_QUALITY);
+  } catch {
+    return null;
+  }
+}
+
+/** 그림판을 시계 방향으로 90° · 180° · 270° 돌린 새 그림판(UG-451 기획 17106-3). 만들지 못하면 null */
+function rotated(src: HTMLCanvasElement, degrees: Exclude<Rotation, 0>): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  const sideways = degrees !== 180;
+  canvas.width = sideways ? src.height : src.width;
+  canvas.height = sideways ? src.width : src.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((degrees * Math.PI) / 180);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return canvas;
+}
+
 /**
- * 사진을 바로 세우고(촬영 방향 정보 반영) 읽기용 그림판(긴 변 2000)과 비교용 JPEG(긴 변 1200, data URL)으로 옮겨요.
- * blob: 주소는 만들지 않아요 — CSP(img-src)가 'self' data: 만 허용해요. 열지 못하는 형식이면 둘 다 null(원본을 그대로 읽어요).
+ * 사진을 바로 세우고(촬영 방향 정보 반영) 읽기용 그림판(긴 변 2000)과 비교용 그림판(긴 변 1200) · 그 JPEG(data URL)으로 옮겨요.
+ * blob: 주소는 만들지 않아요 — CSP(img-src)가 'self' data: 만 허용해요. 열지 못하는 형식이면 모두 null(원본을 그대로 읽어요).
+ * 비교용 그림판(small)은 돌려 읽은 방향이 이기면 그 방향으로 다시 그리려고 읽기가 끝날 때까지 남겨요(끝나면 read 가 비워요).
  */
-async function prepare(file: Blob): Promise<{ canvas: HTMLCanvasElement | null; preview: string | null }> {
+async function prepare(file: Blob): Promise<{ canvas: HTMLCanvasElement | null; small: HTMLCanvasElement | null; preview: string | null }> {
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   } catch {
-    return { canvas: null, preview: null };
+    return { canvas: null, small: null, preview: null };
   }
   try {
     const canvas = drawScaled(bitmap, MAX_SIDE);
     const small = drawScaled(bitmap, PREVIEW_SIDE);
-    let preview: string | null = null;
-    if (small) {
-      try {
-        preview = small.toDataURL("image/jpeg", PREVIEW_QUALITY);
-      } catch {
-        preview = null;
-      }
-      small.width = small.height = 0;
-    }
-    return { canvas, preview };
+    return { canvas, small, preview: toPreview(small) };
   } finally {
     bitmap.close();
   }
 }
+
+type OcrPage = Awaited<ReturnType<OcrWorker["recognize"]>>["data"];
+
+/** 글자 읽기 결과의 줄 · 낱말과 그 인식 점수(0~100) — 회사명 · 이름 자동 채움이 점수가 높은 줄만 쓰려고(UG-451 기획 17100). 도구가 주지 않으면 null */
+function linesOf(data: OcrPage): OcrLine[] | null {
+  if (!data.blocks) return null;
+  const lines: OcrLine[] = [];
+  for (const block of data.blocks) {
+    for (const paragraph of block.paragraphs ?? []) {
+      for (const line of paragraph.lines ?? []) {
+        lines.push({
+          text: line.text,
+          confidence: line.confidence,
+          words: (line.words ?? []).map((w) => ({ text: w.text, confidence: w.confidence })),
+        });
+      }
+    }
+  }
+  return lines;
+}
+
+/** 글자와 함께 줄 · 낱말 점수(blocks)도 받아요 */
+const OCR_OUTPUT = { text: true, blocks: true } as const;
+
+/**
+ * 돌려 읽기(UG-451 기획 17106-3) — judge = 한 방향으로 읽은 글자의 점수(화면이 card-scan 으로 매겨요),
+ * onRetry = 다른 방향으로 다시 읽기 시작할 때(attempt 번째 / 모두 total 방향) — 기다림 안내가 멈춘 것처럼 보이지 않게 화면이 알려요
+ */
+export type RotateOptions = {
+  judge: (text: string, lines: OcrLine[] | null) => ReadingScore;
+  onRetry?: (attempt: number, total: number) => void;
+};
+
+/** 읽은 결과 — rotation = 쓴 방향(시계 방향으로 돌린 각도, 0 = 찍힌 그대로). preview 도 그 방향으로 세운 사진이에요 */
+export type CardReading = {
+  text: string | null;
+  lines: OcrLine[] | null;
+  preview: string | null;
+  failure: ReadFailure | null;
+  rotation: Rotation;
+};
 
 type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 type OcrLog = { status: string; progress: number };
@@ -137,6 +196,10 @@ const closeLater = (pending: Promise<OcrWorker>) => void pending.then((w) => w.t
 export function createCardReader() {
   let worker: Promise<OcrWorker> | null = null;
   let disposed = false;
+  // 지금 하는 읽기(UG-451 반박 리뷰 4) — 돌려 읽는 동안 직원이 「명함 다시 찍기」로 새 사진을 주면 앞 읽기를 버려요.
+  // generation = 읽기 차례 번호(새 읽기가 시작되면 앞 읽기는 더 돌리지 않아요), abortCurrent = 앞 읽기가 기다리던 글자 읽기를 바로 끊는 함수
+  let generation = 0;
+  let abortCurrent: (() => void) | null = null;
   // 도구를 받는 동안의 마지막 소식 시각 · 진행률을 받을 곳(읽는 동안만)
   let lastActivity = 0;
   let onProgress: ((percent: number) => void) | null = null;
@@ -202,38 +265,110 @@ export function createCardReader() {
   }
 
   /**
-   * 명함 사진에서 읽은 글자(줄바꿈 포함)와 비교용 줄인 사진(data URL, 만들지 못하면 null).
+   * 명함 사진에서 읽은 글자(줄바꿈 포함) · 줄 점수와 비교용 줄인 사진(data URL, 만들지 못하면 null).
    * 읽기 도구를 받지 못했거나 읽다가 실패하면 text 가 null 이고 failure 에 까닭이 있어요 — 그래도 이번 사진(preview)은 돌려줘요(앞 명함 사진이 남지 않게).
    * progress = 도구를 받는 동안의 진행률(0~100). 이미 받아 둔 도구면 부르지 않아요.
+   * rotate 를 주면 찍힌 방향으로 읽은 결과가 「못 읽음」(needsRetry)일 때만 180° → 90° → 270° 로 돌려 다시 읽고, 가장 나은 방향의 결과를 돌려줘요
+   * (UG-451 기획 17106-3, card-rotate.ts). 돌려 읽은 방향이 이기면 preview 도 그 방향으로 세워요 — 썸네일 · 크게 보기 · 서버에 남기는 사진이 모두 이 preview 예요.
+   * 돌려 읽기는 첫 읽기 시작부터 ROTATE_START_LIMIT_MS 안에만 시작하고 ROTATE_TOTAL_MS 에 끊어요. 끊긴(멈춘) 일꾼은 버리고 그때까지의 결과를 써요.
+   * 브라우저가 열지 못한 사진(그림판 없음)은 돌릴 수 없어 찍힌 그대로만 읽어요.
+   * 읽는 중에 read 가 또 불리면(돌려 읽는 동안의 「명함 다시 찍기」) 앞 읽기는 버려요 — 읽던 일꾼을 닫아 새 읽기가 기다리지 않게 하고,
+   * 앞 읽기는 더 돌리지 않고 그때까지의 결과로 바로 끝나요(화면이 그 결과를 쓰지 않아요 — 읽기 차례 번호로 걸러요).
    */
-  async function read(
-    photo: Blob,
-    progress?: (percent: number) => void,
-  ): Promise<{ text: string | null; preview: string | null; failure: ReadFailure | null }> {
-    const { canvas, preview } = await prepare(photo);
+  async function read(photo: Blob, progress?: (percent: number) => void, rotate?: RotateOptions): Promise<CardReading> {
+    // 앞 읽기가 아직 돌고 있으면 버려요 — 읽던 일꾼은 닫고(읽는 중인 글자 읽기는 멈출 수 없어요) 새 일꾼으로 읽어요
+    const mine = ++generation;
+    abortCurrent?.();
+    abortCurrent = null;
+    const { canvas, small, preview } = await prepare(photo);
+    if (mine !== generation) {
+      // 사진을 여는 사이 더 새 읽기가 시작됨
+      if (canvas) canvas.width = canvas.height = 0;
+      if (small) small.width = small.height = 0;
+      return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+    }
     onProgress = progress ?? null;
+    // 이 읽기가 쓰는 일꾼 — 버려지면(abort) 이 일꾼만 닫아요(그사이 새 읽기가 띄운 일꾼은 건드리지 않아요)
+    let used: Promise<OcrWorker> | null = null;
+    const dropUsed = () => {
+      if (!used) return;
+      closeLater(used);
+      if (worker === used) worker = null;
+      used = null;
+    };
+    let abort: () => void = () => undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abort = () => reject(new Error("새 명함 읽기가 시작됨"));
+    });
+    aborted.catch(() => undefined);
+    /** 글자 읽기 한 번 — 한도(ms)가 지나거나 새 읽기가 시작되면 끊어요 */
+    const recognize = (w: OcrWorker, image: HTMLCanvasElement | Blob, ms: number) =>
+      Promise.race([withTimeout(w.recognize(image, {}, OCR_OUTPUT), ms), aborted]);
     try {
       let w: OcrWorker;
       try {
         w = await ready();
       } catch {
         // 읽기 도구를 받지 못함(첫 사용 · 인터넷 없음 · 시간 초과) — 다시 받기를 다 썼으면 새로 고치라고 안내해요
-        return { text: null, preview, failure: retryBudget.spent ? "tool_reload" : "tool" };
+        return { text: null, lines: null, preview, failure: retryBudget.spent ? "tool_reload" : "tool", rotation: 0 };
       } finally {
         onProgress = null;
       }
+      if (mine !== generation) return { text: null, lines: null, preview, failure: "read", rotation: 0 };
+      used = worker;
+      abortCurrent = () => {
+        dropUsed();
+        abort();
+      };
+      const started = Date.now();
+      let first: OcrPage;
       try {
-        const { data } = await withTimeout(w.recognize(canvas ?? photo), READ_TIMEOUT_MS);
-        return { text: data.text, preview, failure: null };
+        ({ data: first } = await recognize(w, canvas ?? photo, READ_TIMEOUT_MS));
       } catch {
-        // 읽다가 멈춘 일꾼은 다시 쓰지 않아요
-        if (worker) closeLater(worker);
-        worker = null;
-        return { text: null, preview, failure: "read" };
+        // 읽다가 멈춘(또는 버려진) 일꾼은 다시 쓰지 않아요
+        dropUsed();
+        return { text: null, lines: null, preview, failure: "read", rotation: 0 };
       }
+      const readings: { rotation: Rotation; text: string; lines: OcrLine[] | null }[] = [{ rotation: 0, text: first.text, lines: linesOf(first) }];
+      if (!canvas || !rotate) return { text: readings[0].text, lines: readings[0].lines, preview, failure: null, rotation: 0 };
+      const scores = [rotate.judge(readings[0].text, readings[0].lines)];
+      for (const rotation of ROTATIONS) {
+        if (rotation === 0) continue;
+        // 방금 읽은 방향에서 찾았으면 끝 · 창을 닫았거나 새 읽기가 시작됐거나 한도가 지났으면 더 돌리지 않아요
+        const budget = rotateBudget(Date.now() - started);
+        // 찍힌 그대로가 읽혔거나 글자가 거의 없으면 돌리지 않고, 돌려 읽다가 읽힌 방향이 나오면 멈춰요
+        const settled = scores.length === 1 ? !needsRetry(scores[0]) : isReadable(scores[scores.length - 1]);
+        if (settled || disposed || mine !== generation || budget <= 0) break;
+        const turned = rotated(canvas, rotation);
+        if (!turned) break;
+        rotate.onRetry?.(readings.length + 1, ROTATIONS.length);
+        try {
+          const { data } = await recognize(w, turned, Math.min(READ_TIMEOUT_MS, budget));
+          const lines = linesOf(data);
+          readings.push({ rotation, text: data.text, lines });
+          scores.push(rotate.judge(data.text, lines));
+        } catch {
+          // 돌려 읽다가 멈춤 · 한도 초과 · 새 읽기에 밀림 — 일꾼은 버리고 그때까지 읽은 결과를 써요(읽기 실패가 아니에요)
+          dropUsed();
+          break;
+        } finally {
+          turned.width = turned.height = 0;
+        }
+      }
+      const best = readings[pickReading(scores)];
+      let upright = preview;
+      if (best.rotation !== 0 && small) {
+        // 돌려 읽은 방향이 이겼으면 비교용 사진도 바로 세워요 — 만들지 못하면 찍힌 그대로
+        const turned = rotated(small, best.rotation);
+        upright = toPreview(turned) ?? preview;
+        if (turned) turned.width = turned.height = 0;
+      }
+      return { text: best.text, lines: best.lines, preview: upright, failure: null, rotation: best.rotation };
     } finally {
+      if (mine === generation) abortCurrent = null;
       // 그림판 메모리도 바로 비워요
       if (canvas) canvas.width = canvas.height = 0;
+      if (small) small.width = small.height = 0;
       if (disposed && worker) {
         closeLater(worker);
         worker = null;
@@ -248,6 +383,9 @@ export function createCardReader() {
 
   function dispose() {
     disposed = true;
+    // 읽는 중이면 바로 끊어요(그림판 · 일꾼을 기다리지 않고 정리)
+    abortCurrent?.();
+    abortCurrent = null;
     if (attempt) attempt.live = false;
     attempt = null;
     if (worker) closeLater(worker);
