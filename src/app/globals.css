@@ -168,6 +168,8 @@ p {
 /* 의심 주소 경고 아래 「명함과 같은 주소예요」(UG-451 기획 17030) — 왼쪽에 붙은 작은 테두리 버튼 */
 .suspect-confirm { align-self: flex-start; }
 .error { color: var(--danger-400); }
+/* 주의 안내(Warning) — 다시 찍은 명함이 다른 사람이라 직원이 넣은 값을 지웠을 때(UG-451 기획 17132). 상태 점과 같은 Warning/300 */
+.warning { color: var(--status-wait); }
 /* 칸 두 개를 한 줄에(회사명 · 이름 / 고객 이메일 · 연락처) — 휴대폰은 위아래로 */
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .field-row > .field { min-width: 0; }

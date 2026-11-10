@@ -66,6 +66,47 @@ test("UG-451 ② 끝 도메인 오독(.cor)은 채우지 않아요", () => {
   assert.equal(card("sales@bridgemedia.cor").values.email, "");
 });
 
+test("UG-451 기획 17132 실재하지 않는 끝 도메인(IANA 목록에 없음)은 채우지 않고 「확인하지 못했습니다」로", () => {
+  // .ai 를 .qi 로 읽음 — 칸은 비우고, 메일 칩은 읽은 그대로 남아 「메일 주소를 확인하지 못했습니다」(outcome found + 메일 모양 칩)
+  for (const address of ["user1@company-a.qi", "USER1@COMPANY-A.QI", "user1@company-a.co.qi"]) {
+    assert.equal(isSuspectEmail(address), true, address);
+    const r = card("Company A", address, "010-5555-0100");
+    assert.equal(r.values.email, "", address);
+    assert.equal(r.links.email, undefined, address);
+    const chip = r.chips.find((c) => c.kind === "email");
+    assert.equal(chip?.text, address);
+    assert.equal(chip !== undefined && isSuspectChip(chip) && isEmailLikeChip(chip), true, address);
+    // 직원이 칩을 눌러 넣거나 그대로 쳐도 「명함과 같은 주소예요」로 확인해야 보내져요(다른 의심 주소와 같은 길)
+    assert.equal(isSuspectValue(address.toLowerCase(), r.chips), true, address);
+  }
+  // 메일 칩만 있는 명함도 「확인하지 못했습니다」(unsure)
+  assert.equal(card("user1@company-a.qi").outcome, "unsure");
+});
+
+test("UG-451 기획 17132 실재하는 끝 도메인은 그대로 채워요(나라 · 일반 도메인, 대문자도)", () => {
+  const ok: [string, string][] = [
+    ["user1@company-a.ai", "user1@company-a.ai"],
+    ["x@y.co.kr", "x@y.co.kr"],
+    ["a@b.com.sg", "a@b.com.sg"],
+    ["a@b.io", "a@b.io"],
+    ["a@b.net", "a@b.net"],
+    ["a@b.org", "a@b.org"],
+    ["a@b.kr", "a@b.kr"],
+    ["a@b.sg", "a@b.sg"],
+    ["a@b.tech", "a@b.tech"],
+    ["E. A@B.COM", "a@b.com"],
+  ];
+  for (const [line, email] of ok) {
+    assert.equal(isSuspectEmail(line), false, line);
+    assert.equal(card(line).values.email, email, line);
+  }
+  // 전부터 오독으로 보던 끝 도메인은 그대로 의심(실재하는 .cm · .om 포함)
+  for (const line of ["kim@x.cor", "kim@x.con", "kim@x.cm", "kim@x.om", "kim@x.comsg", "kim@x.comtel 02-1", "kim@x.coM"]) {
+    assert.equal(isSuspectEmail(line), true, line);
+    assert.equal(card(line).values.email, "", line);
+  }
+});
+
 test("UG-451 ② 정상 주소 · 라벨 · 문장 끝 점 · 앞 전화번호는 그대로 채워요", () => {
   const ok: [string, string][] = [
     ["daeun.jung@miraero-logis.co.kr", "daeun.jung@miraero-logis.co.kr"],

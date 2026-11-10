@@ -3471,11 +3471,11 @@ function CreateDialog({
     else emailRef.current?.focus();
   }
 
-  // 다시 찍은 뒤의 안내(UG-451 기획 17118-1) — 다른 사람이라 지운 값은 회색, 같은 사람인지 몰라 남긴 값은 빨간색(확인해야 해요).
-  // 그 칸을 직원이 고치면 그 칸 이름이 빠지고, 모두 고치면 내려가요. 읽는 동안에는 띄우지 않아요
+  // 다시 찍은 뒤의 안내(UG-451 기획 17118-1) — 다른 사람이라 지운 값은 주황(Warning, 기획 17132 — 「명함에서 읽었습니다…」 회색과 갈리게),
+  // 같은 사람인지 몰라 남긴 값은 빨간색(확인해야 해요). 그 칸을 직원이 고치면 그 칸 이름이 빠지고, 모두 고치면 내려가요. 읽는 동안에는 띄우지 않아요
   const retakeText = scanning ? null : retakeNoteText(retakeNoted, { company, name, email, phone }, CHIP_TARGET_LABEL);
   const retakeLine = retakeText && (
-    <p className={retakeNoted?.kind === "stale" ? "error" : "help"} role="status">
+    <p className={retakeNoted?.kind === "stale" ? "error" : "warning"} role="status">
       {retakeText}
     </p>
   );
