@@ -3760,7 +3760,7 @@ function CreateDialog({
               닫기
             </button>
             {(fixSame || oldRevoked) && cancelError !== "in_use" && cancelError !== "not_found" && cancelError !== "closing" && (
-              <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling || sending} aria-busy={cancelling || undefined}>
+              <button type="button" className="btn btn-danger-outline" onClick={() => cancelNow(fix)} disabled={cancelling || sending || checking} aria-busy={cancelling || undefined}>
                 {cancelling ? "취소하는 중…" : "발급 취소"}
               </button>
             )}
