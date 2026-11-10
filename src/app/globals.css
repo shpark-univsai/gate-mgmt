@@ -747,16 +747,19 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .profile-menu-item { height: 40px; }
   .content { padding: 16px; gap: 12px; }
   .page-title h1 { font-size: 20px; line-height: 28px; }
-  .page-actions .btn { height: 44px; } /* 「계정 만들기」 · 「계정 해지」 32 → 44(UG-453 기획 2) */
+  /* 「계정 만들기」 · 「계정 해지」: 보이는 높이 36, 누르는 영역은 위아래 4 씩 투명하게 넓혀 44(UG-453 기획 17101 — 44 로 꽉 차 보여 무거웠어요) */
+  .page-actions .btn { position: relative; height: 36px; }
+  .page-actions .btn::after { content: ""; position: absolute; inset: -5px -1px; } /* 테두리(1) 바깥 4 = 36 + 8 */
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
   .list-errors { margin-bottom: 0; }
   .search { width: 100%; height: 44px; } /* UG-453 기획 1 — 40 → 44 */
   .status-chips { display: flex; gap: 8px; width: 100%; overflow-x: auto; scrollbar-width: none; }
   .status-chips.has-more { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); } /* 오른쪽에 칩이 더 있으면 끝을 흐리게 — 옆으로 밀 수 있다는 표시 */
   .status-chips::-webkit-scrollbar { display: none; }
-  .status-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 44px; /* UG-453 기획 2 — 32 → 44 */ padding: 0 12px; border: 1px solid var(--gray-200); border-radius: var(--radius-control); background: var(--gray-0); color: var(--gray-700); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+  /* 고르지 않은 칩은 테두리 · 채움 없이 글자만(UG-453 기획 17101) — 누르는 높이는 44 그대로 */
+  .status-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 44px; /* UG-453 기획 2 — 32 → 44 */ padding: 0 12px; border: 0; border-radius: var(--radius-control); background: none; color: var(--gray-700); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
   .status-chip-count { font-weight: 400; color: var(--gray-500); }
-  .status-chip.is-on { background: var(--gray-200); border-color: transparent; color: var(--gray-900); } /* 선택은 바탕만, 테두리 없음 · 검정은 「계정 만들기」에만 */
+  .status-chip.is-on { background: var(--gray-200); color: var(--gray-900); } /* 선택은 바탕만, 테두리 없음 · 검정은 「계정 만들기」에만 */
   .empty { padding: 48px 16px; }
   .search input { font-size: 16px; }
   .search-clear { width: 44px; height: 44px; margin-right: -16px; } /* 누르는 영역 44(UG-453), ✕ 자리는 그대로 */
@@ -790,6 +793,13 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
    * 같은 줄에 두고 누르는 영역끼리 8px 띄워요. 누르는 영역은 높이 44 — 줄 높이(20)는 그대로, 위아래 12 는 글자뿐인 윗줄 · 아랫줄 쪽으로(카드 안)
    */
   .card-actions { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+  /*
+   * 계정 발급 카드 둘째 줄 왼쪽(UG-453 기획 17101): 이메일 바로 뒤에 「메일 재발송」 · 「이어서 만들기」 — ⋮ 바로 옆이라 둘이 붙어 보였어요. ⋮ 는 오른쪽 끝 그대로.
+   * 이메일이 길면 이메일만 「…」로 줄고(눌러서 전체 — .tap-tip) 버튼은 줄지 않아요(.link-action 은 flex: none)
+   */
+  .card-contact { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+  .card-email-clip { flex: 0 1 auto; }
+  .card-email-line { display: block; min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
   .card-more { position: relative; display: inline-flex; }
   .card-more-button { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -12px -13px -12px 0; padding: 0; border: 0; background: none; color: var(--gray-500); cursor: pointer; border-radius: var(--radius-control); } /* 누르는 영역 44×44, 아이콘(18)은 카드 오른쪽 끝에 맞춰요(오른쪽 13 은 화면 여백 16 안으로) */
   .profile-menu.card-more-menu { top: calc(100% + 14px); right: 0; min-width: 140px; } /* ⋮ 누르는 영역 바로 아래 */
@@ -810,7 +820,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
     color: var(--gray-900);
     cursor: pointer;
   }
-  .link-action--muted { font-weight: 400; color: var(--gray-500); }
+  .link-action--muted { font-weight: 400; color: var(--gray-500); } /* 「메일 재발송」 · 「이어서 만들기」 — 회색 · 보통 굵기, 아이콘도 같은 색(currentColor, UG-453 기획 17101) */
 
   .pagination { grid-template-columns: 1fr; justify-items: center; gap: 8px; margin-top: 0; }
   .pagination.is-single { display: none; } /* 한 페이지뿐이면 휴대폰은 번호 줄을 감춰요 */

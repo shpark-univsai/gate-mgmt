@@ -5,6 +5,8 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "UNIVS GATE Backoffice",
   robots: { index: false, follow: false },
+  // 아이폰 Safari 가 이메일 · 전화번호를 저절로 링크(밑줄)로 바꾸지 않게(UG-453 기획 17101)
+  formatDetection: { telephone: false, email: false },
 };
 
 export const viewport: Viewport = {

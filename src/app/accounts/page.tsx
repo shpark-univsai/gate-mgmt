@@ -41,7 +41,7 @@ import {
   type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
-import { isTextTruncated } from "@/lib/text-overflow";
+import { isTextTruncated, tipOpensUp } from "@/lib/text-overflow";
 import { isTouchPrimary } from "@/lib/pointer";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
@@ -363,15 +363,26 @@ function TapClip({
   /** 글자 바로 아래(화면 아래 끝이면 위)에 띄워요 — 폭은 감싼 상자 폭(좁으면 240)까지, 화면 밖으로 나가지 않게 */
   function toggle() {
     if (pos) return setPos(null);
-    const r = wrapRef.current?.getBoundingClientRect();
-    if (!r) return;
+    const wrap = wrapRef.current;
+    const r = wrap?.getBoundingClientRect();
+    if (!wrap || !r) return;
     // 다른 말풍선이 열려 있으면 닫고 이것을 열어요 — 한 번 눌러 바로 바뀌어요(기획 17028)
     if (openTapClip && openTapClip.id !== tipId) openTapClip.close();
     const margin = 8;
     const left = Math.max(margin, Math.min(r.left, window.innerWidth - margin - 240));
     const maxWidth = Math.max(Math.min(Math.max(r.width, 240), window.innerWidth - left - margin), 120);
-    // 말풍선 높이는 대개 한두 줄(30~48) — 아래 자리가 모자라면 위로
-    setPos(window.innerHeight - r.bottom < 72 ? { left, bottom: window.innerHeight - r.top + 4, maxWidth } : { left, top: r.bottom + 4, maxWidth });
+    // 말풍선 높이는 대개 한두 줄(30~48) — 아래 자리가 모자라면 위로. 아주 긴 이름은 서너 줄이라 아래로 펴면 화면 밖으로 잘려요(UG-453 기획 17101) —
+    // 같은 자리 · 폭의 보이지 않는 말풍선으로 실제 높이를 재서(재고 바로 떼요) 아래에 못 들어가고 위에 들어가면 위로
+    const probe = document.createElement("span");
+    probe.className = "tap-tip";
+    probe.textContent = text;
+    Object.assign(probe.style, { left: `${left}px`, top: "0", maxWidth: `${maxWidth}px`, visibility: "hidden" });
+    wrap.append(probe);
+    const need = probe.getBoundingClientRect().height + 4 + margin;
+    probe.remove();
+    setPos(
+      tipOpensUp(window.innerHeight - r.bottom, r.top, need) ? { left, bottom: window.innerHeight - r.top + 4, maxWidth } : { left, top: r.bottom + 4, maxWidth },
+    );
   }
 
   const Tag = strong ? "strong" : "span";
@@ -491,6 +502,25 @@ function GoneCardCompany({ account, query, resetOn }: { account: Account; query:
       resetOn={resetOn}
     >
       <CompanyCell account={account} query={query} />
+    </TapClip>
+  );
+}
+
+/**
+ * 휴대폰 카드 둘째 줄의 고객 이메일(UG-453 기획 17101) — 바로 뒤에 「메일 재발송」 · 「이어서 만들기」가 붙어요.
+ * 길면 이메일만 한 줄 말줄임(버튼은 줄지 않아요), 눌러서 전체 주소를 말풍선으로 봐요(회사명과 같은 TapClip). 없으면 「—」.
+ */
+function CardEmail({ email, query, resetOn }: { email: string | null; query: string; resetOn: readonly unknown[] }) {
+  if (!email) {
+    return (
+      <span className="card-email">
+        <span className="dash">—</span>
+      </span>
+    );
+  }
+  return (
+    <TapClip text={email} className="card-email card-email-line" wrapClassName="card-email-clip" dismissLayer watch={[email, query]} resetOn={resetOn}>
+      <Highlight text={email} query={query} />
     </TapClip>
   );
 }
@@ -1414,21 +1444,21 @@ export default function AccountsPage() {
                 </span>
               </div>
               <div className="card-line">
-                <span className="card-email">
-                  {d.email ? <Highlight text={d.email} query={applied.keyword} /> : <span className="dash">—</span>}
-                </span>
-                {/* 「이어서 만들기」 오른쪽 끝에 ⋮(UG-453 기획 2) — 위아래로 붙어 있던 ⋮ 와 버튼을 같은 줄에 8px 띄워 잘못 눌리지 않게.
+                {/* 「이어서 만들기」는 이메일(없으면 「—」) 바로 뒤, ⋮ 는 오른쪽 끝(UG-453 기획 2 · 17101) — 계정 카드의 「메일 재발송」과 같은 자리.
                     드물게 쓰는 「지우기」는 발급 취소처럼 더보기 안에 — 자주 쓰는 이어서 만들기만 카드에 보여요 */}
-                <span className="card-actions">
+                <span className="card-contact">
+                  <CardEmail email={d.email} query={applied.keyword} resetOn={listStamp} />
                   <button
                     type="button"
-                    className="link-action"
+                    className="link-action link-action--muted"
                     onClick={() => resumeDraft(d)}
                     disabled={resumingId !== null}
                     aria-busy={resumingId === d.id || undefined}
                   >
                     {resumingId === d.id ? "여는 중…" : "이어서 만들기"}
                   </button>
+                </span>
+                <span className="card-actions">
                   <CardMore items={[{ label: "지우기", onSelect: () => setDraftDeleteTarget(d) }]} disabled={resumingId === d.id} />
                 </span>
               </div>
@@ -1464,17 +1494,20 @@ export default function AccountsPage() {
                   </span>
                 </div>
                 <div className="card-line">
-                  <span className="card-email">{a.email ? <Highlight text={a.email} query={applied.keyword} /> : <span className="dash">—</span>}</span>
-                  {/* 「메일 재발송」 오른쪽 끝에 ⋮(UG-453 기획 2) — 전에는 ⋮(윗줄)와 재발송(아랫줄) 누르는 영역이 3px 떨어져 재발송을 누르면 ⋮ 메뉴가 열리곤 했어요.
-                      같은 줄에 8px 띄워요. 드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
+                  {/* 「메일 재발송」은 이메일 바로 뒤(UG-453 기획 17101 — ⋮ 바로 옆이라 둘이 붙어 보였어요). 이메일이 길면 이메일만 줄어요 */}
+                  <span className="card-contact">
+                    <CardEmail email={a.email || null} query={applied.keyword} resetOn={listStamp} />
+                    {canResend(a) && (
+                      <button type="button" className="link-action link-action--muted" onClick={() => setResendTarget(a)}>
+                        <IcReload size={14} />
+                        메일 재발송
+                      </button>
+                    )}
+                  </span>
+                  {/* 둘째 줄 오른쪽 끝에 ⋮(UG-453 기획 2) — 전에는 ⋮(윗줄)와 재발송(아랫줄) 누르는 영역이 3px 떨어져 재발송을 누르면 ⋮ 메뉴가 열리곤 했어요.
+                      드물게 쓰는 「발급 취소」는 더보기 안에 — 자주 쓰는 재발송만 카드에 보여요 */}
                   {a.status === "pending" ? (
                     <span className="card-actions">
-                      {canResend(a) && (
-                        <button type="button" className="link-action" onClick={() => setResendTarget(a)}>
-                          <IcReload size={14} />
-                          메일 재발송
-                        </button>
-                      )}
                       <CardMore
                         items={[
                           ...(canViewCardPhoto(a) ? [{ label: CARD_PHOTO_TEXT.listView, onSelect: () => void openCardPhoto(a) }] : []),
