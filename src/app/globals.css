@@ -783,18 +783,19 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 
   .input-box input { font-size: 16px; line-height: 24px; } /* 16px보다 작으면 iPhone이 칸을 누를 때 화면을 확대해요 */
 
-  .app-nav { height: 48px; padding: 0 16px; }
-  :root { --app-nav-h: 48px; } /* 터치 기기 목록 화면 알림 위치(머리 줄 아래)가 쓰는 값 */
+  /* 머리 줄 48 · 탭 줄 45 — 높이는 여기서만 바꿔요(--app-nav-h 가 둘을 더해 따라가요) */
+  :root { --app-header-h: 48px; --app-tabs-h: 45px; }
+  .app-nav { height: var(--app-header-h); padding: 0 16px; }
+  :root { --app-nav-h: var(--app-header-h); } /* 터치 기기 목록 화면 알림 위치(머리 줄 아래)가 쓰는 값 */
   /* 머리 줄 아래 탭 줄(UG-458 기획 17188): 두 칸 같은 폭 · 누르는 높이 45(44 이상) · 고른 칸은 PC 위쪽 메뉴처럼 진한 글자 + 아래 2 선.
-     줄 높이 45 = 탭 44 + 아래 테두리 1, 탭은 테두리 위까지 내려와 고른 칸의 선이 테두리를 덮어요 */
-  .app-tabs { display: flex; height: 45px; background: var(--gray-0); border-bottom: 1px solid var(--gray-200); }
+     줄 높이 45 = 안쪽 44 + 아래 테두리 1, 탭은 줄 높이 그대로(45)라 테두리까지 내려와 고른 칸의 선이 테두리를 덮어요 */
+  .app-tabs { display: flex; height: var(--app-tabs-h); background: var(--gray-0); border-bottom: 1px solid var(--gray-200); }
   .app-tab {
     flex: 1 1 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 45px;
-    margin-bottom: -1px;
+    height: var(--app-tabs-h);
     font-size: 14px;
     line-height: 20px;
     font-weight: 800;
@@ -805,8 +806,9 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   }
   .app-tab.is-active { color: var(--gray-900); border-bottom-color: var(--gray-900); }
   .app-tab:focus-visible { outline: 2px solid var(--gray-900); outline-offset: -2px; }
+  .app-tab:active { background: var(--gray-50); } /* 누르는 동안 옅은 바탕 — 터치 기본 강조를 껐으니 눌림이 보이게(반박 리뷰) */
   /* 탭 줄이 있는 화면(로그인 뒤 계정 발급 · 계정 해지)은 머리 줄 높이를 탭 줄까지(48 + 45) — 알림이 탭을 가리지 않게 그 아래에 떠요 */
-  :root:has(.app-tabs) { --app-nav-h: 93px; }
+  :root:has(.app-tabs) { --app-nav-h: calc(var(--app-header-h) + var(--app-tabs-h)); }
   .app-menu,
   .identity-name,
   .breadcrumb,

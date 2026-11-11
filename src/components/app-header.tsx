@@ -38,7 +38,7 @@ export function AppHeader({ current, email, onLogout }: { current: MenuKey; emai
         <ProfileMenu current={current} email={email} onLogout={onLogout} />
       </header>
       {/* 휴대폰 탭 줄 — 거르기 조건 없이 그 화면 처음 모양으로 가요(위쪽 메뉴와 같은 주소). 뒤로 가기는 앞 화면의 조건(주소)으로 돌아가요 */}
-      <nav className="app-tabs" aria-label="메뉴">
+      <nav className="app-tabs" aria-label="화면 이동">
         {MENU.map((m) => (
           <Link
             key={m.key}
