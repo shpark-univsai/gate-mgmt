@@ -24,7 +24,7 @@
   /* 계정 해지 확인 창(T3) 경고 상자 — Figma 시안 값(UG-443 기획 16925) */
   --danger-surface: #fff7f6;
   --danger-text: #bf3636;
-  --warning-text: #b45309; /* 주의 안내 글자(UG-451 기획 17132) — 흰 바탕 대비 약 5:1. 디자인 시스템에 Warning 글자 값이 없어 저희가 정함 */
+  --warning-text: #c25700; /* 주의 안내 글자 — 디자인 시스템 Color/Semantic/Warning/600(UG-451 기획 17140), 흰 바탕 대비 약 4.5:1 */
   --success-600: #16a34a;
   --overlay-dark-80: rgb(14 22 42 / 0.8);
   --viewer-backdrop: #000; /* 명함 크게 보기 바탕 — 사진 앱처럼 검정으로 덮어요(UG-455 기획 17099-1). 조금이라도 비치면(0.95 · 0.98) 뒤 글자가 읽혀 불투명하게 */
