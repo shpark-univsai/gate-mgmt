@@ -332,7 +332,8 @@ function ClosuresScreen() {
 
   /** 「계정 해지」 — PC · 아이패드는 제목 줄 오른쪽, 휴대폰(≤ 640)은 검색 칸 오른쪽(UG-458 기획 17191). 화면 폭에 맞는 하나만 보여요(globals.css) */
   const closeButton = (extraClass: string) => (
-    <button type="button" className={`btn btn-dark btn-sm${extraClass}`} onClick={() => setOpening(true)}>
+    // data-twin — 창을 닫을 때 숨은 쪽이 연 버튼이면 보이는 짝으로 초점(Dialog)
+    <button type="button" className={`btn btn-dark btn-sm${extraClass}`} data-twin="start-closure" onClick={() => setOpening(true)}>
       계정 해지
     </button>
   );

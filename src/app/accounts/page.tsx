@@ -1190,6 +1190,7 @@ function AccountsScreen() {
     <button
       type="button"
       className={`btn btn-dark btn-sm${extraClass}`}
+      data-twin="create-account" // 창을 닫을 때 숨은 쪽이 연 버튼이면 보이는 짝으로 초점(Dialog)
       onClick={() => setCreating({ draft: null })}
       // 이어서 만들기 응답을 기다리는 동안은 새 창을 열지 않아요(두 창이 겹치지 않게)
       disabled={resumingId !== null}
