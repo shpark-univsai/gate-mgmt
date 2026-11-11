@@ -5,7 +5,7 @@
 // 처리는 서버가 단계마다 기록하며 이어 가요(로그인 막기 → 프로젝트 · 데이터 파기 → 계정 삭제 → 처리 기록). 이 화면은 기록을 보여 주고
 // 실행 · 다시 시도만 해요. 결과 알림 메일은 만들지 않아요 — 직원이 고객의 탈퇴 요청 메일에 답장해요(Figma 규칙 10번 문안).
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, PopupSelect, StatusChips, Toast, ToastStack } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { IcArrowLeft, IcArrowRight, IcInputClose, IcSearch } from "@/components/icons";
@@ -17,17 +17,40 @@ import {
   startClosure,
   withdrawClosure,
   type Closure,
+  type ClosureSource,
   type ClosureStatus,
+  type ClosureStatusFilter,
   type ClosureStep,
   type ClosureTarget,
+  type SignupSource,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
+import { CLOSURES_DEFAULT, parseClosuresQuery, serializeClosuresQuery, type ClosuresQuery } from "@/lib/list-query";
+import { useUrlQuery } from "@/lib/use-url-query";
 import { isTouchPrimary } from "@/lib/pointer";
 import { fmtDate, fmtFull, handle, kstToday, pageItems } from "@/lib/format";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // 문구 대조표(기획 16871 · Figma)에 있는 것은 그대로, 없는 것은 우리가 지었어요(보고서 「우리가 정한 것」).
 const STATUS_LABEL: Record<ClosureStatus, string> = { processing: "처리 중", failed: "실패", completed: "파기 완료", withdrawn: "철회됨" };
+/** 「철회 제외」 = 처리 중 · 실패 · 파기 완료(UG-458 기획 9 — 계정 발급 「해지 N개 보기」로 열면 이 상태, 이름은 우리가 지었어요) */
+const NOT_WITHDRAWN_LABEL = "철회 제외";
+/** 상태 거르기 차례 — 선택 상자 · 휴대폰 칩이 같이 써요. 묶음(철회 제외)은 「전체」 바로 뒤 */
+const STATUS_FILTERS: { value: ClosureStatusFilter; label: string; chip: string }[] = [
+  { value: "all", label: "상태 전체", chip: "전체" },
+  { value: "not_withdrawn", label: NOT_WITHDRAWN_LABEL, chip: NOT_WITHDRAWN_LABEL },
+  { value: "processing", label: STATUS_LABEL.processing, chip: STATUS_LABEL.processing },
+  { value: "failed", label: STATUS_LABEL.failed, chip: STATUS_LABEL.failed },
+  { value: "completed", label: STATUS_LABEL.completed, chip: STATUS_LABEL.completed },
+  { value: "withdrawn", label: STATUS_LABEL.withdrawn, chip: STATUS_LABEL.withdrawn },
+];
+/** 가입 경로(UG-458 기획 7 · 8) — 영업 발급 = 백오피스에서 만든 계정, 직접 가입 = 고객이 콘솔에서 가입 */
+const SIGNUP_SOURCE_LABEL: Record<SignupSource, string> = { SALES: "영업 발급", DIRECT: "직접 가입" };
+const SOURCE_FILTERS: { value: ClosureSource; label: string }[] = [
+  { value: "all", label: "가입 경로 전체" },
+  { value: "sales", label: SIGNUP_SOURCE_LABEL.SALES },
+  { value: "direct", label: SIGNUP_SOURCE_LABEL.DIRECT },
+];
 const STEP_LABEL: Record<ClosureStep, string> = {
   suspend: "로그인 막기",
   gate_purge: "프로젝트 · 데이터 파기",
@@ -101,6 +124,11 @@ function ClosureCompany({ closure, card = false }: { closure: Closure; card?: bo
   if (closure.status === "completed" || closure.status === "withdrawn") return <span className="gone-company">삭제됨</span>;
   return <span className={card ? "dash dash-sm" : "dash"}>—</span>;
 }
+/** 가입 경로 칸 — 서버가 주지 않았거나(예전 서버) 모르는 값이면 「—」 */
+function SignupSourceText({ closure }: { closure: Closure }) {
+  return closure.signupSource ? <>{SIGNUP_SOURCE_LABEL[closure.signupSource]}</> : <span className="dash">—</span>;
+}
+
 /** 처리 일시 = 파기 완료 시각(약관 기준). 철회했으면 철회 시각, 끝나기 전에는 실행 시각을 흐리게 */
 const processedAtText = (c: Closure) =>
   c.completedAt
@@ -122,6 +150,8 @@ function ClosureCardMeta({ closure }: { closure: Closure }) {
   return (
     <span className="card-meta card-meta-parts">
       <span>{`프로젝트 ${closure.projectCount}개`}</span>
+      {/* 가입 경로(UG-458 기획 7) — PC 표처럼 프로젝트 바로 뒤. 모르면(예전 서버) 칸째 빼요 */}
+      {closure.signupSource && <span>{` · ${SIGNUP_SOURCE_LABEL[closure.signupSource]}`}</span>}
       {who && (
         <span className="card-meta-who" title={who}>
           {` · ${who}`}
@@ -134,7 +164,16 @@ function ClosureCardMeta({ closure }: { closure: Closure }) {
 
 type ToastState = { title: string; detail: string; tone?: "error" } | null;
 
+/** 거르기 조건을 주소에서 읽어요(useSearchParams) — 정적 내보내기라 Suspense 안에서 그려요(UG-458) */
 export default function ClosuresPage() {
+  return (
+    <Suspense fallback={null}>
+      <ClosuresScreen />
+    </Suspense>
+  );
+}
+
+function ClosuresScreen() {
   const router = useRouter();
   const staff = useStaff();
 
@@ -143,9 +182,17 @@ export default function ClosuresPage() {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [status, setStatus] = useState<ClosureStatus | "all">("all");
-  const [applied, setApplied] = useState<{ keyword: string; status: ClosureStatus | "all" }>({ keyword: "", status: "all" });
+  const [status, setStatus] = useState<ClosureStatusFilter>("all");
+  const [source, setSource] = useState<ClosureSource>("all");
   const [page, setPage] = useState(1);
+  // 조회한 조건은 주소(?source=…&status=…&keyword=…)에 둬요(UG-458 기획 9) — 새로 고쳐도 남고, 계정 발급 「해지 N개 보기」가 이 주소로 열어요.
+  // 주소가 밖에서 바뀌면(처음 열 때 · 뒤로 가기 · 위쪽 메뉴) 검색 칸 · 선택 상자도 맞춰요
+  const { value: applied, replace: replaceApplied } = useUrlQuery(parseClosuresQuery, serializeClosuresQuery, (q: ClosuresQuery) => {
+    setKeyword(q.keyword);
+    setStatus(q.status);
+    setSource(q.source);
+    setPage(1);
+  });
   const [pageSize, setPageSize] = useState(10);
   const [version, setVersion] = useState(0);
   const [opening, setOpening] = useState(false);
@@ -160,6 +207,13 @@ export default function ClosuresPage() {
   }, [staff, router]);
 
   const reload = useCallback(() => setVersion((v) => v + 1), []);
+  /** 조건을 걸어요 — 주소가 바뀌면 목록을 새로 받고, 같은 조건이면(검색을 다시 누름 등) 그대로 다시 불러와요 */
+  const apply = useCallback(
+    (next: ClosuresQuery) => {
+      if (!replaceApplied(next)) reload();
+    },
+    [replaceApplied, reload],
+  );
   const clearToast = useCallback(() => setToast(null), []);
 
   useEffect(() => {
@@ -199,7 +253,9 @@ export default function ClosuresPage() {
   const current = Math.min(page, pageCount);
   const from = total ? (current - 1) * pageSize + 1 : 0;
   const to = Math.min(current * pageSize, total);
-  const filtered = applied.keyword !== "" || applied.status !== "all";
+  const filtered = applied.keyword !== "" || applied.status !== "all" || applied.source !== "all";
+  // [초기화]는 거르기 하나라도 기본값이 아닐 때만 켜요(UG-458 기획 8) — 걸린 조건이든 칸에 고른 값이든
+  const resettable = filtered || keyword.trim() !== "" || status !== "all" || source !== "all";
   const emptyText = loadError
     ? LOAD_FAILED
     : !loaded
@@ -212,24 +268,31 @@ export default function ClosuresPage() {
     e?.preventDefault();
     // 터치 기기: 키보드의 검색 · Enter 를 누르면 칸을 빠져 키보드를 내려요 — 결과 목록이 가리지 않게(UG-453 기획 3). PC 는 칸에 그대로
     if (isTouchPrimary()) searchRef.current?.blur();
-    setApplied({ keyword: keyword.trim(), status });
+    apply({ keyword: keyword.trim(), status, source });
     setPage(1);
   }
   function onReset() {
     setKeyword("");
     setStatus("all");
-    setApplied({ keyword: "", status: "all" });
+    setSource("all");
+    apply(CLOSURES_DEFAULT);
     setPage(1);
   }
   function clearKeyword() {
     setKeyword("");
-    setApplied((a) => ({ ...a, keyword: "" }));
+    apply({ ...applied, keyword: "" });
     setPage(1);
     searchRef.current?.focus();
   }
-  function pickStatus(v: ClosureStatus | "all") {
+  // 휴대폰 칩: 누르면 바로 걸러요(휴대폰엔 선택 상자 · 검색 버튼이 없어서). 다른 거르기(검색어 · 상태 · 가입 경로)는 걸린 그대로
+  function pickStatus(v: ClosureStatusFilter) {
     setStatus(v);
-    setApplied((a) => ({ ...a, status: v }));
+    apply({ ...applied, status: v });
+    setPage(1);
+  }
+  function pickSource(v: ClosureSource) {
+    setSource(v);
+    apply({ ...applied, source: v });
     setPage(1);
   }
   function goPage(n: number) {
@@ -255,14 +318,14 @@ export default function ClosuresPage() {
     (c: Closure) => {
       setOpening(false);
       setFreshId(c.id);
-      setApplied({ keyword: "", status: "all" });
+      apply(CLOSURES_DEFAULT);
       setKeyword("");
       setStatus("all");
+      setSource("all");
       setPage(1);
-      reload();
       setToast({ title: "계정 해지를 시작했습니다", detail: "파기가 끝나면 상태가 「파기 완료」로 바뀝니다" });
     },
-    [reload],
+    [apply],
   );
 
   if (!staff) return null;
@@ -314,7 +377,7 @@ export default function ClosuresPage() {
                   clearKeyword();
                 }
               }}
-              placeholder="고객 이메일, 회사명 검색"
+              placeholder="회사명, 고객 이메일 검색"
             />
             {keyword && (
               <button type="button" className="search-clear" onClick={clearKeyword} aria-label="검색어 지우기">
@@ -322,28 +385,30 @@ export default function ClosuresPage() {
               </button>
             )}
           </label>
-          <PopupSelect<ClosureStatus | "all">
-            className="select"
+          {/* 기본값이 아닌 값을 고르면 바탕 Neutral/100(UG-458 기획 8) — 상태 · 가입 경로 같이 */}
+          <PopupSelect<ClosureStatusFilter>
+            className={`select${status !== "all" ? " is-set" : ""}`}
             label="상태"
             value={status}
             onChange={setStatus}
-            options={[
-              { value: "all", label: "상태 전체" },
-              { value: "processing", label: STATUS_LABEL.processing },
-              { value: "failed", label: STATUS_LABEL.failed },
-              { value: "completed", label: STATUS_LABEL.completed },
-              { value: "withdrawn", label: STATUS_LABEL.withdrawn },
-            ]}
+            options={STATUS_FILTERS.map(({ value, label }) => ({ value, label }))}
+          />
+          <PopupSelect<ClosureSource>
+            className={`select${source !== "all" ? " is-set" : ""}`}
+            label="가입 경로"
+            value={source}
+            onChange={setSource}
+            options={SOURCE_FILTERS}
           />
           <button type="submit" className="btn btn-outline btn-sm">
             검색
           </button>
-          <button type="button" className="btn btn-outline btn-sm" onClick={onReset}>
+          <button type="button" className="btn btn-outline btn-sm" onClick={onReset} disabled={!resettable}>
             초기화
           </button>
           {/* 휴대폰: 상태 칩 — PC 는 위 선택 상자. 넘치면 오른쪽 끝을 흐리게(StatusChips) */}
           <StatusChips label="상태 필터">
-            {(["all", "processing", "failed", "completed", "withdrawn"] as const).map((v) => (
+            {STATUS_FILTERS.map(({ value: v, chip }) => (
               <button
                 key={v}
                 type="button"
@@ -351,7 +416,21 @@ export default function ClosuresPage() {
                 aria-pressed={applied.status === v}
                 onClick={() => pickStatus(v)}
               >
-                {v === "all" ? "전체" : STATUS_LABEL[v]}
+                {chip}
+              </button>
+            ))}
+          </StatusChips>
+          {/* 휴대폰: 가입 경로 칩 한 줄 더(UG-458 — 휴대폰엔 선택 상자 · [초기화]가 없어 「해지 N개 보기」로 걸린 영업 발급을 풀 길이 여기뿐이에요) */}
+          <StatusChips label="가입 경로 필터">
+            {SOURCE_FILTERS.map(({ value: v, label }) => (
+              <button
+                key={v}
+                type="button"
+                className={`status-chip${applied.source === v ? " is-on" : ""}`}
+                aria-pressed={applied.source === v}
+                onClick={() => pickSource(v)}
+              >
+                {label}
               </button>
             ))}
           </StatusChips>
@@ -363,10 +442,10 @@ export default function ClosuresPage() {
           )}
         </form>
 
-        {/* PC: 표 */}
-        <div className="table" role="table" aria-label="계정 해지 처리 기록">
+        {/* PC: 표 — 가입 경로 칸(120)은 프로젝트 오른쪽(UG-458 기획 7). 칸 폭은 globals.css .table--closures */}
+        <div className="table table--closures" role="table" aria-label="계정 해지 처리 기록">
           <div className="tr th" role="row">
-            {["회사명", "고객 이메일", "프로젝트", "상태", "처리자", "처리 일시", "관리"].map((h) => (
+            {["회사명", "고객 이메일", "프로젝트", "가입 경로", "상태", "처리자", "처리 일시", "관리"].map((h) => (
               <span key={h} role="columnheader">
                 {h}
               </span>
@@ -389,6 +468,9 @@ export default function ClosuresPage() {
                   <ClosureEmail closure={c} tip />
                 </span>
                 <span role="cell">{c.projectCount}개</span>
+                <span role="cell">
+                  <SignupSourceText closure={c} />
+                </span>
                 <span role="cell">
                   <ClosureStatusBadge closure={c} />
                 </span>
