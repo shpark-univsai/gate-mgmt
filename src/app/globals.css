@@ -346,7 +346,7 @@ p {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 20;
+  z-index: 21; /* 알림(20) 위 — 터치 기기에서 알림이 위쪽에 떠도 열린 메뉴를 가리지 않게(UG-455 기획 17162 반박 리뷰) */
   min-width: 160px;
   padding: 4px;
   background: var(--overlay-dark-80);
@@ -759,6 +759,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .input-box input { font-size: 16px; line-height: 24px; } /* 16px보다 작으면 iPhone이 칸을 누를 때 화면을 확대해요 */
 
   .app-nav { height: 48px; padding: 0 16px; }
+  :root { --app-nav-h: 48px; } /* 터치 기기 목록 화면 알림 위치(머리 줄 아래)가 쓰는 값 */
   .app-menu,
   .identity-name,
   .breadcrumb,
@@ -912,7 +913,7 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
    창 높이는 Dialog 가 보이는 영역(키보드 제외)에 맞춰 둬서, 키보드가 올라와도 남은 영역의 가운데에 와요.
    align-items: center 가 아니라 창의 위아래 auto 여백 — 창이 보이는 영역보다 길면(키보드 · 알림 자리) 여백이 0 이 되어 위에서부터 스크롤돼요
    (center 는 창 위쪽이 스크롤로도 닿지 않는 곳으로 잘려요). 휴대폰(≤ 640)은 위 60 에서 시작하는 그대로, PC 는 그대로 */
-@media (pointer: coarse) and (min-width: 641px) {
+@media (pointer: coarse) and (min-width: 640.02px) { /* 640.02 — 640 과 641 사이 소수 폭(확대 · 안드로이드 배율)도 빠지지 않게 */
   .scrim { padding: 24px 16px; }
   .dialog { margin-block: auto; }
 }
@@ -922,7 +923,9 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
    위 끝은 창(.scrim)과 같이 보이는 영역의 위 끝(--vv-top, Dialog)에 맞춰요 — iOS 키보드로 화면이 밀려 올라가도 창과 어긋나지 않게(UG-455 기획 17141 반박 리뷰 N1).
    창이 없으면 --vv-top 이 없어 0. PC(마우스)는 그대로 오른쪽 아래 */
 @media (pointer: coarse) {
-  .toast-stack { top: calc(var(--vv-top, 0px) + 16px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
+  /* 목록 화면에서는 머리 줄(PC · 아이패드 60, 휴대폰 48) 아래에서 — 머리 줄의 프로필 메뉴(휴대폰에서는 유일한 이동 · 로그아웃 수단)를
+     가리지 않게(반박 리뷰). 창이 열린 동안은 아래 규칙(body:has(.scrim))이 이겨 보이는 화면 맨 위 16 */
+  .toast-stack { top: calc(var(--vv-top, 0px) + var(--app-nav-h, 60px) + 8px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
 }
 
 /* ── 창이 열린 동안 알림은 위 · 창은 알림 아래: 좁은 화면(≤ 640) 또는 터치 기기(아이패드 포함, UG-455 기획 17162) ── */
