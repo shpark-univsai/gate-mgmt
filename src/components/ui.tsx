@@ -18,6 +18,19 @@ export function Brand({ inverse = false }: { inverse?: boolean }) {
 
 let dialogOpener: HTMLElement | null = null;
 
+const isShown = (el: HTMLElement) => (typeof el.checkVisibility === "function" ? el.checkVisibility() : el.getClientRects().length > 0);
+
+/**
+ * 창을 연 버튼이 지금 보이지 않으면(창이 열린 동안 화면을 돌리거나 폭이 바뀌어 휴대폰 ↔ PC 자리가 바뀜) 같은 일을 하는 보이는 짝 버튼 —
+ * 「계정 만들기」 · 「계정 해지」는 제목 줄 · 검색 줄 두 자리에 있고 폭에 맞는 하나만 보여요(UG-458 기획 17191). 짝은 data-twin 값이 같아요.
+ * 숨은 버튼에 초점을 주면 초점이 사라져요(반박 리뷰 L1). 짝이 없으면 그 버튼 그대로
+ */
+function twinIfHidden(el: HTMLElement): HTMLElement {
+  const key = el.dataset.twin;
+  if (!key || isShown(el)) return el;
+  return [...document.querySelectorAll<HTMLElement>("[data-twin]")].find((n) => n.dataset.twin === key && isShown(n)) ?? el;
+}
+
 /**
  * 확인 · 입력 창. 닫기 ✕는 두지 않아요 — 「취소」, Esc, 창 바깥 누르기로 닫혀요.
  * 열리면 data-autofocus 가 붙은 버튼 → 첫 입력 칸 → 실행 버튼 순으로 초점이 가요.
@@ -170,7 +183,7 @@ export function Dialog({
     return () => {
       // 마지막 창이 닫히면 연 버튼으로(메뉴 안 버튼처럼 사라졌으면 그대로)
       if (document.querySelector(".dialog")) return;
-      if (dialogOpener?.isConnected) dialogOpener.focus();
+      if (dialogOpener?.isConnected) twinIfHidden(dialogOpener).focus();
       dialogOpener = null;
     };
     // 창이 열릴 때 한 번만 — touchInputFocus 는 창마다 정해진 값이에요
@@ -273,20 +286,49 @@ export function Toast({
  * 휴대폰 · 터치 기기(아이패드 포함)에서는 알림이 언제나 화면 위에 뜨고(기획 17162), 창이 열려 있으면 창은 그 높이만큼 아래에서 시작해요(globals.css .scrim border-top) —
  * 닫을 때까지 남는 「명함 사진은 저장하지 못했습니다」가 다음 계정 만들기 창의 제목 · 「명함 찍어서 채우기」를 가리지 않게.
  * 알림이 모두 사라져 묶음이 없어지면 값을 지워 창이 제자리로 돌아가요. 그리기 전에(useLayoutEffect) 재서 한 순간도 겹치지 않게 해요.
+ *
+ * 휴대폰 터치 목록 화면(UG-458 기획 17191): 묶음이 뜰 때 화면이 맨 위(TOAST_PUSH_SLACK 이내)였으면 body 에 toast-push 를 붙이고
+ * 묶음 높이를 --toast-push-h 로 알려요 — 본문이 알림 아래에서 시작해 검색 줄 · 「계정 만들기」가 가려지지 않아요(globals.css).
+ * 목록을 내려 본 상태에서 뜬 묶음은 본문을 밀지 않아요(반박 리뷰 M — 알림이 뜨고 질 때 카드가 손가락 밑에서 72 씩 움직였어요).
+ * 민 뒤에 목록을 내렸으면 여백이 바뀔 때(알림 하나가 사라짐 · 묶음이 없어짐) 바뀐 만큼 스크롤을 맞춰 보이는 카드를 제자리에 둬요.
+ * 맨 위에 있으면 맞추지 않아요 — 검색 줄이 알림을 따라 올라와요. 여백이 실제로 바뀌는지는 본문 여백을 재서 알아요(PC · 아이패드는 그대로라 0).
  */
+const TOAST_PUSH_SLACK = 8;
+
 export function ToastStack({ children }: { children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const body = document.body;
-    const measure = () => body.style.setProperty("--toast-stack-h", `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    const content = document.querySelector<HTMLElement>(".content");
+    const padTop = () => (content ? parseFloat(getComputedStyle(content).paddingTop) || 0 : 0);
+    /** 본문 여백을 바꾸는 일을 하고, 목록을 내려 본 상태면 바뀐 만큼 스크롤을 맞춰 보이는 자리를 지켜요 */
+    const keepInPlace = (change: () => void) => {
+      const before = padTop();
+      const scrolled = window.scrollY > TOAST_PUSH_SLACK;
+      change();
+      const delta = padTop() - before;
+      if (scrolled && delta !== 0) window.scrollBy(0, delta);
+    };
+    const push = window.scrollY <= TOAST_PUSH_SLACK;
+    const measure = () => {
+      const h = `${Math.ceil(el.getBoundingClientRect().height)}px`;
+      body.style.setProperty("--toast-stack-h", h);
+      if (push) keepInPlace(() => body.style.setProperty("--toast-push-h", h));
+    };
+    if (push) body.classList.add("toast-push");
     measure();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(el);
     return () => {
       observer?.disconnect();
       body.style.removeProperty("--toast-stack-h");
+      if (push)
+        keepInPlace(() => {
+          body.classList.remove("toast-push");
+          body.style.removeProperty("--toast-push-h");
+        });
     };
   }, []);
   return (

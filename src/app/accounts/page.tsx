@@ -1182,6 +1182,23 @@ function AccountsScreen() {
 
   if (!staff) return null;
 
+  /**
+   * 「계정 만들기」 — PC · 아이패드는 제목 줄 오른쪽, 휴대폰(≤ 640)은 검색 칸 오른쪽(UG-458 기획 17191).
+   * 휴대폰은 탭 줄과 같은 말인 제목 줄을 빼서 두 자리에 그려 두고 화면 폭에 맞는 하나만 보여요(globals.css — 다른 하나는 display: none 이라 낭독기 · 탭 이동에서도 빠져요).
+   */
+  const createButton = (extraClass: string) => (
+    <button
+      type="button"
+      className={`btn btn-dark btn-sm${extraClass}`}
+      data-twin="create-account" // 창을 닫을 때 숨은 쪽이 연 버튼이면 보이는 짝으로 초점(Dialog)
+      onClick={() => setCreating({ draft: null })}
+      // 이어서 만들기 응답을 기다리는 동안은 새 창을 열지 않아요(두 창이 겹치지 않게)
+      disabled={resumingId !== null}
+    >
+      계정 만들기
+    </button>
+  );
+
   return (
     <>
       <AppHeader
@@ -1218,15 +1235,7 @@ function AccountsScreen() {
             >
               {exporting ? "내려받는 중…" : "CSV 내려받기"}
             </button>
-            <button
-              type="button"
-              className="btn btn-dark btn-sm"
-              onClick={() => setCreating({ draft: null })}
-              // 이어서 만들기 응답을 기다리는 동안은 새 창을 열지 않아요(두 창이 겹치지 않게)
-              disabled={resumingId !== null}
-            >
-              계정 만들기
-            </button>
+            {createButton("")}
           </div>
         </div>
 
@@ -1289,6 +1298,8 @@ function AccountsScreen() {
               </button>
             )}
           </label>
+          {/* 휴대폰: 「계정 만들기」는 검색 칸 오른쪽(UG-458 기획 17191 — 제목 줄을 뺐어요). PC · 아이패드는 숨기고 위 제목 줄의 것을 써요 */}
+          {createButton(" search-row-action")}
           <PopupSelect<AccountStatusFilter>
             className="select"
             label="상태"

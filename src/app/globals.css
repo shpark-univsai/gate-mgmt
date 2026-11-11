@@ -447,6 +447,8 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .select.is-set { background: var(--gray-100); }
 /* 꺼진 [초기화](계정 해지 — 거르기가 모두 기본값일 때, UG-458 기획 8) — 명함 크게 보기의 꺼진 테두리 버튼과 같은 회색 글자 */
 .toolbar .btn-outline:disabled { color: var(--gray-400); border-color: var(--gray-200); }
+/* 검색 칸 오른쪽 「계정 만들기」 · 「계정 해지」 — 휴대폰에서만 보여요(UG-458 기획 17191, 아래 휴대폰 묶음). PC · 아이패드는 제목 줄의 것 */
+.btn.search-row-action { display: none; }
 .select-icon { position: absolute; right: 8px; pointer-events: none; color: var(--gray-500); }
 
 /* 선택 상자 — 열리면 프로필 메뉴와 같은 어두운 유리(그림자 없음) */
@@ -829,13 +831,15 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .profile-menu-nav { display: block; padding-bottom: 4px; margin-bottom: 4px; border-bottom: 1px solid var(--gray-700); }
   .profile-menu-item { height: 40px; }
   .content { padding: 16px; gap: 12px; }
-  .page-title h1 { font-size: 20px; line-height: 28px; }
-  /* 「계정 만들기」 · 「계정 해지」: 보이는 높이 36, 누르는 영역은 위아래 4 씩 투명하게 넓혀 44(UG-453 기획 17101 — 44 로 꽉 차 보여 무거웠어요) */
-  .page-actions .btn { position: relative; height: 36px; }
-  .page-actions .btn::after { content: ""; position: absolute; inset: -5px -1px; } /* 테두리(1) 바깥 4 = 36 + 8 */
+  /* 제목 줄(「계정 발급」 · 「계정 해지」)은 바로 위 탭 줄과 같은 말이라 보이지 않게(UG-458 기획 17191) — 낭독기용 h1 은 남겨요(.visually-hidden 과 같은 방식).
+     자리를 차지하지 않아(absolute) 본문 첫 줄이 검색 줄이에요. 제목 줄의 버튼(+ CSV 내려받기 · 그 오류)은 숨기고 검색 칸 오른쪽의 것(.search-row-action)을 써요 */
+  .page-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .page-actions { display: none; }
+  /* 검색 칸 오른쪽 「계정 만들기」 · 「계정 해지」: 검색 칸과 같은 높이 44(누르는 영역 그대로), 글자는 한 줄 · 줄지 않아요. 검색 칸이 남은 폭을 다 써요 */
+  .toolbar .btn.search-row-action { display: inline-flex; flex: none; height: 44px; }
   .toolbar { flex-wrap: wrap; margin-bottom: 0; }
   .list-errors { margin-bottom: 0; }
-  .search { width: 100%; height: 44px; } /* UG-453 기획 1 — 40 → 44 */
+  .search { flex: 1 1 0; width: auto; min-width: 0; height: 44px; } /* UG-453 기획 1 — 40 → 44. 폭은 오른쪽 버튼을 뺀 나머지(UG-458 기획 17191) */
   /* 상태 칩 줄(UG-453 기획 17110): 칩은 보이는 높이 32, 누르는 영역은 위아래 6 씩 투명하게 넓혀 44(「계정 만들기」와 같은 방식).
      옆으로 미는 줄(overflow)은 밖으로 나간 누르는 영역을 잘라서, 줄 자체를 44 로 두고 위아래 -6 으로 당겨 자리만 32 를 차지해요 —
      검색 칸 · 「총 N개」와의 보이는 간격은 8 그대로, 누르는 영역은 그 간격 안(6)이라 위아래 요소와 겹치지 않아요 */
@@ -960,6 +964,15 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .toast-stack { left: 16px; right: 16px; bottom: 16px; }
 }
 
+/* ── 아주 좁은 휴대폰(≤ 340, 320 화면): 검색 칸 자리표시 「회사명, 고객 이메일 검색」이 잘리지 않게(UG-458 반박 리뷰 L2) ──
+   검색 칸 오른쪽에 버튼이 들어온 뒤 320 화면에서 글자 받는 폭이 146 으로 글자(155)보다 좁았어요. 검색 칸 안쪽 여백 12 → 8 · 아이콘 사이 8 → 6,
+   버튼 안쪽 여백 12 → 10 으로 약 12 를 벌어요. 지우기(✕)는 칸 오른쪽 끝에 붙은 그대로(여백 − 4). 360 이상은 그대로예요 */
+@media (max-width: 340px) {
+  .search { padding: 0 8px; gap: 6px; }
+  .search-clear { margin-right: -12px; }
+  .toolbar .btn.search-row-action { padding: 0 10px; }
+}
+
 /* ── 아이패드 등 넓은 터치 화면(> 640, 휴대폰 가로 포함): 창을 보이는 영역의 세로 가운데에(UG-455 기획 17159-2 · 17161-4) ──
    PC 처럼 위 180 에서 시작하면 1024×768 가로에서 창이 가운데보다 아래(위 180 · 아래 68)로 보였어요.
    창 높이는 Dialog 가 보이는 영역(키보드 제외)에 맞춰 둬서, 키보드가 올라와도 남은 영역의 가운데에 와요.
@@ -978,6 +991,19 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   /* 목록 화면에서는 머리 줄(PC · 아이패드 60, 휴대폰 48 + 탭 줄 45 = 93, UG-458) 아래에서 — 머리 줄의 프로필 메뉴(로그아웃 수단)와
      휴대폰 탭 줄을 가리지 않게(반박 리뷰). 창이 열린 동안은 아래 규칙(body:has(.scrim))이 이겨 보이는 화면 맨 위 16 */
   .toast-stack { top: calc(var(--vv-top, 0px) + var(--app-nav-h, 60px) + 8px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
+}
+
+/* ── 휴대폰 터치 목록 화면: 맨 위에서 알림이 뜨면 본문을 알림 묶음 아래에서 시작(UG-458 기획 17191) ──
+   알림은 탭 줄 바로 아래(위 --app-nav-h + 8)에 떠서 바로 밑 검색 줄 — 검색 칸 · 「계정 만들기」 — 을 가렸어요. 닫을 때까지 남는
+   「명함 사진은 저장하지 못했습니다」(UG-455)가 「계정 만들기」를 덮어 다음 계정을 만들 수 없었어요.
+   알림 묶음이 뜰 때 화면이 맨 위(8 이내)였으면 ToastStack 이 body 에 toast-push 를 붙이고 묶음 높이를 --toast-push-h 로 알려요 —
+   본문 위 여백이 위 8 + 알림 묶음 + 평소 여백 16 이 되어 검색 줄이 알림 아래로 내려가요. 4초 알림이 떠 있는 동안에도 버튼이 눌려요.
+   목록을 내려 본 상태에서 뜬 알림은 본문을 밀지 않아요(반박 리뷰 M — 카드가 손가락 밑에서 움직였어요) — 전처럼 카드 위에 떠요.
+   민 뒤에 목록을 내렸으면, 알림이 줄거나 사라져 여백이 바뀌어도 ToastStack 이 그만큼 스크롤을 맞춰 보이는 카드는 제자리예요.
+   여백은 움직이는 동안 그 맞춤이 어긋나지 않게 애니메이션 없이 바로 바뀌어요.
+   창이 열린 동안의 알림 · 창 자리(아래 묶음)는 그대로, 마우스로 쓰는 좁은 창(≤ 640)은 알림이 아래쪽이라 비우지 않아요 */
+@media (max-width: 640px) and (pointer: coarse) {
+  body.toast-push .content { padding-top: calc(8px + env(safe-area-inset-top, 0px) + var(--toast-push-h, 0px) + 16px); }
 }
 
 /* ── 창이 열린 동안 알림은 위 · 창은 알림 아래: 좁은 화면(≤ 640) 또는 터치 기기(아이패드 포함, UG-455 기획 17162) ── */
