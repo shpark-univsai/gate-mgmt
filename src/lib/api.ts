@@ -66,24 +66,28 @@ export type Account = {
   hasCardPhoto?: boolean;
 };
 
-/** 목록 · 내보내기 상태 거르기 — closed_all = 해지 중 + 해지됨(UG-450, 서버 mgmt 같은 값) */
-export type AccountStatusFilter = AccountStatus | "all" | "closed_all";
+/**
+ * 목록 · 내보내기 상태 거르기. 해지 중 · 해지됨은 목록 · CSV 에서 빠지고(UG-458 기획 2 — 「전체」도 빼고 세요, 서버가 걸러요)
+ * 「계정 해지」 화면에서 봐요. 그래서 해지 거르기(closing · closed · closed_all)는 없어요 — 서버는 옛 값을 받으면 「전체」로 봐요.
+ */
+export type AccountStatusFilter = "all" | "pending" | "in_use" | "cancelled";
 export type AccountQuery = { keyword?: string; status?: AccountStatusFilter; page?: number; size?: number };
 
 /** 목록 한 페이지. total = 조건에 맞는 전체 건수 */
 export type AccountPage = { items: Account[]; total: number };
 
-/** 요약 카드. 검색어 · 상태 필터와 무관한 전체 기준(서버가 셈) */
-// closed = 해지됨(UG-443) — cancelled 에는 들어가지 않아요. 예전 서버는 주지 않아요(없으면 「—」).
-// closing = 해지 중(UG-443 기획 16908) — pending · inUse 에 들어가지 않아요. 예전 서버는 주지 않아요.
+/**
+ * 요약 카드. 검색어 · 상태 필터와 무관한 전체 기준(서버가 셈). total · thisMonth 에는 해지 중 · 해지됨이 들어가지 않아요(UG-458).
+ * salesClosures = 「해지 N개 보기」의 N — 영업 발급 계정의 해지 가운데 철회하지 않은 것(계정 해지 화면의 영업 발급 · 철회 제외 줄 수와 같아요).
+ * 예전 서버는 주지 않아요(없으면 0 — 링크를 숨겨요). 서버가 아직 주는 closing · closed 는 쓰지 않아요(UG-458).
+ */
 export type AccountSummary = {
   total: number;
   pending: number;
   inUse: number;
-  closing?: number;
   cancelled: number;
-  closed?: number;
   thisMonth: number;
+  salesClosures: number;
 };
 
 export type CreateAccountInput = {
@@ -170,8 +174,9 @@ export type CreateAccountResult =
   // domain = 받는 주소의 도메인이 메일을 받을 수 없어 서버가 계정을 만들지 않음(MGMT-108 — 명함에서 도메인을 잘못 읽은 경우 등)
   // network = 응답 없음 · 시간 초과 · 5xx — 서버가 만들었는지 알 수 없어요(다시 누르면 이미 만든 계정이면 duplicate 로 와요, UG-451)
   // source_blocked = 주소 고쳐 새로 만들기에서 옛 발급을 취소할 수 없어(고객이 이미 로그인 · 해지 중) 새 계정을 만들지 않음(기획 17099-7)
+  // closing = 해지 처리 중인 이메일이라 새로 만들지 않음(UG-458 기획 5) — 해지가 끝나면 다시 만들 수 있어요. 예전 서버는 이 값을 주지 않아요
   // sourceCancel = revoked 면 새 계정은 만들지 못했는데 옛 발급의 계정 · 링크는 이미 지워졌어요(반박 리뷰 M1, recreate.ts) — 예전 서버는 주지 않아요
-  | { ok: false; reason: "duplicate" | "in_use" | "failed" | "domain" | "network" | "source_blocked"; sourceCancel?: SourceRevoked };
+  | { ok: false; reason: "duplicate" | "in_use" | "closing" | "failed" | "domain" | "network" | "source_blocked"; sourceCancel?: SourceRevoked };
 
 // 만들기 · 다시 보내기 모두 하루 제한은 두지 않아요.
 // in_use = 그사이 고객이 로그인함 / not_found = 그사이 발급 취소됨 / failed = 서버 · 네트워크 문제(다시 누르면 될 수 있음)
@@ -307,8 +312,16 @@ export async function exportAccounts(query: Pick<AccountQuery, "keyword" | "stat
   }
 }
 
-export function getSummary(): Promise<AccountSummary> {
-  return authed<AccountSummary>("GET", `${MGMT}/accounts/summary`);
+export async function getSummary(): Promise<AccountSummary> {
+  const data = await authed<Omit<AccountSummary, "salesClosures"> & { salesClosures?: number | null }>("GET", `${MGMT}/accounts/summary`);
+  return {
+    total: data.total,
+    pending: data.pending,
+    inUse: data.inUse,
+    cancelled: data.cancelled,
+    thisMonth: data.thisMonth,
+    salesClosures: typeof data.salesClosures === "number" && Number.isFinite(data.salesClosures) ? data.salesClosures : 0,
+  };
 }
 
 export async function checkEmail(email: string): Promise<EmailCheck> {
@@ -409,7 +422,7 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
 }
 
 /** 서버가 200 으로 알려 주는 「만들지 않음」 까닭 — 모르는 값은 failed 로 봐요 */
-const CREATE_FAILURES = ["duplicate", "in_use", "failed", "source_blocked"] as const;
+const CREATE_FAILURES = ["duplicate", "in_use", "closing", "failed", "source_blocked"] as const;
 const isCreateFailure = (v: unknown): v is (typeof CREATE_FAILURES)[number] =>
   typeof v === "string" && (CREATE_FAILURES as readonly string[]).includes(v);
 
@@ -655,6 +668,12 @@ export async function deleteCardDraft(id: string, opts: AuthedOptions = {}): Pro
  * withdrawn = 철회됨(회색) — 아무것도 지우기 전에 직원이 거둠. 같은 계정을 나중에 다시 해지할 수 있어요.
  */
 export type ClosureStatus = "processing" | "failed" | "completed" | "withdrawn";
+/** 목록 상태 거르기 — not_withdrawn = 철회 제외(처리 중 · 실패 · 파기 완료, UG-458 기획 9) */
+export type ClosureStatusFilter = ClosureStatus | "all" | "not_withdrawn";
+/** 가입 경로 거르기(UG-458 기획 8) — sales = 영업 발급(백오피스에서 만든 계정) · direct = 직접 가입 */
+export type ClosureSource = "all" | "sales" | "direct";
+/** 줄의 가입 경로(서버 값) */
+export type SignupSource = "SALES" | "DIRECT";
 
 /** 지금(또는 멈춘) 단계 — suspend 로그인 막기 · gate_purge 데이터 파기 · auth_delete 계정 삭제 · record 처리 기록 */
 export type ClosureStep = "suspend" | "gate_purge" | "auth_delete" | "record";
@@ -685,9 +704,16 @@ export type Closure = {
   withdrawnAt: string | null;
   /** 철회한 직원 이메일 */
   withdrawnBy: string | null;
+  /** 가입 경로(UG-458 기획 7). 예전 서버는 주지 않아요 · 모르는 값이면 null(표에 「—」) */
+  signupSource: SignupSource | null;
 };
 
-export type ClosureQuery = { keyword?: string; status?: ClosureStatus | "all"; page?: number; size?: number };
+export type ClosureQuery = { keyword?: string; status?: ClosureStatusFilter; source?: ClosureSource; page?: number; size?: number };
+
+const toClosure = (c: Omit<Closure, "signupSource"> & { signupSource?: string | null }): Closure => ({
+  ...c,
+  signupSource: c.signupSource === "SALES" || c.signupSource === "DIRECT" ? c.signupSource : null,
+});
 
 /** 계정 찾기(T2 → T3). 지워지는 것: 프로젝트(되살리기 기간 안인 삭제 프로젝트 포함) · 등록(얼굴 · 손바닥 각각) · 인증 기록 */
 export type ClosureTarget = {
@@ -728,10 +754,11 @@ export async function listClosures(query: ClosureQuery = {}): Promise<{ items: C
   const params = new URLSearchParams();
   if (query.keyword?.trim()) params.set("keyword", query.keyword.trim());
   params.set("status", query.status ?? "all");
+  params.set("source", query.source ?? "all");
   params.set("page", String(query.page ?? 1));
   params.set("size", String(query.size ?? 20));
   const data = await authed<{ content: Closure[]; totalElements: number }>("GET", `${CLOSURES}?${params}`);
-  return { items: data.content, total: data.totalElements };
+  return { items: data.content.map(toClosure), total: data.totalElements };
 }
 
 /** 탈퇴를 요청한 이메일로 계정을 찾아요(읽기만 해요). 이메일은 주소가 아니라 본문으로 보내요 — 서버 접근 기록에 남지 않게. */
@@ -750,7 +777,7 @@ export async function findClosureTarget(email: string): Promise<FindClosureTarge
         projects: data.projects ?? 0,
         registrations: data.registrations ?? 0,
         authRecords: data.authRecords ?? 0,
-        closure: data.closure ?? null,
+        closure: data.closure ? toClosure(data.closure) : null,
       },
     };
   } catch (e) {
@@ -762,7 +789,7 @@ export async function findClosureTarget(email: string): Promise<FindClosureTarge
 /** [계정 해지] — 서버도 확인 이메일 · 요청일 · 계정을 다시 확인해요. 실행하면 바로 돌아오고 처리는 서버가 이어 가요. */
 export async function startClosure(input: { email: string; confirmEmail: string; requestedOn: string }): Promise<StartClosureResult> {
   try {
-    return { ok: true, closure: await authed<Closure>("POST", CLOSURES, input) };
+    return { ok: true, closure: toClosure(await authed<Closure>("POST", CLOSURES, input)) };
   } catch (e) {
     if (e instanceof ApiError && e.code === "MGMT-116") return { ok: false, reason: "exists" };
     if (e instanceof ApiError && e.code === "MGMT-118") return { ok: false, reason: "not_found" };
@@ -775,7 +802,7 @@ export async function startClosure(input: { email: string; confirmEmail: string;
 /** [다시 시도] — 멈춘 단계부터 이어서 해요. */
 export async function retryClosure(id: string): Promise<RetryClosureResult> {
   try {
-    return { ok: true, closure: await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/retry`) };
+    return { ok: true, closure: toClosure(await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/retry`)) };
   } catch (e) {
     if (e instanceof ApiError && (e.code === "MGMT-117" || e.code === "MGMT-105")) return { ok: false, reason: "not_retryable" };
     if (e instanceof ApiError && e.code === "MGMT-115") return { ok: false, reason: "not_found" };
@@ -789,7 +816,7 @@ export type WithdrawClosureResult = { ok: true; closure: Closure } | { ok: false
 /** [철회] — 아직 아무것도 지우지 않은 해지만 돼요. 로그인 막기가 된 뒤에는 서버가 거절해요. */
 export async function withdrawClosure(id: string): Promise<WithdrawClosureResult> {
   try {
-    return { ok: true, closure: await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/withdraw`) };
+    return { ok: true, closure: toClosure(await authed<Closure>("POST", `${CLOSURES}/${encodeURIComponent(id)}/withdraw`)) };
   } catch (e) {
     if (e instanceof ApiError && (e.code === "MGMT-120" || e.code === "MGMT-105")) return { ok: false, reason: "not_withdrawable" };
     if (e instanceof ApiError && e.code === "MGMT-115") return { ok: false, reason: "not_found" };

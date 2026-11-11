@@ -392,12 +392,12 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .page-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .page-actions { display: flex; align-items: center; gap: 8px; min-width: 0; } /* 「CSV 내려받기」 · 「계정 만들기」(N5) */
 
-.overview { display: grid; grid-template-columns: repeat(5, 1fr); } /* 전체 · 첫 로그인 전 · 사용 중 · 발급 취소 · 해지(UG-450) */
+.overview { display: grid; grid-template-columns: repeat(4, 1fr); } /* 전체 · 로그인 전 · 사용 중 · 발급 취소 — 같은 폭(UG-458 기획 1, 「해지」 카드 뺌) */
 /* 요약 카드 = 상태 필터 버튼(UG-450 기획 16957). 테두리는 늘 1px — 이웃 카드와 -1px 겹쳐 선이 한 줄로 보여요.
    선택 · 마우스 올림은 테두리 색 + 안쪽 1px 그림자로 안쪽 2px 선을 그려요(크기 · 글자 위치 그대로). */
 .metric {
   position: relative;
-  min-height: 126px; /* 다섯 칸이 좁은 화면(아이패드)에서 설명이 두 줄이 되면 늘어나요 — 넓은 화면은 그대로 126 */
+  min-height: 126px; /* 칸이 좁은 화면(아이패드)에서 설명이 두 줄이 되면 늘어나요 — 넓은 화면은 그대로 126 */
   margin: 0;
   padding: 16px;
   display: flex;
@@ -441,6 +441,10 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .search:focus-within,
 .select:focus-within { border-color: var(--gray-900); }
 .select { width: 160px; }
+/* 기본값(「… 전체」)이 아닌 값을 고른 선택 상자 — 바탕 Neutral/100(디자인 시스템 #F1F5F9 = --gray-100, UG-458 기획 8) */
+.select.is-set { background: var(--gray-100); }
+/* 꺼진 [초기화](계정 해지 — 거르기가 모두 기본값일 때, UG-458 기획 8) — 명함 크게 보기의 꺼진 테두리 버튼과 같은 회색 글자 */
+.toolbar .btn-outline:disabled { color: var(--gray-400); border-color: var(--gray-200); }
 .select-icon { position: absolute; right: 8px; pointer-events: none; color: var(--gray-500); }
 
 /* 선택 상자 — 열리면 프로필 메뉴와 같은 어두운 유리(그림자 없음) */
@@ -470,6 +474,9 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .popup-select-check { flex: none; color: var(--gray-0); }
 .count { margin-left: auto; color: var(--gray-500); white-space: nowrap; } /* 옆에 안내가 붙어도 「총 N개」는 한 줄로 */
 .count.is-hidden { visibility: hidden; } /* 목록을 받지 못했을 때 — 자리는 그대로(UG-451 기획 17005) */
+/* 「총 N개 · 해지 N개 보기」의 링크(UG-458 기획 4) — 「총 N개」와 같은 글자(크기 · 색), 밑줄만 */
+.count-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.count-link:focus-visible { outline: 2px solid var(--gray-900); outline-offset: 2px; border-radius: 2px; }
 /* 목록 불러오기 실패 안내 — 검색 줄과 목록 사이 한 줄씩(UG-451). 위아래 간격은 검색 줄 ↔ 목록 간격(16)과 같게 */
 .list-errors { display: flex; flex-direction: column; gap: 4px; margin-bottom: -8px; }
 .list-errors .error { margin: 0; }
@@ -511,6 +518,17 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
   min-width: 720px;
 }
 .table--accounts .tr > span { min-width: 0; }
+/*
+ * 계정 해지 표 — 8칸: 회사명 · 고객 이메일 · 프로젝트 · 가입 경로(120 고정, UG-458 기획 7) · 상태 · 처리자 · 처리 일시 · 관리.
+ * 나머지 칸은 전과 같은 비율(fr)이라 넓은 화면(1440)에서는 전과 거의 같아요. 최소 폭만 이 표의 내용에 맞게 줄였어요 —
+ * 상태(배지만, 계정 발급의 처리 기록 줄 없음) 100 · 관리(「다시 시도」 + 「철회」) 150 · 처리 일시(「2026.11.03 11:05 실행」 한 줄) 150.
+ * 칸이 하나 늘어도 1024 화면에서 표가 옆으로 넘치지 않아요(전에는 1024 에서 이미 옆으로 밀어 봐야 했어요).
+ */
+.table--closures .tr {
+  grid-template-columns:
+    minmax(100px, 200fr) minmax(160px, 240fr) minmax(56px, 130fr) 120px minmax(100px, 220fr)
+    minmax(80px, 160fr) minmax(150px, 180fr) minmax(150px, 230fr);
+}
 .table--accounts .tr > span:last-child { padding-right: 0; } /* 관리 칸은 줄 오른쪽 여백(16)이 이미 있어 칸 여백을 빼요 — 1024 폭 134 에 「이어서 만들기」 + ⋮ 가 한 줄로 */
 /* 고객 칸: 회사명(본문색) / 이메일 + 「 · 영문」(회색) 두 줄 — 각각 따로 말줄임, 언어는 늘 보이게 */
 .customer { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -806,6 +824,9 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .search input { font-size: 16px; }
   .search-clear { width: 44px; height: 44px; margin-right: -16px; } /* 누르는 영역 44(UG-453), ✕ 자리는 그대로 */
   .count { margin-left: 0; }
+  /* 「해지 N개 보기」 누르는 영역을 아래로 12 넓혀요(목록과의 간격 안) — 위는 상태 칩의 누르는 영역(아래 6)과 겹치지 않게 2 만.
+     인라인이라 글자 자리 · 줄 높이는 그대로예요 */
+  .count-link { padding: 2px 0 12px; }
 
   .cards { display: block; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--gray-200); }
   .card-row { padding: 12px 0; border-bottom: 1px solid var(--gray-200); display: flex; flex-direction: column; gap: 4px; }

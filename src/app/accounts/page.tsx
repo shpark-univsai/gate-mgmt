@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { Dialog, PopupSelect, StatusChips, Toast, ToastStack } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { CardPhotoViewer } from "@/components/card-photo-viewer";
@@ -41,6 +42,8 @@ import {
   type ResendFailure,
 } from "@/lib/api";
 import { useStaff } from "@/lib/session";
+import { ACCOUNTS_DEFAULT, SALES_CLOSURES_HREF, parseAccountsQuery, serializeAccountsQuery, type AccountsQuery } from "@/lib/list-query";
+import { useUrlQuery } from "@/lib/use-url-query";
 import { isTextTruncated, tipOpensUp } from "@/lib/text-overflow";
 import { isTouchPrimary } from "@/lib/pointer";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
@@ -159,8 +162,10 @@ const STATUS_LABEL: Record<AccountStatus, string> = {
   cancelled: "발급 취소",
   closed: "해지됨",
 };
-/** 해지 중인 줄의 동작 안내(툴팁) */
+/** 해지 중인 줄의 동작 안내(툴팁) — 해지 중인 줄은 목록에서 빠졌지만(UG-458) 서버가 바뀌기 전 · 사이에 오면 그대로 막아요 */
 const CLOSING_TIP = "해지 처리 중인 계정입니다";
+/** 계정 만들기 창: 해지 처리 중인 이메일(조회 closing · 만들기 실패 closing, UG-458 기획 5) — 만들기는 지금처럼 막아요 */
+const CLOSING_EMAIL = "해지 처리 중인 이메일이에요. 끝난 뒤 다시 만들 수 있어요.";
 
 /** 목록 ⋮ 「명함 보기」를 보여 줄 줄(UG-455) — 서버에 명함 사진이 있고 첫 로그인 전 · 사용 중일 때만(해지 중 · 발급 취소 · 해지됨은 숨겨요, 사용자 결정) */
 const canViewCardPhoto = (a: Account) => a.hasCardPhoto === true && (a.status === "pending" || a.status === "in_use");
@@ -186,7 +191,7 @@ function Highlight({ text: value, query }: { text: string | null | undefined; qu
 
 /** 결과 없음 — 무엇으로 찾았는지 그대로 보여 줘요(검색어는 굵게). */
 function noResultText({ keyword, status }: { keyword: string; status: AccountStatusFilter }) {
-  const label = status === "closed_all" ? "해지" : status === "all" ? "" : STATUS_LABEL[status];
+  const label = status === "all" ? "" : STATUS_LABEL[status];
   const where = status === "all" ? "" : `「${label}」에서 `;
   const k = keyword.trim();
   if (k)
@@ -693,7 +698,16 @@ function queueDraftSave<T>(saves: Map<string, Promise<void>>, id: string | null,
   return result;
 }
 
+/** 거르기 조건을 주소에서 읽어요(useSearchParams) — 정적 내보내기라 Suspense 안에서 그려요(UG-458) */
 export default function AccountsPage() {
+  return (
+    <Suspense fallback={null}>
+      <AccountsScreen />
+    </Suspense>
+  );
+}
+
+function AccountsScreen() {
   const router = useRouter();
   const staff = useStaff();
   // 「작성 중」 새 명함을 다시 저장할 때 내가 만든 명함만 찾으려고(createdBy 와 같은 직원 이메일)
@@ -708,17 +722,23 @@ export default function AccountsPage() {
   const [keyword, setKeyword] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<AccountStatusFilter>("all");
-  const [applied, setApplied] = useState<{ keyword: string; status: AccountStatusFilter }>({ keyword: "", status: "all" });
   const [version, setVersion] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
+  // 조회한 조건은 주소(?status=…&keyword=…)에 둬요(UG-458 기획 6) — 새로 고침 · 계정 해지에서 뒤로 가기에도 고른 카드 · 검색어가 남아요.
+  // 주소가 밖에서 바뀌면(처음 열 때 · 뒤로 가기 · 위쪽 메뉴) 검색 칸 · 선택 상자도 맞춰요. 옛 해지 거르기 주소는 「전체」로 열어요
+  const { value: applied, replace: replaceApplied } = useUrlQuery(parseAccountsQuery, serializeAccountsQuery, (q: AccountsQuery) => {
+    setKeyword(q.keyword);
+    setStatus(q.status);
+    setPage(1);
+  });
   // 계정 만들기 창. draft = 「작성 중」 명함을 이어서 만들 때 서버에서 받은 것(칩 · 사진 포함)
   const [creating, setCreating] = useState<{ draft: CardDraftDetail | null } | null>(null);
   // 「작성 중」 명함 목록(UG-431 기획 16864) — 그때의 조건(applied)에만 붙여요. 요약 카드 · CSV · 페이지 수에는 섞지 않아요.
   // total = 서버의 전체 장 수(한 번에 100장까지만 받아요)
-  const [draftList, setDraftList] = useState<{ for: typeof applied; items: CardDraft[]; total: number } | null>(null);
+  const [draftList, setDraftList] = useState<{ for: AccountsQuery; items: CardDraft[]; total: number } | null>(null);
   // 불러오기 실패 안내도 그때의 조건에만 — 상태 필터를 바꾸면(「작성 중」 해당 없음) 사라져요
-  const [draftsErrorFor, setDraftsErrorFor] = useState<typeof applied | null>(null);
+  const [draftsErrorFor, setDraftsErrorFor] = useState<AccountsQuery | null>(null);
   // 이어서 만들기로 여는 중인 명함(서버에서 칩 · 사진을 받는 동안 버튼을 잠가요)
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [draftDeleteTarget, setDraftDeleteTarget] = useState<CardDraft | null>(null);
@@ -738,7 +758,7 @@ export default function AccountsPage() {
   const [freshId, setFreshId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // 내려받기 실패 안내는 그때의 조건(applied)에만 붙여요 — 검색 조건을 바꾸면 저절로 사라져요.
-  const [exportError, setExportError] = useState<{ for: typeof applied; text: string } | null>(null);
+  const [exportError, setExportError] = useState<{ for: AccountsQuery; text: string } | null>(null);
 
   // 로그인 확인. 화면 이동용이고, 실제 권한 검사는 서버가 해요(로그인이 끊기면 서버 호출이 로그인 화면으로 보내요).
   useEffect(() => {
@@ -752,6 +772,13 @@ export default function AccountsPage() {
 
   /** 지금 조건 그대로 목록 · 요약을 다시 불러와요. */
   const reload = useCallback(() => setVersion((v) => v + 1), []);
+  /** 조건을 걸어요 — 주소가 바뀌면 목록을 새로 받고, 같은 조건이면(검색을 다시 누름 등) 그대로 다시 불러와요 */
+  const apply = useCallback(
+    (next: AccountsQuery) => {
+      if (!replaceApplied(next)) reload();
+    },
+    [replaceApplied, reload],
+  );
 
   // 목록은 서버가 한 페이지씩 줘요. 조건 · 페이지 · 페이지 크기가 바뀌거나 reload 하면 다시 불러와요.
   useEffect(() => {
@@ -804,6 +831,8 @@ export default function AccountsPage() {
 
   // 요약을 아직 못 받았으면(실패 포함) 숫자 대신 「—」 — 0으로 보이면 「계정이 없다」로 읽혀요.
   const metrics = summary;
+  // 「해지 N개 보기」의 N — 요약을 못 받았으면 0(링크를 숨겨요)
+  const salesClosures = summary?.salesClosures ?? 0;
 
   const filtered = applied.keyword !== "" || applied.status !== "all";
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -842,8 +871,7 @@ export default function AccountsPage() {
     // 터치 기기: 키보드의 검색 · Enter 를 누르면 칸을 빠져 키보드를 내려요 — 결과 목록이 가리지 않게(UG-453 기획 3). PC 는 칸에 그대로
     if (isTouchPrimary()) searchRef.current?.blur();
     setPage(1);
-    setApplied({ keyword, status });
-    reload();
+    apply({ keyword, status });
   }
 
   // 검색어 지우기(✕): 이미 그 검색어로 조회한 상태면 목록도 바로 되돌려요.
@@ -852,8 +880,7 @@ export default function AccountsPage() {
     searchRef.current?.focus();
     if (applied.keyword) {
       setPage(1);
-      setApplied({ keyword: "", status: applied.status });
-      reload();
+      apply({ keyword: "", status: applied.status });
     }
   }
 
@@ -861,8 +888,7 @@ export default function AccountsPage() {
   function pickStatus(v: AccountStatusFilter) {
     setStatus(v);
     setPage(1);
-    setApplied({ keyword: keyword.trim(), status: v });
-    reload();
+    apply({ keyword: keyword.trim(), status: v });
   }
 
   // PC 요약 카드(UG-450 기획 16957): 칩과 같이 바로 걸러요. 이미 걸린 카드를 다시 누르면 목록은 그대로 — 선택 상자만 맞춰요.
@@ -894,8 +920,7 @@ export default function AccountsPage() {
     setKeyword("");
     setStatus("all");
     setPage(1);
-    setApplied({ keyword: "", status: "all" });
-    reload();
+    apply(ACCOUNTS_DEFAULT);
   }
 
   /**
@@ -1080,11 +1105,10 @@ export default function AccountsPage() {
       setKeyword("");
       setStatus("all");
       setPage(1);
-      setApplied({ keyword: "", status: "all" });
-      reload();
+      apply(ACCOUNTS_DEFAULT);
       setFreshId(account.id);
     },
-    [reload],
+    [apply],
   );
 
   const afterSend = useCallback(
@@ -1233,15 +1257,7 @@ export default function AccountsPage() {
             pressed={applied.status === "cancelled"}
             onPress={pickCard}
           />
-          {/* 해지(UG-450) = 해지 중 + 해지됨(closed_all) — 「해지 중」 · 「해지됨」 하나만 거르면 카드는 어느 것도 눌려 있지 않아요. 예전 서버라 둘 중 하나라도 없으면 「—」 */}
-          <Metric
-            id="closed_all"
-            label="해지"
-            value={metrics?.closing !== undefined && metrics.closed !== undefined ? metrics.closing + metrics.closed : undefined}
-            sub="계정 · 프로젝트 데이터 파기"
-            pressed={applied.status === "closed_all"}
-            onPress={pickCard}
-          />
+          {/* 「해지」 카드는 없어요(UG-458 기획 1) — 해지는 목록 위 「해지 N개 보기」로 계정 해지 화면에서 봐요 */}
         </div>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
@@ -1265,7 +1281,7 @@ export default function AccountsPage() {
                   clearKeyword();
                 }
               }}
-              placeholder="회사명, 이름, 고객 이메일 검색"
+              placeholder="회사명, 고객 이메일 검색"
             />
             {keyword && (
               <button type="button" className="search-clear" onClick={clearKeyword} aria-label="검색어 지우기">
@@ -1279,14 +1295,11 @@ export default function AccountsPage() {
             value={status}
             onChange={setStatus}
             options={[
-              // 요약 카드와 같은 차례(UG-450 기획 16957) — 카드가 없는 「해지 중」 · 「해지됨」은 맨 뒤
+              // 요약 카드와 같은 차례(UG-450 기획 16957). 해지 거르기는 없어요(UG-458 기획 1)
               { value: "all", label: "상태 전체" },
               { value: "pending", label: STATUS_LABEL.pending },
               { value: "in_use", label: "사용 중" },
               { value: "cancelled", label: "발급 취소" },
-              { value: "closed_all", label: "해지 (해지 중 · 해지됨)" },
-              { value: "closing", label: "해지 중" },
-              { value: "closed", label: "해지됨" },
             ]}
           />
           {/* 검정은 위쪽 「계정 만들기」 하나만 — 검색은 초기화와 같은 테두리 버튼(Enter 로도 검색) */}
@@ -1304,8 +1317,7 @@ export default function AccountsPage() {
                 ["pending", STATUS_LABEL.pending, metrics?.pending],
                 ["in_use", "사용 중", metrics?.inUse],
                 ["cancelled", "발급 취소", metrics?.cancelled],
-                // 해지(UG-450) = 해지 중 + 해지됨 한 칩 — 서버 closed_all 로 둘 다 걸러요. 예전 서버라 둘 중 하나라도 없으면 숫자 없이
-                ["closed_all", "해지", metrics?.closing !== undefined && metrics?.closed !== undefined ? metrics.closing + metrics.closed : undefined],
+                // 「해지」 칩은 없어요(UG-458 기획 1) — 「해지 N개 보기」로
               ] as const
             ).map(([v, label, n]) => (
               <button
@@ -1323,6 +1335,16 @@ export default function AccountsPage() {
               자리는 남겨(visibility) 옆 안내 · 아래 목록이 움직이지 않게 해요. 다시 받으면 보여요. */}
           <span className={`count${loaded && !loadError ? "" : " is-hidden"}`} aria-hidden={loaded && !loadError ? undefined : true}>
             총 {total}개
+            {/* 「· 해지 N개 보기」(UG-458 기획 4) — N 은 요약(검색 · 거르기와 무관한 전체 기준)의 영업 발급 해지(철회 제외). 0 이면 숨겨요.
+                계정 해지 화면을 영업 발급 · 철회 제외로 열어 줄 수가 N 과 같아요. 보통 이동(뒤로 가기로 이 화면 · 조건으로 돌아와요) */}
+            {salesClosures > 0 && (
+              <>
+                {" · "}
+                <Link className="count-link" href={SALES_CLOSURES_HREF}>
+                  해지 {salesClosures}개 보기
+                </Link>
+              </>
+            )}
           </span>
           {draftsCut && <span className="help">작성 중인 명함이 많아 최근 100개만 보입니다.</span>}
         </form>
@@ -2973,6 +2995,11 @@ function CreateDialog({
         await recheck();
         return emailRef.current?.focus();
       }
+      if (res.reason === "closing") {
+        // 해지 처리 중인 이메일(UG-458 기획 5) — 칸 아래 「해지 처리 중인 이메일이에요…」, 보내기 버튼은 꺼요
+        setChecked(key, { status: "closing" });
+        return emailRef.current?.focus();
+      }
       if (res.reason === "domain") {
         // 도메인 확인에 걸려 새 계정을 만들지 않았어요 — 잘못된 주소의 계정도 그대로 두고 이 창에서 다시 고쳐요
         setEmailError(DOMAIN_ERROR_TEXT);
@@ -3119,6 +3146,10 @@ function CreateDialog({
     if (res.reason === "duplicate" || res.reason === "in_use") {
       // 조회와 보내기 사이에 상태가 바뀐 경우: 다시 조회해서 칸 아래에 보여 줘요.
       await recheck();
+      emailRef.current?.focus();
+    } else if (res.reason === "closing") {
+      // 조회와 보내기 사이에 해지가 시작됐어요(UG-458 기획 5) — 칸 아래 「해지 처리 중인 이메일이에요…」, 보내기 버튼은 꺼요
+      setChecked(key, { status: "closing" });
       emailRef.current?.focus();
     } else if (res.reason === "domain") {
       // 도메인 확인에 걸려 계정을 만들지 않았어요 — 창은 닫지 않고 이메일 칸 아래에 안내해요
@@ -3794,7 +3825,7 @@ function CreateDialog({
               ) : fixTaken ? (
                 <p className="error">이미 만든 계정의 이메일입니다. 다른 주소를 입력해 주세요.</p>
               ) : closing ? (
-                <p className="error">{CLOSING_TIP}. 해지가 끝나거나 철회될 때까지 보낼 수 없습니다.</p>
+                <p className="error">{CLOSING_EMAIL}</p>
               ) : fix && !inUse ? null : inUse ? (
                 // 정말 막힌 경우: 빨간 한 줄 + 실행 버튼 비활성. 아래에 「고객이 비밀번호를 잊었나요?」(UG-421 D · MD)
                 <p className="error">이미 사용 중인 계정입니다.</p>
