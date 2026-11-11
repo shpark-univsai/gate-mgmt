@@ -908,6 +908,15 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   /* 창이 열린 동안에는 알림을 화면 위로(UG-455 기획 17124 반박 리뷰 M2) — 닫을 때까지 남는 「명함 사진은 저장하지 못했습니다」가
      창 맨 아래에 붙은 버튼 줄(다시 보내기 · 취소 · 계정 만들기)을 가리지 않게. 위에서 아래로 쌓아요 */
   body:has(.scrim) .toast-stack { top: calc(16px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
+  /* 알림이 떠 있는 동안 창은 알림 아래에서 시작해요(UG-455 기획 17141) — 닫을 때까지 남는 사진 실패 알림이 다음 계정 만들기 창의
+     제목 · 「명함 찍어서 채우기」를 가리던 일. 창 스크롤 영역의 위 끝을 알림 묶음 아래(위 16 + 안전 영역 + 묶음 높이 --toast-stack-h, ToastStack) + 8 로.
+     padding 이 아니라 투명 border 라 창을 스크롤해도 알림 밑으로 올라가지 않아요(border 는 스크롤 영역 밖 · 바탕 어둡게는 border 까지 칠해져요).
+     창 높이는 Dialog 가 보이는 영역(키보드 제외)에 맞춘 그대로라 스크롤 영역만 줄고, 맨 아래 버튼 줄(sticky)은 계속 보여요.
+     알림이 모두 사라지면 묶음이 없어져 제자리(위 60)로 */
+  body:has(.toast-stack) .scrim {
+    border-top: calc(16px + env(safe-area-inset-top, 0px) + var(--toast-stack-h, 0px) + 8px) solid transparent;
+    padding-top: 0;
+  }
 }
 
 /* ── 터치 기기(아이패드 등 넓은 화면 포함): 읽은 줄(칩)은 44 높이 · 8 간격(UG-451 기획 17073-10) ── */

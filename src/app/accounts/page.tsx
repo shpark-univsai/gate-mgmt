@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Dialog, PopupSelect, StatusChips, Toast } from "@/components/ui";
+import { Dialog, PopupSelect, StatusChips, Toast, ToastStack } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { CardPhotoViewer } from "@/components/card-photo-viewer";
 import { fmtFull, fmtShort, handle, kstParts, pageItems } from "@/lib/format";
@@ -1646,7 +1646,7 @@ export default function AccountsPage() {
       {cardPhoto && <CardPhotoViewer src={cardPhoto.src} email={cardPhoto.email} onClose={closeCardPhoto} />}
 
       {(toast || photoToast > 0) && (
-        <div className="toast-stack">
+        <ToastStack>
           {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
           {/* 명함 사진을 저장하지 못한 알림은 직원이 닫을 때까지 남겨요(기획 17124) — 완료 알림은 전처럼 4초 */}
           {photoToast > 0 && (
@@ -1660,7 +1660,7 @@ export default function AccountsPage() {
               onDone={clearPhotoToast}
             />
           )}
-        </div>
+        </ToastStack>
       )}
     </>
   );

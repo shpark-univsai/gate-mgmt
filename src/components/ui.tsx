@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IcArrowDown, IcCheck, IcInputClose } from "./icons";
 import { isTouchPrimary } from "@/lib/pointer";
 import { hasMoreToRight } from "@/lib/scroll-more";
@@ -109,6 +109,17 @@ export function Dialog({
       realignUntil = 0;
       window.clearTimeout(timer);
     };
+    // 휴대폰에서 창이 열린 채 알림이 뜨거나 사라지면(UG-455 기획 17141) 창 스크롤 영역의 위 끝(.scrim border-top)이 바뀌어요 —
+    // 그때만 쓰던 칸을 다시 보이게 맞춰요. 키보드 · 주소창으로 높이만 바뀌는 resize 는 위의 맞춤 규칙 그대로(여기서는 건너뛰어요)
+    let reservedTop = getComputedStyle(scrim).borderTopWidth;
+    const onScrimResize = () => {
+      const top = getComputedStyle(scrim).borderTopWidth;
+      if (top === reservedTop) return;
+      reservedTop = top;
+      reveal();
+    };
+    const scrimObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onScrimResize);
+    scrimObserver?.observe(scrim);
     dialog.addEventListener("focusin", onFocusIn);
     scrim.addEventListener("touchstart", onUserScroll, { passive: true });
     scrim.addEventListener("wheel", onUserScroll, { passive: true });
@@ -119,6 +130,7 @@ export function Dialog({
       scrim.removeEventListener("wheel", onUserScroll);
       vv?.removeEventListener("resize", onViewportResize);
       observer?.disconnect();
+      scrimObserver?.disconnect();
       window.clearTimeout(timer);
     };
   }, []);
@@ -239,6 +251,34 @@ export function Toast({
           닫기
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * 알림 묶음 — 알림 둘이 함께 떠도 겹치지 않게 쌓아요. 묶음 높이를 body 의 --toast-stack-h 로 알려요(UG-455 기획 17141):
+ * 휴대폰에서 창이 열려 있으면 알림이 화면 위에 뜨는데, 창은 그 높이만큼 아래에서 시작해요(globals.css .scrim border-top) —
+ * 닫을 때까지 남는 「명함 사진은 저장하지 못했습니다」가 다음 계정 만들기 창의 제목 · 「명함 찍어서 채우기」를 가리지 않게.
+ * 알림이 모두 사라져 묶음이 없어지면 값을 지워 창이 제자리로 돌아가요. 그리기 전에(useLayoutEffect) 재서 한 순간도 겹치지 않게 해요.
+ */
+export function ToastStack({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const body = document.body;
+    const measure = () => body.style.setProperty("--toast-stack-h", `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => {
+      observer?.disconnect();
+      body.style.removeProperty("--toast-stack-h");
+    };
+  }, []);
+  return (
+    <div ref={ref} className="toast-stack">
+      {children}
     </div>
   );
 }
