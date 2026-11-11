@@ -330,6 +330,13 @@ function ClosuresScreen() {
 
   if (!staff) return null;
 
+  /** 「계정 해지」 — PC · 아이패드는 제목 줄 오른쪽, 휴대폰(≤ 640)은 검색 칸 오른쪽(UG-458 기획 17191). 화면 폭에 맞는 하나만 보여요(globals.css) */
+  const closeButton = (extraClass: string) => (
+    <button type="button" className={`btn btn-dark btn-sm${extraClass}`} onClick={() => setOpening(true)}>
+      계정 해지
+    </button>
+  );
+
   return (
     <>
       <AppHeader
@@ -350,11 +357,7 @@ function ClosuresScreen() {
       <main className="content">
         <div className="page-title">
           <h1 className="t-heading-300">계정 해지</h1>
-          <div className="page-actions">
-            <button type="button" className="btn btn-dark btn-sm" onClick={() => setOpening(true)}>
-              계정 해지
-            </button>
-          </div>
+          <div className="page-actions">{closeButton("")}</div>
         </div>
 
         <form className="toolbar" onSubmit={onSearch} role="search">
@@ -385,6 +388,8 @@ function ClosuresScreen() {
               </button>
             )}
           </label>
+          {/* 휴대폰: 「계정 해지」는 검색 칸 오른쪽(UG-458 기획 17191 — 제목 줄을 뺐어요). PC · 아이패드는 숨기고 위 제목 줄의 것을 써요 */}
+          {closeButton(" search-row-action")}
           {/* 기본값이 아닌 값을 고르면 바탕 Neutral/100(UG-458 기획 8) — 상태 · 가입 경로 같이 */}
           <PopupSelect<ClosureStatusFilter>
             className={`select${status !== "all" ? " is-set" : ""}`}
