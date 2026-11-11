@@ -24,7 +24,7 @@
   /* 계정 해지 확인 창(T3) 경고 상자 — Figma 시안 값(UG-443 기획 16925) */
   --danger-surface: #fff7f6;
   --danger-text: #bf3636;
-  --warning-text: #b45309; /* 주의 안내 글자(UG-451 기획 17132) — 흰 바탕 대비 약 5:1. 디자인 시스템에 Warning 글자 값이 없어 저희가 정함 */
+  --warning-text: #c25700; /* 주의 안내 글자 — 디자인 시스템 Color/Semantic/Warning/600(UG-451 기획 17140), 흰 바탕 대비 약 4.5:1 */
   --success-600: #16a34a;
   --overlay-dark-80: rgb(14 22 42 / 0.8);
   --viewer-backdrop: #000; /* 명함 크게 보기 바탕 — 사진 앱처럼 검정으로 덮어요(UG-455 기획 17099-1). 조금이라도 비치면(0.95 · 0.98) 뒤 글자가 읽혀 불투명하게 */
@@ -907,7 +907,28 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .toast-stack { left: 16px; right: 16px; bottom: 16px; }
   /* 창이 열린 동안에는 알림을 화면 위로(UG-455 기획 17124 반박 리뷰 M2) — 닫을 때까지 남는 「명함 사진은 저장하지 못했습니다」가
      창 맨 아래에 붙은 버튼 줄(다시 보내기 · 취소 · 계정 만들기)을 가리지 않게. 위에서 아래로 쌓아요 */
-  body:has(.scrim) .toast-stack { top: calc(16px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
+  /* 위 끝은 창(.scrim)과 같이 보이는 영역의 위 끝(--vv-top, Dialog)에 맞춰요 — iOS 키보드로 화면이 밀려 올라가도 창과 어긋나지 않게(UG-455 기획 17141 반박 리뷰 N1) */
+  body:has(.scrim) .toast-stack { top: calc(var(--vv-top, 0px) + 16px + env(safe-area-inset-top, 0px)); bottom: auto; flex-direction: column; }
+  /* 알림이 떠 있는 동안 창은 알림 아래에서 시작해요(UG-455 기획 17141) — 닫을 때까지 남는 사진 실패 알림이 다음 계정 만들기 창의
+     제목 · 「명함 찍어서 채우기」를 가리던 일. 창 스크롤 영역의 위 끝을 알림 묶음 아래(위 16 + 안전 영역 + 묶음 높이 --toast-stack-h, ToastStack) + 8 로.
+     padding 이 아니라 투명 border 라 창을 스크롤해도 알림 밑으로 올라가지 않아요(border 는 스크롤 영역 밖 · 바탕 어둡게는 border 까지 칠해져요).
+     창 높이는 Dialog 가 보이는 영역(키보드 제외)에 맞춘 그대로라 스크롤 영역만 줄고, 맨 아래 버튼 줄(sticky)은 계속 보여요.
+     알림이 모두 사라지면 묶음이 없어져 제자리(위 60)로.
+     다만 창 스크롤 영역은 언제나 232(버튼 줄 72 + 칸 두어 개 160) 이상 남겨요(반박 리뷰 L2) — 보이는 높이(--scrim-h, Dialog)가 짧으면
+     (키보드가 올라온 360×640 · 휴대폰 가로) 비우는 자리를 그만큼 줄이고, 아주 짧으면 0. 그때는 창이 알림 밑으로 지나갈 수 있지만
+     알림은 「닫기」 · 4초로 걷히고 창은 계속 쓸 수 있어요 */
+  body:has(.toast-stack) .scrim {
+    --dialog-min-scroll: 232px;
+    border-top: max(
+        0px,
+        min(
+          calc(16px + env(safe-area-inset-top, 0px) + var(--toast-stack-h, 0px) + 8px),
+          calc(var(--scrim-h, 100dvh) - var(--dialog-min-scroll))
+        )
+      )
+      solid transparent;
+    padding-top: 0;
+  }
 }
 
 /* ── 터치 기기(아이패드 등 넓은 화면 포함): 읽은 줄(칩)은 44 높이 · 8 간격(UG-451 기획 17073-10) ── */

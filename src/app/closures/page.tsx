@@ -6,7 +6,7 @@
 // 실행 · 다시 시도만 해요. 결과 알림 메일은 만들지 않아요 — 직원이 고객의 탈퇴 요청 메일에 답장해요(Figma 규칙 10번 문안).
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Dialog, PopupSelect, StatusChips, Toast } from "@/components/ui";
+import { Dialog, PopupSelect, StatusChips, Toast, ToastStack } from "@/components/ui";
 import { AppHeader } from "@/components/app-header";
 import { IcArrowLeft, IcArrowRight, IcInputClose, IcSearch } from "@/components/icons";
 import {
@@ -541,7 +541,12 @@ export default function ClosuresPage() {
         />
       )}
 
-      {toast && <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />}
+      {/* 알림 묶음으로 — 휴대폰에서 창이 열려 있으면 위에 뜨고 창은 그 아래에서 시작해요(UG-455 기획 17141, 계정 발급과 같게) */}
+      {toast && (
+        <ToastStack>
+          <Toast title={toast.title} detail={toast.detail} tone={toast.tone} onDone={clearToast} />
+        </ToastStack>
+      )}
     </>
   );
 }
