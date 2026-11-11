@@ -46,6 +46,8 @@ export function Dialog({
   const scrimRef = useRef<HTMLDivElement>(null);
 
   // 휴대폰 키보드가 올라오면 화면에 실제로 보이는 영역만 덮어요. 안 그러면 창 아래쪽 버튼이 키보드 뒤로 숨어요.
+  // 보이는 높이(--scrim-h)는 알림 자리를 비울 때 창 스크롤 영역을 최소한 남기는 데 쓰고, 보이는 영역의 위 끝(--vv-top, body)은
+  // 휴대폰에서 창 위에 뜨는 알림 묶음도 창과 같은 자리에 맞추는 데 써요(UG-455 기획 17141 반박 리뷰 L2 · N1, globals.css)
   useEffect(() => {
     const vv = window.visualViewport;
     const el = scrimRef.current;
@@ -54,6 +56,8 @@ export function Dialog({
       el.style.top = `${vv.offsetTop}px`;
       el.style.height = `${vv.height}px`;
       el.style.bottom = "auto";
+      el.style.setProperty("--scrim-h", `${vv.height}px`);
+      document.body.style.setProperty("--vv-top", `${vv.offsetTop}px`);
     };
     fit();
     vv.addEventListener("resize", fit);
@@ -61,6 +65,8 @@ export function Dialog({
     return () => {
       vv.removeEventListener("resize", fit);
       vv.removeEventListener("scroll", fit);
+      // 창이 다른 창으로 바뀌면(만들기 → 실패 결과) 새 창이 다시 써요 — 닫을 때 앞 창이 지운 뒤 새 창의 fit 이 돌아요
+      document.body.style.removeProperty("--vv-top");
     };
   }, []);
 
@@ -81,6 +87,8 @@ export function Dialog({
     let timer = 0;
     let realignUntil = 0;
     let lastHeight = vv?.height ?? 0;
+    // 칸에 초점이 간 뒤 직원이 창을 만지거나 스크롤했는지 — 알림 때문에 자리가 바뀌어도 그때는 칸으로 끌고 가지 않아요
+    let userScrolled = false;
     const reveal = () => {
       if (!input || document.activeElement !== input) return;
       field?.scrollIntoView({ block: "nearest" });
@@ -95,6 +103,7 @@ export function Dialog({
       observer?.disconnect();
       observer?.observe(field);
       realignUntil = performance.now() + REALIGN_WINDOW_MS;
+      userScrolled = false;
       // 키보드가 다 올라온 뒤(resize 가 오지 않는 브라우저도) 한 번 더
       window.clearTimeout(timer);
       timer = window.setTimeout(reveal, 400);
@@ -107,16 +116,19 @@ export function Dialog({
     };
     const onUserScroll = () => {
       realignUntil = 0;
+      userScrolled = true;
       window.clearTimeout(timer);
     };
-    // 휴대폰에서 창이 열린 채 알림이 뜨거나 사라지면(UG-455 기획 17141) 창 스크롤 영역의 위 끝(.scrim border-top)이 바뀌어요 —
-    // 그때만 쓰던 칸을 다시 보이게 맞춰요. 키보드 · 주소창으로 높이만 바뀌는 resize 는 위의 맞춤 규칙 그대로(여기서는 건너뛰어요)
-    let reservedTop = getComputedStyle(scrim).borderTopWidth;
+    // 휴대폰에서 창이 열린 채 알림이 뜨면(UG-455 기획 17141) 창 스크롤 영역의 위 끝(.scrim border-top)이 내려와 쓰던 칸이 가려질 수 있어요 —
+    // 그 자리가 커질 때만, 그리고 초점이 간 뒤 직원이 창을 만지지 않았을 때만 칸을 다시 보이게 맞춰요(반박 리뷰 L1).
+    // 알림이 사라져 자리가 줄 때(완료 알림 4초 · 「닫기」)는 칸이 가려지지 않으니 그대로 — 명함 사진과 견주던 자리에서 끌려가지 않게.
+    // 키보드 · 주소창으로 높이만 바뀌는 resize 는 위의 맞춤 규칙 그대로(여기서는 건너뛰어요)
+    let reservedTop = parseFloat(getComputedStyle(scrim).borderTopWidth) || 0;
     const onScrimResize = () => {
-      const top = getComputedStyle(scrim).borderTopWidth;
-      if (top === reservedTop) return;
+      const top = parseFloat(getComputedStyle(scrim).borderTopWidth) || 0;
+      const grew = top > reservedTop;
       reservedTop = top;
-      reveal();
+      if (grew && !userScrolled) reveal();
     };
     const scrimObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onScrimResize);
     scrimObserver?.observe(scrim);
