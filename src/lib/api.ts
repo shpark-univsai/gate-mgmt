@@ -846,7 +846,9 @@ export async function readCardOnServer(photo: string, signal: AbortSignal): Prom
     const text = (v: unknown) => (typeof v === "string" ? v : null);
     return { ok: true, fields: { company: text(data?.company), name: text(data?.name), email: text(data?.email), phone: text(data?.phone) } };
   } catch (e) {
-    if (e instanceof ApiError && (e.status === 503 || e.status === 404)) return { ok: false, reason: "unavailable" };
+    // 「없음」으로 기억하는 것은 서버가 꺼져 있다고 답한 503(MGMT-127)과 경로가 없는 404 뿐 — 재배포 중 게이트웨이 · 프록시의 503 은
+    // 이번 사진만 실패로 봐요(반박 리뷰 F1: 한 번의 일시 503 으로 그 탭이 하루 종일 기기 안 읽기만 쓰지 않게)
+    if (e instanceof ApiError && ((e.status === 503 && e.code === "MGMT-127") || e.status === 404)) return { ok: false, reason: "unavailable" };
     return { ok: false, reason: "failed" };
   }
 }
