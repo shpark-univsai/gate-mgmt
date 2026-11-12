@@ -140,11 +140,13 @@ export type AuthedOptions = {
    * ApiError(401, BACKGROUND_SESSION_ENDED)를 던져요 — 다음에 직원이 누르는 요청이 로그인 화면으로 보내요.
    */
   background?: boolean;
+  /** 요청을 끊을 신호 — 주면 기본 30초 한도 대신 이것으로 끊어요(명함 읽기 25초 · 창 닫기, UG-463). 재발급 요청에는 쓰지 않아요 */
+  signal?: AbortSignal;
 };
 
 /** 직원 토큰을 붙여 부르는 백오피스 API */
 export async function authed<T>(method: string, path: string, body?: unknown, opts: AuthedOptions = {}): Promise<T> {
-  const init: RequestInit = body === undefined ? {} : json(body);
+  const init: RequestInit = { ...(body === undefined ? {} : json(body)), ...(opts.signal ? { signal: opts.signal } : {}) };
   const sessionEnded = (reason: LoginReason): never => {
     if (opts.background) throw new ApiError(401, BACKGROUND_SESSION_ENDED);
     return endSession(reason);
