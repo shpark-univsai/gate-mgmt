@@ -823,3 +823,30 @@ export async function withdrawClosure(id: string): Promise<WithdrawClosureResult
     return { ok: false, reason: "failed" };
   }
 }
+
+/**
+ * 서버가 명함에서 읽은 네 칸(UG-463) — 읽지 못한 칸은 null. 값은 서버(Claude)가 읽은 그대로라 화면이 칸에 넣기 전에 다듬어요(card-read.ts)
+ */
+export type CardReadFields = { company: string | null; name: string | null; email: string | null; phone: string | null };
+
+/**
+ * unavailable = 이 서버에는 명함 읽기가 없음(503 꺼짐 — 온프레미스에 키가 없는 경우 등 · 404 경로 없음) — 페이지를 연 동안 다시 부르지 않아요
+ * failed = 그 밖의 실패(네트워크 · 시간 초과 · 서버 오류 · 로그인 끊김) — 이번 사진만 기기 안 읽기로
+ */
+export type CardReadResult = { ok: true; fields: CardReadFields } | { ok: false; reason: "unavailable" | "failed" };
+
+/**
+ * 명함 사진을 서버가 읽어요(UG-463). photo = data: 접두사 없는 base64 JPEG(풀어서 2 MiB 이하).
+ * 직원이 누른 일이지만 뒤쪽 요청처럼 불러요(background) — 로그인이 끊겨도 입력 중인 창을 두고 기기 안 읽기로 넘어가요(다음에 누르는 요청이 로그인 화면으로 보내요).
+ * signal = 25초 한도 · 창 닫기로 끊어요.
+ */
+export async function readCardOnServer(photo: string, signal: AbortSignal): Promise<CardReadResult> {
+  try {
+    const data = await authed<Partial<Record<keyof CardReadFields, unknown>> | null>("POST", `${MGMT}/card-reads`, { photo }, { background: true, signal });
+    const text = (v: unknown) => (typeof v === "string" ? v : null);
+    return { ok: true, fields: { company: text(data?.company), name: text(data?.name), email: text(data?.email), phone: text(data?.phone) } };
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 503 || e.status === 404)) return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "failed" };
+  }
+}

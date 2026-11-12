@@ -22,6 +22,7 @@ import {
   listCardDrafts,
   logout,
   resendGuide,
+  readCardOnServer,
   saveCardDraft,
   sendPasswordResetLink,
   CARD_DRAFT_MAX,
@@ -48,6 +49,7 @@ import { isTextTruncated, tipOpensUp } from "@/lib/text-overflow";
 import { isTouchPrimary } from "@/lib/pointer";
 import { buildAccountsCsv, exportFileName } from "@/lib/accounts-csv";
 import { createCardReader, type ReadFailure } from "@/lib/card-ocr";
+import { readOnServer, serverChips, serverReadAvailable, serverScan, type ServerReading } from "@/lib/card-read";
 import { ApiError } from "@/lib/http";
 import { CARD_PHOTO_TEXT, cancelTargetsText, cardPhotoNotSaved, purgeLegacyCardPhotos } from "@/lib/card-photo";
 import { RECREATE_TEXT, newAccountMailText, oldIssueAfterCreate, oldIssueLeft, oldIssueRevoked } from "@/lib/recreate";
@@ -121,6 +123,8 @@ const SCAN_READING = "명함을 읽고 있습니다…";
 // 읽는 동안만(N2) — 첫 읽기는 글자 읽기 도구(약 8MB)를 내려받아 더 걸려요
 const SCAN_WAIT = "보통 몇 초 걸립니다. 처음 한 번은 글자 읽기 도구를 내려받아 조금 더 걸립니다.";
 const SCAN_DONE = "명함에서 읽었습니다. 틀린 글자가 있을 수 있으니 고객과 함께 확인해 주세요.";
+// 서버가 명함을 읽는 동안(UG-463) — 도구를 내려받지 않아요. 서버가 읽지 못하면(25초 · 꺼짐 · 오류) 기기 안 읽기로 넘어가며 위 SCAN_WAIT 로 바뀌어요
+const SCAN_SERVER_WAIT = "명함을 읽고 있습니다. 보통 몇 초 걸립니다.";
 // 읽기 도구를 받지 못했거나(첫 사용 · 인터넷 없음) 글자를 찾지 못함 — 막힌 게 아니라 직접 입력하면 돼서 회색
 const SCAN_FAILED = "명함을 읽지 못했습니다. 다시 찍거나 직접 입력해 주세요.";
 // 글자 읽기 도구(약 8.5MB)를 받지 못함(인터넷 없음 · 시간 초과) — 다시 찍어도 같으니 직접 입력 안내(UG-451 기획 16991)
@@ -2377,15 +2381,25 @@ function CreateDialog({
   // 명함 읽기 차례 번호(UG-451 반박 리뷰 4) — 돌려 읽는 동안에는 「명함 다시 찍기」를 누를 수 있어요. 새 사진을 읽기 시작하면 번호가 올라가고,
   // 늦게 끝난 앞 읽기는 번호가 달라 결과를 버려요(앞 명함 값이 새 명함 칸 · 칩 · 사진을 덮지 않게). 처음 읽는 동안은 전처럼 버튼이 잠겨 있어요
   const scanGen = useRef(0);
+  // 서버가 명함을 읽는 중(UG-463, card-read.ts) — 기다림 안내만 달라요. 이 동안에도 「명함 다시 찍기」는 잠겨요(scanLocked)
+  const [scanServer, setScanServer] = useState(false);
+  // 서버가 읽어 채운 명함(UG-463) — 칩이 없어 scan 은 비어 있어요. email = 서버가 채운 이메일(칸이 그대로인 동안 「명함과 같은지 확인」 안내를 띄워요)
+  // 기기 안에서 다시 읽거나 못 읽으면 지워요
+  const [serverRead, setServerRead] = useState<{ email: string | null } | null>(null);
+  // 서버 읽기를 끊는 신호 — 창을 닫으면 끊어요
+  const serverAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => serverAbort.current?.abort(), []);
   // 「명함 다시 찍기」를 누를 수 없는 동안 — 처음 방향을 읽는 중(돌려 읽는 중에는 풀려요)
   const scanLocked = scanning && !scanRetry;
   const scanFailedText =
     scanFailed === "tool" ? SCAN_TOOL_FAILED : scanFailed === "tool_reload" ? SCAN_TOOL_RELOAD : scanFailed === "format" ? SCAN_FORMAT_FAILED : SCAN_FAILED;
-  const scanWaitText = scanRetry
-    ? scanRotating(scanRetry.attempt, scanRetry.total)
-    : scanProgress !== null && scanProgress < 100
-      ? scanDownloading(scanProgress)
-      : SCAN_WAIT;
+  const scanWaitText = scanServer
+    ? SCAN_SERVER_WAIT
+    : scanRetry
+      ? scanRotating(scanRetry.attempt, scanRetry.total)
+      : scanProgress !== null && scanProgress < 100
+        ? scanDownloading(scanProgress)
+        : SCAN_WAIT;
   // 읽은 줄(칩)을 펼쳤는지(UG-451 기획 17100 규칙 3 · 7) — 접어 두고 「읽은 줄 모두 보기 (n)」로 펼쳐요. 창을 닫았다 열면 접힌 채로 시작해요.
   // 이메일 칸이 빈 「작성 중」 명함만 펼친 채로 열어요(규칙 4 — 메일 주소를 읽은 줄에서 골라야 할 수 있어요)
   const [chipsOpen, setChipsOpen] = useState(() => !!draft && !draft.draft.email?.trim() && scanFromDraft(draft.chips) !== null);
@@ -3179,8 +3193,9 @@ function CreateDialog({
   // 칩을 넣지 않을 칸(잠긴 칸) — 그 칸에 연결된 칩은 「아직 안 씀」으로 보여요
   const lockedFields: ScanField[] = [...(companyLocked ? (["company"] as const) : []), ...(personLocked ? (["name", "phone"] as const) : [])];
   /** 다음 칩이 들어갈 칸을 진하게(UG-453 기획 5) — 터치 기기에서 초점 없이 정한 대상 칸. 읽은 줄(칩)이 보일 때만 */
-  // 읽은 줄을 보여 주는지(UG-451 기획 17100) — 펼쳤거나, 메일 주소를 채우지 못해 읽은 줄에서 골라야 할 때(규칙 4 — M15 그대로: 접지 않고 늘 보여요)
-  const chipsShown = !!scan && (chipsOpen || emailMissing !== null);
+  // 읽은 줄을 보여 주는지(UG-451 기획 17100) — 펼쳤을 때. 메일 주소를 채우지 못하면 펼친 채로 시작하고(규칙 4),
+  // 직원이 주소를 직접 넣은 뒤 접을 수 있게 「읽은 줄 접기」를 늘 보여 줘요(UG-463 기획 요청 5 — 전에는 메일을 못 읽으면 접을 수 없었어요)
+  const chipsShown = !!scan && chipsOpen;
   const targetClass = (field: ScanField) =>
     scan && !fix && chipsShown && chipTarget === field && !lockedFields.includes(field) ? " is-target" : "";
   // 터치 기기 — 칩 안내 문구 · 낭독기 대상 칸 알림(UG-453 리뷰 m2 · nit)
@@ -3374,26 +3389,53 @@ function CreateDialog({
     let failure: ReadFailure | null = null;
     // 「바로 놓인 명함인지 모르는데 연락처만 찾은」 읽기의 번호를 믿을지 — 돌려 읽기가 정해 줘요(반박 리뷰 후속 1)
     let lonePhone = true;
-    try {
-      ({ text, lines, preview, failure, lonePhone } = await reader.read(file, (percent) => live() && setScanProgress(percent), {
-        // 한 방향으로 읽은 결과의 점수 — 이메일 · 연락처를 하나도 못 찾았고 바로 놓인 명함으로 보이지도 않으면 다른 방향으로 다시 읽어요.
-        // 바로 놓인 명함인지 모르는데 연락처만 찾은 것(weak — 거꾸로 읽힌 번호일 수 있어요)도 다른 방향을 읽어 봐요.
-        // 글자가 거의 없는 사진(뒷면 · 빈 사진)은 돌리지 않아요(card-rotate.ts needsRetry)
-        judge: (readText, readLines) => {
-          const r = scanCard(readText, readLines);
-          return { found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse, weak: r.weak };
-        },
-        onRetry: (attempt, total) => live() && setScanRetry({ attempt, total }),
-      }));
-    } catch {
-      text = null;
-      failure = "read";
-    } finally {
-      // 새 읽기가 시작됐으면 그 읽기의 「읽는 중」 표시를 건드리지 않아요
-      if (live()) {
-        setScanning(false);
-        setScanProgress(null);
-        setScanRetry(null);
+    // 서버가 먼저 읽어요(UG-463, card-read.ts) — 줄인 사진을 보내 네 칸 값만 받아요. 서버가 읽지 못하면(꺼짐 503 · 404 · 오류 · 네트워크 · 25초)
+    // null 이고 아래 기기 안 읽기를 전과 똑같이 해요. 25초가 지나 넘어간 뒤 늦게 온 서버 답은 card-read 가 버려요(한 번만 채워요).
+    // 서버가 「없음」(503 · 404)이라 답했으면 이 페이지에서는 묻지 않고 바로 기기 안에서 읽어요
+    let server: ServerReading | null = null;
+    if (serverReadAvailable()) {
+      const ctrl = new AbortController();
+      serverAbort.current = ctrl;
+      setScanServer(true);
+      try {
+        server = await readOnServer(file, readCardOnServer, ctrl.signal);
+      } catch {
+        server = null;
+      } finally {
+        if (serverAbort.current === ctrl) serverAbort.current = null;
+        if (live()) setScanServer(false);
+      }
+      // 창을 닫았거나 주소를 고치는 모드로 바뀌었으면 여기서 끝 — 기기 안 읽기도 하지 않아요
+      if (!live() || !openRef.current || fixRef.current) {
+        if (live()) setScanning(false);
+        return;
+      }
+    }
+    if (server) {
+      setScanning(false);
+      preview = server.preview;
+    } else {
+      try {
+        ({ text, lines, preview, failure, lonePhone } = await reader.read(file, (percent) => live() && setScanProgress(percent), {
+          // 한 방향으로 읽은 결과의 점수 — 이메일 · 연락처를 하나도 못 찾았고 바로 놓인 명함으로 보이지도 않으면 다른 방향으로 다시 읽어요.
+          // 바로 놓인 명함인지 모르는데 연락처만 찾은 것(weak — 거꾸로 읽힌 번호일 수 있어요)도 다른 방향을 읽어 봐요.
+          // 글자가 거의 없는 사진(뒷면 · 빈 사진)은 돌리지 않아요(card-rotate.ts needsRetry)
+          judge: (readText, readLines) => {
+            const r = scanCard(readText, readLines);
+            return { found: r.found, candidate: r.outcome === "unsure" || r.upright, confidence: r.confidence, sparse: r.sparse, weak: r.weak };
+          },
+          onRetry: (attempt, total) => live() && setScanRetry({ attempt, total }),
+        }));
+      } catch {
+        text = null;
+        failure = "read";
+      } finally {
+        // 새 읽기가 시작됐으면 그 읽기의 「읽는 중」 표시를 건드리지 않아요
+        if (live()) {
+          setScanning(false);
+          setScanProgress(null);
+          setScanRetry(null);
+        }
       }
     }
     // 돌려 읽는 동안 다시 찍어 새 읽기가 시작됐거나 창을 닫았으면 이 결과는 버려요(반박 리뷰 4)
@@ -3401,8 +3443,10 @@ function CreateDialog({
     // 읽는 사이 주소를 고치는 모드로 바뀌었으면(보내기 결과) 늦게 온 결과는 버려요 — 고치는 계정의 칸을 바꾸지 않게
     if (fixRef.current) return;
     // 비교용 사진은 이번 명함으로 — 글자를 못 읽었어도(직접 입력할 때 보며 비교). 돌려 읽은 방향이 이겼으면 바로 세운 사진이에요
+    // (서버가 읽었으면 찍힌 방향 그대로예요 — 서버는 돌아간 명함도 읽어요)
     setPhoto(preview);
-    const result = text === null ? null : scanCard(text, lines, { lonePhone });
+    // 서버가 읽은 값은 기기 안 읽기의 결과 모양으로 바꿔 아래 같은 채우기 규칙을 써요(칩 없음 — 네 칸이 다 비면 「명함을 읽지 못했습니다」)
+    const result = server ? serverScan(server.values) : text === null ? null : scanCard(text, lines, { lonePhone });
     const now = latestValues.current;
     // 비어 있거나 앞 명함이 자동으로 채운 그대로인 칸
     const untouched = (field: ScanField) => !now[field].trim() || autoFilled.current[field] === now[field];
@@ -3413,7 +3457,8 @@ function CreateDialog({
     const staff: Partial<ScanValues> = {};
     for (const field of ["company", "name", "email", "phone"] as const) if (!untouched(field)) staff[field] = now[field];
     // 읽은 줄(칩)이 있는지 — 못 읽은 명함이어도 바로 놓인 명함의 또렷한 줄은 남아요(scanCard). 빈 사진 · 거꾸로 찍혀 깨진 줄뿐이면 없어요
-    const nextChips = result?.chips ?? [];
+    // 서버가 읽었으면 보여 줄 칩이 없어, 같은 사람인지 견줄 때만 네 칸 값으로 만든 칩을 써요(card-read.ts serverChips — 보여 주지도 남기지도 않아요)
+    const nextChips = server ? serverChips(server.values) : (result?.chips ?? []);
     const verdict: RetakeVerdict = !retake
       ? "same"
       : retakeVerdict(
@@ -3439,7 +3484,8 @@ function CreateDialog({
         auto: korean,
       };
     };
-    if (!result || result.chips.length === 0 || result.outcome === "unreadable") {
+    // 서버가 읽은 결과는 칩이 없어도 읽은 것이에요 — 네 칸이 다 빈 것(unreadable)만 못 읽은 것
+    if (!result || (!server && result.chips.length === 0) || result.outcome === "unreadable") {
       // 다시 찍은 명함(B)을 읽지 못함 — 사진은 B 인데 앞 명함(A)이 자동으로 채운 값으로 보내지지 않게(UG-451 반박 리뷰)
       // A 가 채우고 직원이 손대지 않은 칸은 비우고 A 의 칩도 지워요. 직원이 친 · 고친 값 · 칩을 눌러 넣은 값은 그대로예요.
       // 이메일 · 연락처를 하나도 못 찾은 명함(unreadable — 거꾸로 · 옆으로 찍힘, 명함이 아닌 사진)의 깨진 줄도 같아요(기획 17106-1):
@@ -3463,6 +3509,7 @@ function CreateDialog({
       if (plan.verdict === "different") cardEmail.current = "";
       const kept = result && result.chips.length > 0 ? result.chips : null;
       setScan(kept ? { chips: kept, links: {} } : null);
+      setServerRead(null);
       setChipsOpen(kept !== null);
       setConfirmedEmail(null);
       clearChipTarget();
@@ -3472,8 +3519,8 @@ function CreateDialog({
       setRetakeNoted(retakeNote(plan, after));
       setScanDone((n) => n + 1); // 읽지 못했어도 사진 · 비운 칸은 바로 남겨요(UG-451 기획 17009)
       // HEIC 는 도구 문제가 아니라 형식 문제 — 다시 찍게 안내해요(도구를 받지 못한 경우는 그 안내가 먼저).
-      // 글자를 읽었으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰)
-      const opened = text !== null && /\S/.test(text);
+      // 글자를 읽었으면 사진은 열린 것이라 HEIC 라도 형식 안내가 아니라 「읽지 못했습니다」(반박 리뷰). 서버가 읽었으면 사진은 열린 것이에요
+      const opened = server !== null || (text !== null && /\S/.test(text));
       return setScanFailed(failure === "tool" || failure === "tool_reload" ? failure : !opened && isHeic(file) ? "format" : (failure ?? "read"));
     }
     // 처음 채우기 — 이메일 · 연락처와, 확실한 회사명 · 이름(기획 17100 규칙 1). 확실하지 않은 칸은 값이 ""라, 앞 명함이 채운 그대로인 칸은 비워져요
@@ -3500,8 +3547,10 @@ function CreateDialog({
     const after = { ...now };
     for (const field of plan.release) after[field] = result.values[field];
     setRetakeNoted(retakeNote(plan, after));
-    // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요
-    setScan({ chips: result.chips, links });
+    // 칸에 남긴 값(직원 것)은 앞 명함 칩과의 연결만 풀려요 — 새 칩 목록에는 그 칩이 없어요.
+    // 서버가 읽었으면 칩이 없어요(앞 명함의 칩도 지워요) — 서버가 채운 이메일은 기억해 「명함과 같은지 확인」 안내를 띄워요(칩에서 넣은 이메일과 같게)
+    setScan(server ? null : { chips: result.chips, links });
+    setServerRead(server ? { email: emailFilled && result.values.email ? result.values.email : null } : null);
     // 앞 명함과 견줘 한 「명함과 같은 주소예요」 확인은 새 명함에는 쓰지 않아요
     setConfirmedEmail(null);
     clearChipTarget();
@@ -3522,9 +3571,11 @@ function CreateDialog({
     setScanDone((n) => n + 1); // 읽은 값 · 사진을 바로 「작성 중」에 남겨요(UG-451 기획 17009)
     // 메일 주소를 못 읽었으면 이메일 칸에 커서(N4). 터치 기기는 초점 없이(키보드가 칩 · 사진을 가리지 않게) 이메일 칸만 진하게(UG-453 기획 4 · 5).
     // 메일을 채웠으면 읽은 줄이 접혀 있어 대상 칸을 두지 않아요 — 펼칠 때 정해요(toggleChips)
+    // 서버가 읽었으면 칩이 없어 진하게 보일 대상 칸도 없어요 — 터치 기기는 그대로(키보드를 올리지 않아요), PC 는 이메일 칸에 커서
     if (!missing) return;
-    if (isTouchPrimary()) moveChipTarget("email");
-    else emailRef.current?.focus();
+    if (isTouchPrimary()) {
+      if (!server) moveChipTarget("email");
+    } else emailRef.current?.focus();
   }
 
   // 다시 찍은 뒤의 안내(UG-451 기획 17118-1) — 다른 사람이라 지운 값은 주황(Warning, 기획 17132 — 「명함에서 읽었습니다…」 회색과 갈리게),
@@ -3537,7 +3588,8 @@ function CreateDialog({
   );
 
   // 명함(칩)에서 들어온 이메일이면 헷갈리는 글자 · 도메인 확인 안내를 보여 줘요 — 직접 고치면(칩 연결이 풀리면) 사라져요
-  const scannedEmail = scan?.links.email !== undefined;
+  // 서버가 읽어 채운 이메일(UG-463)도 칸이 그대로인 동안은 같아요 — 직접 고치면 사라져요
+  const scannedEmail = scan?.links.email !== undefined || (!!serverRead?.email && email === serverRead.email);
   // 칸 이메일을 넣은 메일 칩이 읽은 그대로의 주소(소문자로 바꾸기 전) — 칸을 직접 고치면 연결이 풀려 없어요(헷갈리는 글자 판단, 반박 리뷰 M1)
   const scannedChip = scannedEmail ? scan?.chips.find((c) => c.id === scan.links.email) : undefined;
   const scannedRead = scannedChip?.kind === "email" ? scannedChip.value : null;
@@ -3609,27 +3661,21 @@ function CreateDialog({
             {scan ? (
               <>
                 <div className="scan-head">
-                  {emailMissing !== null ? (
-                    // 메일 주소를 채우지 못함(규칙 4 — M15 그대로): 읽은 줄을 접지 않고 늘 보여 줘요
-                    <span className="scan-title">
-                      명함에서 읽은 줄 · {touchPrimary ? "누르면 진하게 표시된 칸에 들어갑니다" : "누르면 커서가 있는 칸에 들어갑니다"}
-                    </span>
-                  ) : (
-                    // 읽은 줄은 접어 두고 글자 버튼으로 펼쳐요(UG-451 기획 17100 규칙 3, M16 · M17)
-                    <span className="scan-toggle-box">
-                      <button
-                        type="button"
-                        className="scan-toggle"
-                        aria-expanded={chipsOpen}
-                        aria-controls="scan-chips"
-                        // 누르는 동안 칸의 커서가 빠지지 않게(PC) — 펼친 칩이 커서가 있는 칸에 들어가요
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={toggleChips}
-                      >
-                        {chipsToggleText(chipsOpen, scan.chips.length)}
-                      </button>
-                    </span>
-                  )}
+                  {/* 읽은 줄은 접어 두고 글자 버튼으로 펼쳐요(UG-451 기획 17100 규칙 3, M16 · M17). 메일 주소를 채우지 못해 펼친 채로 시작해도
+                      「읽은 줄 접기」를 늘 보여 줘요 — 주소를 직접 넣은 뒤 접을 수 있게(UG-463 기획 요청 5) */}
+                  <span className="scan-toggle-box">
+                    <button
+                      type="button"
+                      className="scan-toggle"
+                      aria-expanded={chipsOpen}
+                      aria-controls="scan-chips"
+                      // 누르는 동안 칸의 커서가 빠지지 않게(PC) — 펼친 칩이 커서가 있는 칸에 들어가요
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={toggleChips}
+                    >
+                      {chipsToggleText(chipsOpen, scan.chips.length)}
+                    </button>
+                  </span>
                   <button
                     type="button"
                     className="btn btn-outline btn-sm"
@@ -3641,7 +3687,13 @@ function CreateDialog({
                     {scanLocked ? SCAN_READING : SCAN_AGAIN}
                   </button>
                 </div>
-                {/* 찍은 명함 사진은 접힌 채로도 보여요(칸 값을 명함과 견줘요). 읽은 줄은 펼쳤을 때 · 메일 주소를 골라야 할 때만 */}
+                {/* 메일 주소를 채우지 못해 읽은 줄에서 골라야 할 때(규칙 4 — M15) 펼친 줄 위에 넣는 법을 알려요(전에는 접기 버튼 자리에 있었어요) */}
+                {chipsShown && emailMissing !== null && (
+                  <p className="scan-title">
+                    명함에서 읽은 줄 · {touchPrimary ? "누르면 진하게 표시된 칸에 들어갑니다" : "누르면 커서가 있는 칸에 들어갑니다"}
+                  </p>
+                )}
+                {/* 찍은 명함 사진은 접힌 채로도 보여요(칸 값을 명함과 견줘요). 읽은 줄은 펼쳤을 때만 */}
                 {(photo || chipsShown) && (
                   <div className="scan-body">
                     {photo && <CardPhotoThumb src={photo} onOpen={() => setViewingPhoto(true)} />}
@@ -3691,14 +3743,17 @@ function CreateDialog({
                   aria-busy={scanning || undefined}
                 >
                   <IcCamera size={16} />
-                  {/* 못 읽은 뒤 · 돌려 읽는 동안에는 「명함 다시 찍기」(기획 17106-1 · 반박 리뷰 4) */}
-                  {scanLocked ? SCAN_READING : scanFailed || scanning ? SCAN_AGAIN : SCAN_BUTTON}
+                  {/* 못 읽은 뒤 · 돌려 읽는 동안 · 서버가 읽어 채운 뒤(칩 없음, UG-463)에는 「명함 다시 찍기」(기획 17106-1 · 반박 리뷰 4) */}
+                  {scanLocked ? SCAN_READING : scanFailed || scanning || serverRead ? SCAN_AGAIN : SCAN_BUTTON}
                 </button>
                 {/* 읽는 동안(N2)은 안내 아래에 기다림 안내를 한 줄 더 — 둘 다 상태 줄 안이라 낭독기가 읽어요 */}
                 <div className="scan-status" role="status">
                   <p className="help">
                     {scanFailed ? (
                       scanFailedText
+                    ) : serverRead && !scanning ? (
+                      // 서버가 읽어 채웠어요(UG-463) — 칩 없이 사진 · 칸만. 기기 안 읽기의 「명함에서 읽었습니다…」와 같은 안내
+                      SCAN_DONE
                     ) : (
                       // 휴대폰은 한 줄 안내(UG-453 기획 6) — 폭에 따라 하나만 보여요(globals.css)
                       <>

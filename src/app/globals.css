@@ -187,6 +187,8 @@ p {
 .scan-help-short { display: none; }
 .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scan-title { flex: 1; min-width: 0; color: var(--gray-700); font-weight: 600; }
+/* 메일 주소를 채우지 못해 펼친 읽은 줄 위의 넣는 법 안내(UG-463 — 접기 버튼 자리에서 한 줄 아래로 옮겼어요) */
+.scan > .scan-title { flex: none; }
 /* 「읽은 줄 모두 보기 (n)」 · 「읽은 줄 접기」(UG-451 기획 17100, 시안 M16 · M17 「글자 버튼」) — Gray/900 · 13 SemiBold · 줄 높이 16.
    글자 자리는 줄의 남는 폭을 다 쓰고(시안 flex 1), 누르는 곳은 글자만. 누르는 높이는 옆 「명함 다시 찍기」와 같게(32, 휴대폰 44) */
 .scan-toggle-box { flex: 1; min-width: 0; display: flex; }
