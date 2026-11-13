@@ -491,7 +491,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .tr {
   display: grid;
   /* 칸 폭은 표 전체에 비율로 나눠요(Figma 1392 기준 200 · 280 · 130 · 150 · 160 · 180 · 260). 관리 칸 최소 폭은 버튼 두 개가 한 줄에 들어가는 폭.
-     상태 칸은 처리 기록(「● 발급 취소 11.05 14:51 · khj」, UG-450 기획 16965)이 한 줄에 들어가게 150 → 220(최소 100 → 210) — 이메일 280 → 240 · 관리 260 → 230 에서 덜었어요. */
+     상태 칸은 처리 기록(「● 발급 취소 11.05 14:51 · staff1」, UG-450 기획 16965)이 한 줄에 들어가게 150 → 220(최소 100 → 210) — 이메일 280 → 240 · 관리 260 → 230 에서 덜었어요. */
   grid-template-columns:
     minmax(120px, 200fr) minmax(180px, 240fr) minmax(80px, 130fr) minmax(210px, 220fr)
     minmax(90px, 160fr) minmax(120px, 180fr) minmax(230px, 230fr);
