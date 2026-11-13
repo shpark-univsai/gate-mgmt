@@ -550,7 +550,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .customer-email-clip { flex: 0 1 auto; }
 .customer-email-lang { flex: none; white-space: pre; }
 /*
- * 말줄임된 글자를 눌러 전체를 보는 말풍선(TapClip — PC 표 회사명 · 이메일, 휴대폰 발급 취소 카드 회사명, UG-450 기획 16995 · 17020).
+ * 말줄임된 글자를 눌러 전체를 보는 말풍선(TapClip — PC 표 회사명 · 이메일, 휴대폰 카드 회사명 — UG-450 기획 16995 · 17020, UG-463 기획 17259).
  * 감싼 상자는 폭을 넘기지 않고 줄어요. 말줄임되면 글자를 테두리 없는 버튼으로 감싸요(모양은 그대로).
  * 말풍선은 화면에 고정(위치는 화면이 정해요) — 표의 옆 스크롤 상자에 잘리지 않게. 프로필 메뉴 · 더보기와 같은 어두운 유리
  * 말풍선은 보기만 해요 — 누름은 그 아래 글자가 받아요(UG-450 기획 17028 — 아래 이메일 줄을 덮어도 한 번에 눌려요)
