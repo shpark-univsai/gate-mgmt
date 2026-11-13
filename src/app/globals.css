@@ -550,7 +550,7 @@ a.profile-menu-item { display: flex; align-items: center; text-decoration: none;
 .customer-email-clip { flex: 0 1 auto; }
 .customer-email-lang { flex: none; white-space: pre; }
 /*
- * 말줄임된 글자를 눌러 전체를 보는 말풍선(TapClip — PC 표 회사명 · 이메일, 휴대폰 발급 취소 카드 회사명, UG-450 기획 16995 · 17020).
+ * 말줄임된 글자를 눌러 전체를 보는 말풍선(TapClip — PC 표 회사명 · 이메일, 휴대폰 카드 회사명 — UG-450 기획 16995 · 17020, UG-463 기획 17259).
  * 감싼 상자는 폭을 넘기지 않고 줄어요. 말줄임되면 글자를 테두리 없는 버튼으로 감싸요(모양은 그대로).
  * 말풍선은 화면에 고정(위치는 화면이 정해요) — 표의 옆 스크롤 상자에 잘리지 않게. 프로필 메뉴 · 더보기와 같은 어두운 유리
  * 말풍선은 보기만 해요 — 누름은 그 아래 글자가 받아요(UG-450 기획 17028 — 아래 이메일 줄을 덮어도 한 번에 눌려요)
@@ -875,12 +875,13 @@ fieldset.dialog-form { border: 0; margin: 0; padding: 0; min-width: 0; }
   .card-company .dash-sm { font-size: 13px; line-height: 18px; } /* 계정 해지 휴대폰 카드의 「—」 13 (UG-450 16983) */
   .card-email .dash-sm { font-size: 13px; } /* 계정 해지 휴대폰 카드의 「…@univs.ai」 13 = PC (UG-450 16995). 줄 높이는 카드 이메일 20 그대로라 카드 높이가 안 바뀜 */
   /*
-   * 발급 취소 · 해지됨 카드(UG-463 기획 17235): 첫 줄 = 회사명(「삭제됨」) + 오른쪽 위 상태 배지 — 다른 카드와 같은 자리.
-   * 회사명은 배지를 뺀 폭을 다 쓰고(min-width 0 — .card-line > :first-child) 넘치면 말줄임, 눌러서 전체 이름 말풍선(.tap-tip, UG-450 기획 16995).
+   * 계정 발급 카드 첫 줄(UG-463 기획 17235 · 17259): 회사명(「삭제됨」 · 「—」) + 오른쪽 위 상태 배지 — 작성 중 · 로그인 전 · 사용 중 · 발급 취소 · 해지됨 모두 같은 자리.
+   * 회사명은 배지를 뺀 폭을 다 쓰고(min-width 0 — .card-line > :first-child) 한 줄, 넘치면 말줄임 · 눌러서 전체 이름 말풍선(.tap-tip, UG-450 기획 16995).
+   * 전에는 발급 취소 · 해지됨만 말줄임이고 나머지 카드는 두 줄로 넘어가 배지가 두 줄 가운데로 내려갔어요(17259).
    * 배지는 줄지 않아요(.card-status = flex: none) — 긴 회사명이 배지를 밀거나 겹치지 않게
    */
   .card-company-full { flex: 1 1 auto; }
-  .card-company-line { display: block; min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-company-line { display: block; min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
   /* 둘째 줄 = 처리 기록 한 줄(13 · 회색) — 줄 높이는 다른 카드 둘째 줄(이메일 14/20)과 같은 20 이라 카드 높이가 같아요. 직원 이름이 길면 말줄임 */
   .card-gone-record { display: block; max-width: 100%; line-height: 20px; white-space: nowrap; overflow-wrap: normal; }
   /* 계정 해지 카드 셋째 줄(UG-450 기획 16995): 한 줄 고정 — 처리자 칸만 말줄임, 빈 칸은 구분점과 함께 빠져요 */
