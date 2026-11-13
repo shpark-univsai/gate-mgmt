@@ -491,22 +491,25 @@ function CompanyCell({ account, query }: { account: Account; query: string }) {
 }
 
 /**
- * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 왼쪽 — 회사명(또는 「삭제됨」)이 오른쪽 상태 배지를 뺀 폭을 다 써요(UG-450 기획 16995 · UG-463 기획 17235).
+ * 휴대폰 카드의 첫 줄 왼쪽 — 회사명이 오른쪽 상태 배지를 뺀 폭을 다 써요(UG-450 기획 16995 · UG-463 기획 17235 · 17259).
+ * 모든 카드(작성 중 · 로그인 전 · 사용 중 · 발급 취소 · 해지됨) 같게 — 회사명은 한 줄, 길면 말줄임이고 배지는 첫 줄 오른쪽 위 그대로.
+ * 전에는 작성 중 · 로그인 전 · 사용 중 카드의 회사명이 두 줄로 넘어가 배지가 두 줄 가운데로 내려갔어요(기획 17259).
  * 배지는 줄지 않고(.card-status = flex: none) 회사명만 말줄임 — 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(TapClip — PC 표의 회사명 · 이메일과 같은 말풍선).
+ * text = 말풍선 · title 의 전체 글자, children = 보이는 글자(검색 강조 · 「삭제됨」 · 「—」)
  */
-function GoneCardCompany({ account, query, resetOn }: { account: Account; query: string; resetOn: readonly unknown[] }) {
+function CardCompany({ text, query, resetOn, children }: { text: string; query: string; resetOn: readonly unknown[]; children: React.ReactNode }) {
   return (
     <TapClip
-      text={account.company || "삭제됨"}
+      text={text}
       className="card-company card-company-line"
       wrapClassName="card-company-full"
       strong
       // 휴대폰 카드: 말풍선이 이웃 카드 버튼을 덮어요 — 닫는 누름이 버튼으로 가지 않게(UG-453 기획 7)
       dismissLayer
-      watch={[account.company, query]}
+      watch={[text, query]}
       resetOn={resetOn}
     >
-      <CompanyCell account={account} query={query} />
+      {children}
     </TapClip>
   );
 }
@@ -1485,9 +1488,9 @@ function AccountsScreen() {
           {drafts.map((d) => (
             <li key={`draft-${d.id}`} className={`card-row${freshId === `draft:${d.id}` ? " is-new" : ""}`}>
               <div className="card-line">
-                <strong className="card-company">
+                <CardCompany text={draftTitle(d) || "—"} query={applied.keyword} resetOn={listStamp}>
                   {draftTitle(d) ? <Highlight text={draftTitle(d)} query={applied.keyword} /> : <span className="dash">—</span>}
-                </strong>
+                </CardCompany>
                 <span className="card-status">
                   <DraftStatus />
                 </span>
@@ -1525,7 +1528,9 @@ function AccountsScreen() {
               // 두 줄 그대로(카드 높이 같음), 메일 언어 · 만든 정보 줄은 전처럼 없어요
               <li key={a.id} className={`card-row is-cancelled${a.id === freshId ? " is-new" : ""}`}>
                 <div className="card-line">
-                  <GoneCardCompany account={a} query={applied.keyword} resetOn={listStamp} />
+                  <CardCompany text={a.company || "삭제됨"} query={applied.keyword} resetOn={listStamp}>
+                    <CompanyCell account={a} query={applied.keyword} />
+                  </CardCompany>
                   <span className="card-status">
                     <Status account={a} />
                   </span>
@@ -1537,9 +1542,10 @@ function AccountsScreen() {
             ) : (
               <li key={a.id} className={`card-row${a.id === freshId ? " is-new" : ""}`}>
                 <div className="card-line">
-                  <strong className="card-company">
+                  {/* 회사명은 한 줄 말줄임 · 상태는 첫 줄 오른쪽 위(UG-463 기획 17259) — 발급 취소 · 해지됨 카드와 같은 모양 */}
+                  <CardCompany text={a.company || "—"} query={applied.keyword} resetOn={listStamp}>
                     <CompanyCell account={a} query={applied.keyword} />
-                  </strong>
+                  </CardCompany>
                   <span className="card-status">
                     <Status account={a} />
                   </span>
