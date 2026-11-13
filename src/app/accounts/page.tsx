@@ -214,29 +214,15 @@ const fmtMonthDay = (iso: string) => {
 };
 
 /**
- * 발급 취소 · 해지됨 줄의 처리 기록 「11.05 14:51 · khj」(UG-450 기획 16965) — PC 표는 상태 아래 줄(기획 17007), 휴대폰 카드는 상태 오른쪽.
+ * 발급 취소 · 해지됨 줄의 처리 기록 「11.05 14:51 · staff1」(UG-450 기획 16965) — PC 표는 상태 아래 줄(기획 17007), 휴대폰 카드는 둘째 줄(UG-463 기획 17235).
  * 해지됨은 해지를 실행한 직원 · 파기 완료 시각. 직원이 없으면(시스템 정리) 시각만, 둘 다 없으면 "".
  */
 const goneRecord = (a: Account) =>
   [a.cancelledAt ? fmtShort(a.cancelledAt) : "", handle(a.cancelledBy)].filter(Boolean).join(" · ");
 
-/** 상태 배지 + (발급 취소 · 해지됨이면) 처리 기록 — PC 목록 줄 · 휴대폰 카드가 같이 써요 */
-function StatusWithRecord({ account }: { account: Account }) {
-  const record = isGone(account) ? goneRecord(account) : "";
-  if (!record) return <Status account={account} />;
-  return (
-    <span className="status-with-record">
-      <Status account={account} />
-      <span className="gone-record" title={record}>
-        {record}
-      </span>
-    </span>
-  );
-}
-
 /**
- * PC 표의 상태 칸(UG-450 기획 17007) — 발급 취소 · 해지됨이면 두 줄: 「● 발급 취소」 아래에 처리 기록 「11.05 14:51 · khj」.
- * 처리 기록은 점 뒤 글자 시작에 맞춰 들여 써요(13 · 회색). 휴대폰 카드는 전처럼 한 줄(StatusWithRecord).
+ * PC 표의 상태 칸(UG-450 기획 17007) — 발급 취소 · 해지됨이면 두 줄: 「● 발급 취소」 아래에 처리 기록 「11.05 14:51 · staff1」.
+ * 처리 기록은 점 뒤 글자 시작에 맞춰 들여 써요(13 · 회색). 휴대폰 카드는 상태가 첫 줄 오른쪽 위, 처리 기록이 둘째 줄(UG-463 기획 17235).
  */
 function StatusCell({ account }: { account: Account }) {
   const record = isGone(account) ? goneRecord(account) : "";
@@ -505,8 +491,8 @@ function CompanyCell({ account, query }: { account: Account; query: string }) {
 }
 
 /**
- * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 — 회사명(또는 「삭제됨」)이 카드 폭을 다 써요(UG-450 기획 16995).
- * 그래도 길어 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(TapClip — PC 표의 회사명 · 이메일과 같은 말풍선).
+ * 휴대폰 발급 취소 · 해지됨 카드의 첫 줄 왼쪽 — 회사명(또는 「삭제됨」)이 오른쪽 상태 배지를 뺀 폭을 다 써요(UG-450 기획 16995 · UG-463 기획 17235).
+ * 배지는 줄지 않고(.card-status = flex: none) 회사명만 말줄임 — 말줄임되면 눌러서 전체 이름을 작은 말풍선으로 봐요(TapClip — PC 표의 회사명 · 이메일과 같은 말풍선).
  */
 function GoneCardCompany({ account, query, resetOn }: { account: Account; query: string; resetOn: readonly unknown[] }) {
   return (
@@ -522,6 +508,19 @@ function GoneCardCompany({ account, query, resetOn }: { account: Account; query:
     >
       <CompanyCell account={account} query={query} />
     </TapClip>
+  );
+}
+
+/**
+ * 휴대폰 발급 취소 · 해지됨 카드의 둘째 줄 — 처리 기록 「11.04 14:51 · staff1」(UG-463 기획 17235). 13 · 회색, 한 줄 고정 —
+ * 직원 이름이 길면 말줄임(줄 높이는 다른 카드 둘째 줄과 같은 20). 기록이 없으면(예전 줄) 「—」 — 카드가 한 줄로 줄지 않게.
+ */
+function GoneCardRecord({ account }: { account: Account }) {
+  const record = goneRecord(account);
+  return (
+    <span className="gone-record card-gone-record" title={record || undefined}>
+      {record || "—"}
+    </span>
   );
 }
 
@@ -1521,16 +1520,18 @@ function AccountsScreen() {
           ))}
           {visible.map((a) =>
             isGone(a) ? (
-              // 발급 취소 · 해지됨 카드(UG-450 기획 16995): 첫 줄은 회사명(「삭제됨」)만 카드 폭 전체로, 둘째 줄은 이메일(늘 「—」) 자리에
-              // 상태 배지 + 처리 기록(「● 발급 취소 11.04 14:51 · khj」) — 카드 높이는 그대로, 메일 언어 · 만든 정보 줄은 전처럼 없어요
+              // 발급 취소 · 해지됨 카드(UG-463 기획 17235): 상태 배지는 다른 카드처럼 첫 줄 오른쪽 위 — 목록을 내려도 상태 자리가 왔다 갔다 하지 않게.
+              // 첫 줄 = 회사명(「삭제됨」, 길면 말줄임 — UG-450 기획 16995) + 「● 발급 취소」, 둘째 줄 = 처리 기록 「11.04 14:51 · staff1」.
+              // 두 줄 그대로(카드 높이 같음), 메일 언어 · 만든 정보 줄은 전처럼 없어요
               <li key={a.id} className={`card-row is-cancelled${a.id === freshId ? " is-new" : ""}`}>
                 <div className="card-line">
                   <GoneCardCompany account={a} query={applied.keyword} resetOn={listStamp} />
+                  <span className="card-status">
+                    <Status account={a} />
+                  </span>
                 </div>
                 <div className="card-line">
-                  <span className="card-status card-status--record">
-                    <StatusWithRecord account={a} />
-                  </span>
+                  <GoneCardRecord account={a} />
                 </div>
               </li>
             ) : (
@@ -1540,7 +1541,7 @@ function AccountsScreen() {
                     <CompanyCell account={a} query={applied.keyword} />
                   </strong>
                   <span className="card-status">
-                    <StatusWithRecord account={a} />
+                    <Status account={a} />
                   </span>
                 </div>
                 <div className="card-line">
