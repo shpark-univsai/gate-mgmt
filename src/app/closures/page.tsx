@@ -28,7 +28,8 @@ import { useStaff } from "@/lib/session";
 import { CLOSURES_DEFAULT, parseClosuresQuery, serializeClosuresQuery, type ClosuresQuery } from "@/lib/list-query";
 import { useUrlQuery } from "@/lib/use-url-query";
 import { isTouchPrimary } from "@/lib/pointer";
-import { fmtDate, fmtFull, handle, kstToday, pageItems } from "@/lib/format";
+import { processorText } from "@/lib/closure-processor";
+import { fmtDate, fmtFull, kstToday, pageItems } from "@/lib/format";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // 문구 대조표(기획 16871 · Figma)에 있는 것은 그대로, 없는 것은 우리가 지었어요(보고서 「우리가 정한 것」).
@@ -146,7 +147,7 @@ function processedAt(c: Closure) {
  * 한 줄 고정: 처리자 이름이 길면 그 칸만 말줄임 — 프로젝트 수 · 처리 일시는 늘 다 보이고 카드 높이도 그대로예요.
  */
 function ClosureCardMeta({ closure }: { closure: Closure }) {
-  const who = handle(closure.processedBy);
+  const who = processorText(closure);
   return (
     <span className="card-meta card-meta-parts">
       <span>{`프로젝트 ${closure.projectCount}개`}</span>
@@ -480,7 +481,7 @@ function ClosuresScreen() {
                 <span role="cell">
                   <ClosureStatusBadge closure={c} />
                 </span>
-                <span role="cell">{handle(c.processedBy)}</span>
+                <span role="cell">{processorText(c)}</span>
                 <span role="cell">{processedAt(c)}</span>
                 <span role="cell">
                   <span className="row-actions">

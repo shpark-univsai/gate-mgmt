@@ -693,8 +693,8 @@ export type Closure = {
   failureCode: string | null;
   /** 고객이 탈퇴를 요청한 날(yyyy-MM-dd, 한국 날짜) */
   requestedOn: string;
-  /** 실행한 직원 이메일(처리자) */
-  processedBy: string;
+  /** 실행한 직원 이메일(처리자). 고객이 콘솔에서 직접 탈퇴한 기록(requestedVia SELF, UG-468)은 null */
+  processedBy: string | null;
   requestedAt: string;
   /** 파기 완료 시각 = 약관 「처리를 마친 날」 기준 */
   completedAt: string | null;
@@ -706,13 +706,20 @@ export type Closure = {
   withdrawnBy: string | null;
   /** 가입 경로(UG-458 기획 7). 예전 서버는 주지 않아요 · 모르는 값이면 null(표에 「—」) */
   signupSource: SignupSource | null;
+  /** 누가 시작했나(UG-468) — STAFF 백오피스 직원 · SELF 고객이 콘솔에서 직접 탈퇴. 예전 서버는 주지 않아요 · 모르는 값이면 null */
+  requestedVia: ClosureRequestedVia | null;
 };
+
+export type ClosureRequestedVia = "STAFF" | "SELF";
 
 export type ClosureQuery = { keyword?: string; status?: ClosureStatusFilter; source?: ClosureSource; page?: number; size?: number };
 
-const toClosure = (c: Omit<Closure, "signupSource"> & { signupSource?: string | null }): Closure => ({
+const toClosure = (
+  c: Omit<Closure, "signupSource" | "requestedVia"> & { signupSource?: string | null; requestedVia?: string | null },
+): Closure => ({
   ...c,
   signupSource: c.signupSource === "SALES" || c.signupSource === "DIRECT" ? c.signupSource : null,
+  requestedVia: c.requestedVia === "STAFF" || c.requestedVia === "SELF" ? c.requestedVia : null,
 });
 
 /** 계정 찾기(T2 → T3). 지워지는 것: 프로젝트(되살리기 기간 안인 삭제 프로젝트 포함) · 등록(얼굴 · 손바닥 각각) · 인증 기록 */
